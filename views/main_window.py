@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QObject, QSettings, QThread, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QMessageBox
 
@@ -21,10 +21,42 @@ from core.version import __version__
 from views.viewport import Viewport
 
 
+class _OpenWorker(QObject):
+    """Loads and regens a drawing off the UI thread.
+
+    Real plans take seconds (a colleague's 4.5 MB pavement sheet froze the UI
+    for minutes before the hatch density cap) — the window must stay alive.
+    Only plain Python/ezdxf objects cross the thread boundary.
+    """
+
+    done = Signal(object, object)   # Document, Scene
+    failed = Signal(str)            # error text
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self._path = path
+
+    def run(self) -> None:
+        from render.backend import build_scene
+
+        try:
+            document = Document.load(self._path)
+            scene = build_scene(document)
+        except DocumentError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # a malformed file must never crash the app
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+        else:
+            self.done.emit(document, scene)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.document: Document | None = None
+        self._open_thread: QThread | None = None
+        self._open_worker: _OpenWorker | None = None
+        self._opening_name = ""
         self.setWindowTitle(f"IngeCAD — {tr('Untitled')}")
         self.resize(1280, 800)
 
@@ -112,20 +144,42 @@ class MainWindow(QMainWindow):
                 8000,
             )
             return
-        from render.backend import build_scene
-
-        try:
-            document = Document.load(path)
-            scene = build_scene(document)
-        except DocumentError as exc:
-            QMessageBox.warning(
-                self,
-                tr("Open Drawing"),
-                tr("Cannot open {name}: {error}", name=path.name, error=str(exc)),
-            )
+        if self._open_thread is not None:
+            self.statusBar().showMessage(tr("Still opening the previous drawing..."), 4000)
             return
+        self._opening_name = path.name
+        self.statusBar().showMessage(tr("Opening {name}...", name=path.name))
+        thread = QThread(self)
+        worker = _OpenWorker(path)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(self._on_open_done)
+        worker.failed.connect(self._on_open_failed)
+        worker.done.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._on_open_thread_finished)
+        self._open_thread = thread
+        self._open_worker = worker  # keep alive while the thread runs
+        thread.start()
+
+    def _on_open_done(self, document: Document, scene) -> None:
         self.document = document
         self.viewport.set_scene(scene)
         self.viewport.zoom_extents()
         self.setWindowTitle(f"IngeCAD — {document.name}")
         self.statusBar().showMessage(tr("Opened {name}", name=document.name), 5000)
+
+    def _on_open_failed(self, error: str) -> None:
+        self.statusBar().clearMessage()
+        QMessageBox.warning(
+            self,
+            tr("Open Drawing"),
+            tr("Cannot open {name}: {error}", name=self._opening_name, error=error),
+        )
+
+    def _on_open_thread_finished(self) -> None:
+        if self._open_thread is not None:
+            self._open_thread.deleteLater()
+        self._open_thread = None
+        self._open_worker = None

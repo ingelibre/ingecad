@@ -11,5 +11,7 @@
   "DXF drawings (*.dxf);;All files (*)": "Dibujos DXF (*.dxf);;Todos los archivos (*)",
   "DWG opens land in Phase 2 — convert to DXF with dwg2dxf for now": "La apertura de DWG llega en la Fase 2 — por ahora convertí a DXF con dwg2dxf",
   "Cannot open {name}: {error}": "No se puede abrir {name}: {error}",
-  "Opened {name}": "Se abrió {name}"
+  "Opened {name}": "Se abrió {name}",
+  "Opening {name}...": "Abriendo {name}...",
+  "Still opening the previous drawing...": "Todavía se está abriendo el dibujo anterior..."
 }

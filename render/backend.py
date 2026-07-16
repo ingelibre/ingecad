@@ -32,6 +32,15 @@ from render.batches import Bucket, Scene, pack
 FLATTEN_REL = 1.0 / 20000.0
 MIN_FLATTEN = 1e-6
 
+# Hatch density cap, AutoCAD MaxHatch style: pattern lines closer than 1/4 of
+# the flattening distance are sub-pixel at drawing scale; ezdxf then falls
+# back to a solid fill, which is what such a pattern looks like anyway.
+# Real-world case: a 4.5 MB pavement plan went 287 s -> 3 s with this cap.
+HATCH_DENSITY_REL = 0.25
+# Backstop for pathological hatches that stay under the density cap but
+# explode combinatorially; ezdxf drops the pattern (solid fallback) on timeout.
+HATCHING_TIMEOUT = 5.0
+
 
 class VertexBackend(Backend):
     """Collects frontend primitives into per-(layer, color) buckets."""
@@ -138,11 +147,20 @@ def _flatten_distance(document: Document) -> float:
     return max(diagonal * FLATTEN_REL, MIN_FLATTEN)
 
 
+def frontend_config(flatten: float) -> Configuration:
+    return Configuration(
+        max_flattening_distance=flatten,
+        min_hatch_line_distance=flatten * HATCH_DENSITY_REL,
+        hatching_timeout=HATCHING_TIMEOUT,
+    )
+
+
 def build_scene(document: Document) -> Scene:
     """Run the ezdxf frontend over modelspace and pack the result ("regen")."""
     flatten = _flatten_distance(document)
     backend = VertexBackend(flatten)
     context = RenderContext(document.doc)
-    config = Configuration(max_flattening_distance=flatten)
-    Frontend(context, backend, config).draw_layout(document.modelspace())
+    Frontend(context, backend, frontend_config(flatten)).draw_layout(
+        document.modelspace()
+    )
     return pack(backend.buckets)
