@@ -40,6 +40,24 @@ def test_main_window_constructs_offscreen(qapp):
     win.close()
 
 
+def test_language_switch_retranslates_menus(qapp):
+    from views.main_window import MainWindow
+
+    i18n.set_language("en")
+    win = MainWindow()
+    try:
+        menus = [a.text() for a in win.menuBar().actions()]
+        assert "File" in menus and "Tools" in menus
+
+        win._set_language("es")
+        menus = [a.text() for a in win.menuBar().actions()]
+        assert "Archivo" in menus and "Herramientas" in menus
+        assert win.windowTitle() == "IngeCAD — Sin nombre"
+    finally:
+        i18n.set_language("en")
+        win.close()
+
+
 def test_zoom_extents_frames_placeholder_bounds(qapp):
     from views.main_window import MainWindow
 

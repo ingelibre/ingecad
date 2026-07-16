@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QLocale, QSettings, Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QColor, QPalette, QSurfaceFormat
 from PySide6.QtWidgets import QApplication
 
@@ -70,11 +70,13 @@ def _apply_dark_theme(app: QApplication) -> None:
 
 
 def _init_language() -> None:
-    """Load the saved UI language, or default to the system locale."""
-    saved = QSettings().value("language")
-    if not saved:
-        saved = "es" if QLocale.system().language() == QLocale.Spanish else "en"
-    i18n.set_language(str(saved))
+    """Load the saved UI language; English by default.
+
+    Engineers learned AutoCAD in English — commands, menus, muscle memory —
+    so English is the default regardless of the system locale. Spanish is a
+    deliberate opt-in via Tools > Language.
+    """
+    i18n.set_language(str(QSettings().value("language", "en")))
 
 
 def main() -> int:
