@@ -38,6 +38,7 @@ GL_FLOAT = 0x1406
 GL_UNSIGNED_BYTE = 0x1401
 
 GRIP_PICK_PX = 7.0  # grip hit aperture, logical pixels
+SNAP_PX_HOVER = 12.0  # osnap aperture while a hot grip follows the cursor
 GL_POINTS = 0x0000
 GL_LINES = 0x0001
 GL_TRIANGLES = 0x0004
@@ -587,9 +588,17 @@ class Viewport(QOpenGLWidget):
             wx, wy = self.view.screen_to_world(pos.x(), pos.y())
             shift = bool(event.modifiers() & Qt.ShiftModifier)
             if self.tool_delegate.in_selection_mode():
+                if self.tool_delegate._grip_drag is not None:
+                    # a grip is already "hot": this click drops it here
+                    # (snap-resolved, like the live follow)
+                    tx, ty = self.tool_delegate.grip_target(wx, wy)
+                    self.tool_delegate.finish_grip_drag(tx, ty)
+                    self.update()
+                    return
                 grip = self.tool_delegate.grip_at(
                     wx, wy, GRIP_PICK_PX / self.view.scale)
                 if grip is not None:
+                    # click to grab; the point then follows the cursor freely
                     self.tool_delegate.begin_grip_drag(grip)
                     self.update()
                     return
@@ -623,13 +632,6 @@ class Viewport(QOpenGLWidget):
             self.setCursor(Qt.BlankCursor)
             self.update()
             return
-        if (event.button() == Qt.LeftButton and self.tool_delegate is not None
-                and self.tool_delegate._grip_drag is not None):
-            pos = event.position()
-            wx, wy = self.view.screen_to_world(pos.x(), pos.y())
-            self.tool_delegate.finish_grip_drag(wx, wy)
-            self.update()
-            return
         if (event.button() == Qt.LeftButton and self._sel_press is not None
                 and self.tool_delegate is not None):
             press_pos, press_world, shift = self._sel_press
@@ -657,9 +659,12 @@ class Viewport(QOpenGLWidget):
             return
         if (self.tool_delegate is not None
                 and self.tool_delegate._grip_drag is not None):
+            # grip is hot: it follows the cursor with NO button held
+            # (AutoCAD click-move-click), snapping like a drawing point
             self._cursor = pos
             wx, wy = self.view.screen_to_world(pos.x(), pos.y())
-            self.tool_delegate.update_grip_drag(wx, wy)
+            self.tool_delegate.on_hover(wx, wy, SNAP_PX_HOVER / self.view.scale)
+            self.tool_delegate.update_grip_drag(*self.tool_delegate.grip_target(wx, wy))
             self.cursorMoved.emit(wx, wy)
             self.update()
             return

@@ -196,6 +196,14 @@ class ToolController(QObject):
         self.changed.emit()
 
     def cancel(self) -> None:
+        if self._grip_drag is not None:
+            # Esc mid-grip: revert the entity to its pre-drag snapshot
+            handle, _i, _r, snap = self._grip_drag
+            self._grip_drag = None
+            snap.undo(self.window.document)
+            self._invalidate_geometry()
+            self.window.regen_in_memory()
+            return
         if self.tool is not None:
             tool = self.tool
             self.tool = None  # avoid re-entry via ctx.finish
@@ -295,8 +303,10 @@ class ToolController(QObject):
         self._cursor = (wx, wy)
         self._pick_tolerance = threshold_world * (PICK_PX / SNAP_PX)
         self.snap_hit = None
-        needs_snap = (self.tool is not None and self._selecting_for is None
-                      and not self.tool.entity_picker)
+        grip_hot = self._grip_drag is not None
+        needs_snap = grip_hot or (
+            self.tool is not None and self._selecting_for is None
+            and not self.tool.entity_picker)
         if needs_snap and self.osnap_on and self.snap_engine is not None:
             self.snap_hit = self.snap_engine.find(
                 (wx, wy), threshold_world,
@@ -499,6 +509,12 @@ class ToolController(QObject):
         # the live entity rides the cheap 1-entity overlay each frame.
         self.window.viewport.hide_handles([handle])
         self._refresh_overlay()
+
+    def grip_target(self, wx: float, wy: float) -> tuple[float, float]:
+        """Where the hot grip should sit: snap wins, then ortho/polar."""
+        if self.snap_hit is not None:
+            return (self.snap_hit.x, self.snap_hit.y)
+        return (wx, wy)
 
     def update_grip_drag(self, wx: float, wy: float) -> None:
         if self._grip_drag is None:
