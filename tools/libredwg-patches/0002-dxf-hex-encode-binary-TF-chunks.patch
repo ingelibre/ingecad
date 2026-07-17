@@ -1,0 +1,49 @@
+Subject: dxf: hex-encode binary TF chunks (group codes 310-319)
+
+FIELD_TF with a 310 group code (PROXY_ENTITY.proxy_data) went through the
+string path (VALUE_TV), emitting the raw bytes — including the codepage
+conversion for r2007+ — instead of the hex encoding DXF requires for
+binary chunk groups. Readers reject the resulting file ("invalid binary
+data"). Route binary chunk groups through VALUE_BINARY.
+
+The previously unused `len` macro argument now compiles, exposing a
+-Werror=pointer-sign in OLE2FRAME's strlen call; cast it.
+
+Real-world reproducer: 27 MB r2013 cadastre drawing with partially
+decoded ACAD_PROXY_ENTITYs (found via IngeCAD's real-file bench).
+Applies on top of 0001 (upstream af67061c backport). Also present in
+master as of f280466.
+
+--- a/src/out_dxf.c
++++ b/src/out_dxf.c
+@@ -678,7 +678,18 @@ dxf_print_rd (Bit_Chain *dat, BITCODE_RD value, int dxf)
+ #define FIELD_RLL(nam, dxf) FIELDG (nam, RLL, dxf)
+ #define FIELD_MC(nam, dxf) FIELDG (nam, MC, dxf)
+ #define FIELD_MS(nam, dxf) FIELDG (nam, MS, dxf)
+-#define FIELD_TF(nam, len, dxf) VALUE_TV (_obj->nam, dxf)
++/* Group codes 310-319 hold binary chunks: hex-encode them. Writing them
++   through the string path (VALUE_TV) emits raw bytes — invalid DXF that
++   readers reject (e.g. PROXY_ENTITY.proxy_data via FIELD_TF). */
++#define FIELD_TF(nam, len, dxf)                                               \
++  {                                                                           \
++    if ((dxf) >= 310 && (dxf) <= 319)                                         \
++      {                                                                       \
++        VALUE_BINARY (_obj->nam, len, dxf)                                    \
++      }                                                                       \
++    else                                                                      \
++      VALUE_TV (_obj->nam, dxf)                                               \
++  }
+ #define FIELD_TFF(nam, len, dxf) VALUE_TV (_obj->nam, dxf)
+ #define FIELD_TV(nam, dxf)                                                    \
+   if (dxf)                                                                    \
+--- a/src/dwg.spec
++++ b/src/dwg.spec
+@@ -5954,7 +5954,7 @@ DWG_ENTITY (OLE2FRAME)
+ #ifdef IS_DXF
+   // via dwg_decode_ole2() from the first 0x80 bytes in data
+   FIELD_BS (oleversion, 70); //  always 2
+-  FIELD_TF (oleclient, strlen (_obj->oleclient), 3);
++  FIELD_TF (oleclient, strlen ((char *)_obj->oleclient), 3);
+   FIELD_3BD (pt1, 10);  // upper left
+   FIELD_3BD (pt2, 11);  // lower right
+ #endif
