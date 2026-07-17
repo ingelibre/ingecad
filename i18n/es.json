@@ -14,6 +14,7 @@
   "Drawings (*.dwg *.dxf);;All files (*)": "Dibujos (*.dwg *.dxf);;Todos los archivos (*)",
   "DWG support needs the LibreDWG converter (dwg2dxf), which was not found.": "El soporte DWG necesita el conversor LibreDWG (dwg2dxf), que no se encontró.",
   "Nothing to save yet": "Todavía no hay nada que guardar",
+  "LibreDWG could not fully convert this DWG (a known limit with some AutoCAD 2013+ files). Installing the free ODA File Converter from opendesign.com adds support for these files.": "LibreDWG no pudo convertir por completo este DWG (límite conocido con algunos archivos de AutoCAD 2013+). Instalar el ODA File Converter gratuito de opendesign.com agrega soporte para estos archivos.",
   "Saved {name}": "Se guardó {name}",
   "Cannot save {name}: {error}": "No se puede guardar {name}: {error}",
   "Cannot open {name}: {error}": "No se puede abrir {name}: {error}",

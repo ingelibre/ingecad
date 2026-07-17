@@ -46,19 +46,17 @@ class _OpenWorker(QObject):
         self._path = path
 
     def run(self) -> None:
+        from formats.dwg_bridge import DwgBridgeError, load_dwg
         from render.backend import build_scene
 
         try:
             if self._path.suffix.lower() == ".dwg":
-                from formats.dwg_bridge import dwg_to_dxf
-
                 # Transparent conversion: the user never sees the temp DXF.
-                document = Document.load(dwg_to_dxf(self._path))
-                document.path = self._path
+                document = load_dwg(self._path)
             else:
                 document = Document.load(self._path)
             scene = build_scene(document)
-        except DocumentError as exc:
+        except (DocumentError, DwgBridgeError) as exc:
             self.failed.emit(str(exc))
         except Exception as exc:  # a malformed file must never crash the app
             self.failed.emit(f"{type(exc).__name__}: {exc}")

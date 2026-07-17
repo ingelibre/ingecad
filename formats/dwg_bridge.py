@@ -111,6 +111,70 @@ def dwg_to_dxf(dwg_path: Path) -> Path:
     return out_dxf
 
 
+def find_oda() -> Optional[Path]:
+    """The optional ODA File Converter satellite (freeware, never bundled)."""
+    system = shutil.which("ODAFileConverter")
+    if system:
+        return Path(system)
+    for candidate in (
+        Path("/usr/bin/ODAFileConverter"),
+        Path.home() / ".local" / "bin" / "ODAFileConverter",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def oda_dwg_to_dxf(dwg_path: Path) -> Path:
+    """Convert through ODA File Converter (folder-based CLI).
+
+    The input is copied under an ASCII name into a fresh folder: ODA takes
+    whole directories and its argv handling of exotic names is not trusted
+    (skp2dae satellite lesson).
+    """
+    tool = find_oda()
+    if tool is None:
+        raise DwgBridgeError("ODA File Converter is not installed")
+    in_dir = Path(tempfile.mkdtemp(prefix="ingecad-oda-in-"))
+    out_dir = Path(tempfile.mkdtemp(prefix="ingecad-oda-out-"))
+    shutil.copyfile(dwg_path, in_dir / "input.dwg")
+    out_dxf = out_dir / "input.dxf"
+    # InFolder OutFolder OutVersion OutType RecurseInput(0) Audit(1)
+    _run([str(tool), str(in_dir), str(out_dir), "ACAD2018", "DXF", "0", "1"], out_dxf)
+    return out_dxf
+
+
+def load_dwg(dwg_path: Path):
+    """Open a DWG as a Document: LibreDWG first, ODA fallback.
+
+    LibreDWG output is validated — for some r2013+ drawings (AcDs segments)
+    it emits structurally broken DXF where recover salvages the entity
+    database but modelspace comes out empty. Real bench case: a 27 MB
+    cadastre plan with 294k entities converted to an "empty" drawing.
+    """
+    from core.document import Document
+
+    dwg_path = Path(dwg_path)
+    document = Document.load(dwg_to_dxf(dwg_path))
+    document.path = dwg_path
+    salvaged_but_empty = (
+        len(document.modelspace()) == 0 and len(document.doc.entitydb) > 100
+    )
+    if not salvaged_but_empty:
+        return document
+    if find_oda() is not None:
+        document = Document.load(oda_dwg_to_dxf(dwg_path))
+        document.path = dwg_path
+        return document
+    from core.i18n import tr
+
+    raise DwgBridgeError(
+        tr("LibreDWG could not fully convert this DWG (a known limit with some "
+           "AutoCAD 2013+ files). Installing the free ODA File Converter from "
+           "opendesign.com adds support for these files.")
+    )
+
+
 def dxf_to_dwg(dxf_path: Path, dwg_path: Path, version: str = "r2000") -> None:
     """Convert a DXF to DWG (LibreDWG writes r2000 reliably)."""
     tool = find_dxf2dwg()

@@ -9,11 +9,14 @@ import ezdxf
 import pytest
 
 from core.document import Document
+from formats import dwg_bridge
 from formats.dwg_bridge import (
+    DwgBridgeError,
     dwg_to_dxf,
     dxf_to_dwg,
     find_dwg2dxf,
     find_dxf2dwg,
+    load_dwg,
 )
 
 needs_libredwg = pytest.mark.skipif(
@@ -50,6 +53,24 @@ def test_dxf_dwg_dxf_roundtrip(tmp_path):
     circles = doc2.modelspace().query("CIRCLE")
     assert len(circles) == 1
     assert circles[0].dxf.radius == pytest.approx(12.5)
+
+
+def test_empty_salvage_without_oda_raises_actionable_error(tmp_path, monkeypatch):
+    # Real bench case (BASE COTAHUASI.dwg): LibreDWG emits broken DXF where
+    # recover salvages a big entitydb but modelspace comes out empty. Without
+    # ODA installed the user must get an actionable message, not a blank
+    # drawing.
+    doc = ezdxf.new("R2018")
+    block = doc.blocks.new("ORPHANED")
+    for i in range(150):
+        block.add_line((i, 0.0), (i, 1.0))
+    fake_dxf = tmp_path / "salvaged.dxf"
+    doc.saveas(fake_dxf)
+
+    monkeypatch.setattr(dwg_bridge, "dwg_to_dxf", lambda p: fake_dxf)
+    monkeypatch.setattr(dwg_bridge, "find_oda", lambda: None)
+    with pytest.raises(DwgBridgeError, match="ODA File Converter"):
+        load_dwg(tmp_path / "colega.dwg")
 
 
 @needs_libredwg
