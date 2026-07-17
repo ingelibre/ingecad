@@ -73,6 +73,26 @@ def test_empty_salvage_without_oda_raises_actionable_error(tmp_path, monkeypatch
         load_dwg(tmp_path / "colega.dwg")
 
 
+def test_paperspace_only_sheet_is_not_rejected(tmp_path, monkeypatch):
+    # ArchiCAD-published sheet: empty modelspace, content in a paperspace
+    # layout. load_dwg must NOT reject it as a broken salvage.
+    doc = ezdxf.new("R2018")
+    psp = doc.layout("Layout1")
+    for i in range(60):
+        psp.add_line((i, 0.0), (i, 297.0))
+    block = doc.blocks.new("DRAWING_1")
+    for i in range(120):
+        block.add_line((i, 0.0), (i, 1.0))
+    fake_dxf = tmp_path / "sheet.dxf"
+    doc.saveas(fake_dxf)
+
+    monkeypatch.setattr(dwg_bridge, "dwg_to_dxf", lambda p: fake_dxf)
+    monkeypatch.setattr(dwg_bridge, "find_oda", lambda: None)
+    document = load_dwg(tmp_path / "lamina.dwg")
+    assert len(document.modelspace()) == 0
+    assert any(len(lay) for lay in document.doc.layouts if lay.name != "Model")
+
+
 @needs_libredwg
 def test_accented_paths_survive(tmp_path):
     # skp2dae gotcha family: paths with accents and spaces must work.

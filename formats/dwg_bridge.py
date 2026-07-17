@@ -157,10 +157,16 @@ def load_dwg(dwg_path: Path):
     dwg_path = Path(dwg_path)
     document = Document.load(dwg_to_dxf(dwg_path))
     document.path = dwg_path
-    salvaged_but_empty = (
-        len(document.modelspace()) == 0 and len(document.doc.entitydb) > 100
-    )
-    if not salvaged_but_empty:
+    if len(document.modelspace()) > 0:
+        return document
+    # Empty modelspace is legitimate for published sheets (ArchiCAD etc.):
+    # the content lives in a paperspace layout and the renderer falls back
+    # to it. Only a big entitydb with NO layout content anywhere means the
+    # conversion salvaged structure but lost the drawing.
+    if any(len(layout) > 0 for layout in document.doc.layouts
+           if layout.name != "Model"):
+        return document
+    if len(document.doc.entitydb) <= 100:
         return document
     if find_oda() is not None:
         document = Document.load(oda_dwg_to_dxf(dwg_path))
