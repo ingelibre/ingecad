@@ -13,6 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QThread, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
+    QDockWidget,
     QFileDialog,
     QLabel,
     QMainWindow,
@@ -23,8 +24,11 @@ from PySide6.QtWidgets import (
 )
 
 from core import i18n
+from core.actions import Dispatcher, Prompt
+from core.commands import History
 from core.document import Document, DocumentError
 from core.i18n import tr
+from views.command_line import CommandLine
 from views.title_bar import TitleBar
 from core.version import __version__
 from views.viewport import Viewport
@@ -91,6 +95,7 @@ class MainWindow(QMainWindow):
 
         self._build_menus()
         self._build_status_bar()
+        self._build_command_line()
         self.viewport.cursorMoved.connect(self._on_cursor_moved)
 
         # Frameless windows have no system resize borders; an app-wide filter
@@ -117,6 +122,16 @@ class MainWindow(QMainWindow):
         return edges
 
     def eventFilter(self, obj, event) -> bool:
+        # AutoCAD feel: typing over the canvas lands in the command line.
+        if (
+            event.type() == QEvent.KeyPress
+            and obj is getattr(self, "viewport", None)
+            and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)
+            and (event.text().strip() or event.key() in (
+                Qt.Key_Return, Qt.Key_Enter, Qt.Key_Escape, Qt.Key_Backspace))
+        ):
+            self.command_line.type_ahead(event)
+            return True
         if (
             event.type() == QEvent.MouseButtonPress
             and event.button() == Qt.LeftButton
@@ -181,6 +196,89 @@ class MainWindow(QMainWindow):
         name = self.document.name if self.document else tr("Untitled")
         self.setWindowTitle(f"IngeCAD — {name}")
         self._build_menus()
+
+    # -- command line -----------------------------------------------------------
+    def _build_command_line(self) -> None:
+        self.command_line = CommandLine(self)
+        dock = QDockWidget(tr("Command"), self)
+        dock.setObjectName("command_dock")
+        dock.setWidget(self.command_line)
+        dock.setFeatures(QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetMovable)
+        dock.setTitleBarWidget(QWidget(dock))  # slim: no dock title bar
+        self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+
+        self.history = History()
+        self.dispatcher = Dispatcher(echo=self.command_line.echo)
+        self._register_commands()
+        self.command_line.set_completions(self.dispatcher.known_names())
+        self.command_line.submitted.connect(self._on_command_submitted)
+        self.command_line.cancelled.connect(self.dispatcher.cancel)
+        self.command_line.echo(tr("IngeCAD — type a command (L, C, Z, ...)"))
+
+    def _on_command_submitted(self, text: str) -> None:
+        self.command_line.echo_input(text)
+        self.dispatcher.submit(text)
+
+    def _register_commands(self) -> None:
+        d = self.dispatcher
+        d.register("ZOOM", self._cmd_zoom)
+        d.register("PAN", lambda *a: self.command_line.echo(
+            tr("PAN: drag with the middle mouse button")))
+        d.register("REGEN", self._cmd_regen)
+        d.register("U", self._cmd_undo)
+        d.register("UNDO", self._cmd_undo)
+        d.register("REDO", self._cmd_redo)
+        d.register("OPEN", lambda *a: self._open_dialog())
+        d.register("SAVEAS", lambda *a: self._save_as_dialog())
+        d.register("QUIT", lambda *a: self.close())
+        d.register("EXIT", lambda *a: self.close())
+        # In-scope commands that land in later phases: answer honestly.
+        for name, phase in (
+            ("LINE", 4), ("CIRCLE", 4), ("ARC", 4), ("PLINE", 4),
+            ("RECTANG", 4), ("POLYGON", 4), ("DIST", 4),
+            ("ERASE", 5), ("MOVE", 5), ("COPY", 5), ("ROTATE", 5),
+            ("OFFSET", 5), ("TRIM", 5), ("EXTEND", 5), ("MIRROR", 5),
+            ("SCALE", 5), ("FILLET", 5), ("EXPLODE", 5),
+            ("BLOCK", 6), ("INSERT", 6), ("HATCH", 6), ("LAYER", 6),
+            ("AREA", 7), ("LIST", 7),
+        ):
+            d.register_future(name, phase)
+
+    # ZOOM [Extents/Window/Previous]
+    def _cmd_zoom(self, *args) -> Prompt | None:
+        if args:
+            return self._zoom_option(args[0])
+        return Prompt(tr("ZOOM [Extents/Window/Previous] <Extents>:"),
+                      self._zoom_option)
+
+    def _zoom_option(self, option: str) -> None:
+        opt = option.strip().upper() or "E"
+        if opt in ("E", "EXTENTS"):
+            self.viewport.zoom_extents()
+        elif opt in ("W", "WINDOW"):
+            self.viewport.start_zoom_window()
+            self.command_line.echo(tr("Drag a window in the viewport"))
+        elif opt in ("P", "PREVIOUS"):
+            if not self.viewport.zoom_previous():
+                self.command_line.echo(tr("No previous view"))
+        else:
+            self.command_line.echo(tr('Unknown ZOOM option "{name}".', name=opt))
+
+    def _cmd_regen(self, *args) -> None:
+        if self.document is None or self.document.path is None:
+            self.command_line.echo(tr("Nothing to regenerate"))
+            return
+        self.open_path(self.document.path)
+
+    def _cmd_undo(self, *args) -> None:
+        command = self.history.undo()
+        self.command_line.echo(
+            tr("Undo: {name}", name=command.name) if command else tr("Nothing to undo"))
+
+    def _cmd_redo(self, *args) -> None:
+        command = self.history.redo()
+        self.command_line.echo(
+            tr("Redo: {name}", name=command.name) if command else tr("Nothing to redo"))
 
     def _build_status_bar(self) -> None:
         # Coordinate readout, bottom-left — the classic AutoCAD tracker.

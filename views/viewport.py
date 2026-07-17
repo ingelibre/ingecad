@@ -28,6 +28,7 @@ from PySide6.QtOpenGL import (
     QOpenGLVertexArrayObject,
 )
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
+from PySide6.QtWidgets import QRubberBand
 
 from render.batches import THICK_DTYPE, VERTEX_DTYPE, Batch, Scene
 from render.view import ViewTransform2D
@@ -90,6 +91,10 @@ class Viewport(QOpenGLWidget):
         self._scene_dirty = False
         # Per-primitive GPU buffers: name -> (vao, vbo, vertex_count)
         self._scene_bufs: dict[str, tuple] = {}
+        self._view_stack: list[tuple[float, float, float]] = []
+        self._zoom_window = False
+        self._rubber: Optional[QRubberBand] = None
+        self._rubber_origin = QPointF()
 
     # -- document hooks -------------------------------------------------------
     def set_scene(self, scene: Optional[Scene]) -> None:
@@ -97,6 +102,23 @@ class Viewport(QOpenGLWidget):
         self._scene = scene
         self._scene_dirty = True
         self.update()
+
+    # -- view stack (ZOOM Previous) -------------------------------------------
+    def push_view(self) -> None:
+        self._view_stack.append((self.view.cx, self.view.cy, self.view.scale))
+        del self._view_stack[:-32]  # bounded, AutoCAD-style
+
+    def zoom_previous(self) -> bool:
+        if not self._view_stack:
+            return False
+        self.view.cx, self.view.cy, self.view.scale = self._view_stack.pop()
+        self.update()
+        return True
+
+    def start_zoom_window(self) -> None:
+        """Next left-drag on the canvas picks the zoom window."""
+        self._zoom_window = True
+        self.setCursor(Qt.CrossCursor)
 
     def scene_bounds(self) -> tuple[float, float, float, float]:
         """World bounds to fit on Zoom Extents.
@@ -111,6 +133,7 @@ class Viewport(QOpenGLWidget):
         return (-50.0, -50.0, 50.0, 50.0)
 
     def zoom_extents(self) -> None:
+        self.push_view()
         self.view.zoom_extents(*self.scene_bounds())
         self.update()
 
@@ -351,6 +374,14 @@ class Viewport(QOpenGLWidget):
 
     # -- input -----------------------------------------------------------------
     def mousePressEvent(self, event) -> None:
+        if self._zoom_window and event.button() == Qt.LeftButton:
+            self._rubber_origin = event.position()
+            if self._rubber is None:
+                self._rubber = QRubberBand(QRubberBand.Rectangle, self)
+            self._rubber.setGeometry(int(self._rubber_origin.x()),
+                                     int(self._rubber_origin.y()), 0, 0)
+            self._rubber.show()
+            return
         if event.button() == Qt.MiddleButton:
             self._panning = True
             self._last_pos = event.position()
@@ -360,6 +391,21 @@ class Viewport(QOpenGLWidget):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._zoom_window and event.button() == Qt.LeftButton:
+            self._zoom_window = False
+            self.setCursor(Qt.BlankCursor)
+            if self._rubber is not None:
+                self._rubber.hide()
+            pos = event.position()
+            x0, y0 = self._rubber_origin.x(), self._rubber_origin.y()
+            if abs(pos.x() - x0) > 4 and abs(pos.y() - y0) > 4:
+                wx0, wy0 = self.view.screen_to_world(x0, y0)
+                wx1, wy1 = self.view.screen_to_world(pos.x(), pos.y())
+                self.push_view()
+                self.view.zoom_extents(min(wx0, wx1), min(wy0, wy1),
+                                       max(wx0, wx1), max(wy0, wy1), margin=0.0)
+            self.update()
+            return
         if event.button() == Qt.MiddleButton and self._panning:
             self._panning = False
             self.setCursor(Qt.BlankCursor)
@@ -369,6 +415,11 @@ class Viewport(QOpenGLWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
+        if self._zoom_window and self._rubber is not None and self._rubber.isVisible():
+            x0, y0 = self._rubber_origin.x(), self._rubber_origin.y()
+            self._rubber.setGeometry(int(min(x0, pos.x())), int(min(y0, pos.y())),
+                                     int(abs(pos.x() - x0)), int(abs(pos.y() - y0)))
+            return
         if self._panning:
             delta = pos - self._last_pos
             self._last_pos = pos
