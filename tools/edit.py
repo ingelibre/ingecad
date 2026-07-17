@@ -262,6 +262,8 @@ class MirrorTool(Tool):
 
 
 class OffsetTool(Tool):
+    entity_picker = True
+
     def start(self) -> None:
         self.name = "OFFSET"
         self._distance: float | None = None
@@ -322,10 +324,15 @@ class OffsetTool(Tool):
 
 class _TrimExtendBase(Tool):
     wants_selection = True   # the cutting/boundary edges
+    entity_picker = True
     trim_mode = True
 
     def start(self) -> None:
         self._edges_handles: list[str] | None = None
+
+    def selection_prompt(self) -> str:
+        return (tr("Select cutting edges <Enter selects all>:") if self.trim_mode
+                else tr("Select boundary edges <Enter selects all>:"))
 
     def on_selection(self, entities: list) -> None:
         # Enter with empty selection = all entities are edges (modern AutoCAD)
@@ -427,6 +434,7 @@ class ExtendTool(_TrimExtendBase):
 
 
 class FilletTool(Tool):
+    entity_picker = True
     radius = 0.0  # session-sticky, AutoCAD-style
 
     def start(self) -> None:

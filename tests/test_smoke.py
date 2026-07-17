@@ -115,6 +115,41 @@ def test_typed_alias_wins_over_inline_completion(qapp):
     win.close()
 
 
+def test_trim_full_flow_through_controller(qapp):
+    # Regression: wants_selection was silently reset by the dataclass
+    # __init__, so TRIM never entered its selection phase and Enter killed
+    # the tool. This drives the REAL app flow: TR -> Enter (all edges) ->
+    # click the span to remove.
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    qapp.processEvents()
+    win.dispatcher.submit("l")
+    win.tools.on_click(0, 0)
+    win.tools.on_click(100, 0)
+    win.tools.on_text("")
+    win.dispatcher.submit("l")
+    win.tools.on_click(50, -20)
+    win.tools.on_click(50, 20)
+    win.tools.on_text("")
+
+    win.dispatcher.submit("tr")
+    assert win.tools._selecting_for is not None    # selection phase active
+    win.tools.on_text("")                          # Enter: all edges
+    assert win.tools.active()                      # tool survives
+    win.tools.on_hover(75, 0.2, 2.0)
+    win.tools.on_click(75, 0.2)
+    spans = sorted(
+        (round(l.dxf.start.x, 1), round(l.dxf.end.x, 1))
+        for l in win.document.modelspace().query("LINE")
+        if abs(l.dxf.start.y) < 0.1 and abs(l.dxf.end.y) < 0.1
+    )
+    assert spans == [(0.0, 50.0)]
+    win.tools.cancel()
+    win.close()
+
+
 def test_zoom_extents_frames_placeholder_bounds(qapp):
     from views.main_window import MainWindow
 

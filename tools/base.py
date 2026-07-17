@@ -10,7 +10,7 @@ with callbacks; tests supply fakes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, ClassVar, Optional
 
 Point = tuple[float, float]
 
@@ -34,11 +34,21 @@ class Tool:
     last_point: Optional[Point] = None         # anchor for @rel / distances
     preview_points: list[Point] = field(default_factory=list)
     # Editing tools consume the current selection (noun-verb) or ask for
-    # one ("Select objects:") before their point prompts.
-    wants_selection: bool = False
-    shift = False                              # Shift held at last click
+    # one ("Select objects:") before their point prompts. ClassVar on
+    # purpose: a dataclass FIELD would make the generated __init__ reset
+    # the subclass override back to False on every instance.
+    wants_selection: ClassVar[bool] = False
+    shift: ClassVar[bool] = False              # Shift held at last click
+    # Tools whose clicks pick ENTITIES (trim targets, fillet lines) get raw
+    # cursor points: AutoCAD suppresses osnap during object picking.
+    entity_picker: ClassVar[bool] = False
 
     def start(self) -> None: ...
+
+    def selection_prompt(self) -> str:
+        from core.i18n import tr
+
+        return tr("Select objects (Enter when done):")
 
     def on_selection(self, entities: list) -> None: ...
 

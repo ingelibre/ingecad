@@ -70,6 +70,8 @@
   "Nothing there.": "No hay nada ahí.",
   "OFFSET supports LINE, CIRCLE and ARC for now.": "OFFSET soporta LINE, CIRCLE y ARC por ahora.",
   "Radius would vanish.": "El radio se anularía.",
+  "Select cutting edges <Enter selects all>:": "Seleccione las aristas de corte <Enter selecciona todas>:",
+  "Select boundary edges <Enter selects all>:": "Seleccione los bordes límite <Enter selecciona todos>:",
   "Select object to trim (Shift extends):": "Seleccione el objeto a recortar (Shift extiende):",
   "Select object to extend (Shift trims):": "Seleccione el objeto a extender (Shift recorta):",
   "No cutting edge crosses it.": "Ninguna arista de corte lo cruza.",

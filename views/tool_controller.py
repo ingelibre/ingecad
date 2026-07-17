@@ -107,8 +107,7 @@ class ToolController(QObject):
                 self.tool.on_selection(entities)
             else:
                 self._selecting_for = self.tool
-                self.window.command_line.echo(
-                    tr("Select objects (Enter when done):"))
+                self.window.command_line.echo(self.tool.selection_prompt())
         self.changed.emit()
 
     # -- services for editing tools (ToolContext.services) ---------------------
@@ -215,7 +214,8 @@ class ToolController(QObject):
         self._cursor = (wx, wy)
         self._pick_tolerance = threshold_world * (PICK_PX / SNAP_PX)
         self.snap_hit = None
-        needs_snap = self.tool is not None and self._selecting_for is None
+        needs_snap = (self.tool is not None and self._selecting_for is None
+                      and not self.tool.entity_picker)
         if needs_snap and self.osnap_on and self.snap_engine is not None:
             self.snap_hit = self.snap_engine.find(
                 (wx, wy), threshold_world,
@@ -291,6 +291,8 @@ class ToolController(QObject):
 
     def resolved_point(self, wx: float, wy: float) -> tuple[float, float]:
         """Snap wins over ortho/polar, AutoCAD-style."""
+        if self.tool is not None and self.tool.entity_picker:
+            return (wx, wy)  # object picking: raw cursor, no snap/ortho
         if self.snap_hit is not None:
             return (self.snap_hit.x, self.snap_hit.y)
         anchor = self.tool.last_point if self.tool else None
@@ -315,8 +317,7 @@ class ToolController(QObject):
             if not text.strip():
                 self.finish_selection()
                 return True
-            self.window.command_line.echo(
-                tr("Select objects (Enter when done):"))
+            self.window.command_line.echo(self._selecting_for.selection_prompt())
             return True
         if self.tool is None:
             return False
