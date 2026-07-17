@@ -262,9 +262,10 @@ def test_zoom_extents_frames_placeholder_bounds(qapp):
     win.close()
 
 
-def test_polyline_midgrip_inserts_one_vertex(qapp):
-    # The round midpoint grip must insert ONE vertex on grab and then move
-    # it — not re-insert every mouse move (the "caos de puntos" bug).
+def test_polyline_midgrip_moves_segment(qapp):
+    # AutoCAD/BricsCAD: the midpoint (triangle) grip MOVES the whole segment,
+    # it never inserts a vertex — vertex count stays constant no matter how
+    # many frames the live follow runs.
     from views.main_window import MainWindow
 
     win = MainWindow()
@@ -279,11 +280,15 @@ def test_polyline_midgrip_inserts_one_vertex(qapp):
     pl = win.document.modelspace().query("LWPOLYLINE")[0]
     win.tools.selection = {pl.dxf.handle}
     grips = win.tools.grip_points()
-    mid = next(g for g in grips if g[2] == "mid")   # (x, y, role, handle, i)
+    # the midpoint of segment 0 (between (0,0) and (10,0)) at (5,0)
+    mid = next(g for g in grips if g[2] == "mid" and abs(g[0] - 5) < 0.1)
     win.tools.begin_grip_drag(mid)
     for tgt in ((5, -4), (5, -6), (6, -8)):         # live follow, many frames
         win.tools.update_grip_drag(*tgt)
     win.tools.finish_grip_drag(6, -8)
-    pts = win.document.modelspace().query("LWPOLYLINE")[0].get_points("xy")
-    assert len(pts) == 4                            # exactly ONE inserted
+    pts = list(win.document.modelspace().query("LWPOLYLINE")[0].get_points("xy"))
+    assert len(pts) == 3                            # NO vertex inserted
+    # segment 0's endpoints both moved down; the third vertex stayed
+    assert round(pts[0][1], 1) == -8.0 and round(pts[1][1], 1) == -8.0
+    assert (round(pts[2][0]), round(pts[2][1])) == (10, 10)
     win.close()

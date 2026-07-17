@@ -321,11 +321,23 @@ def apply_grip_edit(entity, grip_index: int, role: str, new_point):
             pts[grip_index] = tuple(p)
             entity.set_points(pts, format="xyseb")
             return True
-        if role == "mid":               # insert a vertex at the midpoint grip
+        if role == "mid":
+            # AutoCAD/BricsCAD: the midpoint (triangle) grip MOVES the whole
+            # segment — it translates both its endpoints by the drag delta,
+            # keeping the segment straight; adjacent segments stretch to
+            # follow. No vertex is inserted.
             seg = grip_index - n
-            insert_at = seg + 1
-            new = (nx, ny, 0.0, 0.0, 0.0)
-            pts.insert(insert_at, new)
+            a, b = seg, (seg + 1) % n if entity.closed else seg + 1
+            if b >= len(pts):
+                return False
+            mid_x = (pts[a][0] + pts[b][0]) / 2.0
+            mid_y = (pts[a][1] + pts[b][1]) / 2.0
+            dx, dy = nx - mid_x, ny - mid_y
+            for idx in (a, b):
+                p = list(pts[idx])
+                p[0] += dx
+                p[1] += dy
+                pts[idx] = tuple(p)
             entity.set_points(pts, format="xyseb")
             return True
         return False
