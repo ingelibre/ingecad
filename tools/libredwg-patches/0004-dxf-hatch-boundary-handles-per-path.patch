@@ -1,0 +1,46 @@
+Subject: in_dxf: reset hdl_idx per HATCH path — associative hatches lost their pattern
+
+* src/in_dxf.c (add_HATCH): each boundary path carries its own 97
+  handle-count and 330 handle list, but hdl_idx was never reset when a
+  new 97 arrived. The 330s of every path after the first failed the
+  (hdl_idx + 1) < num_boundary_handles guard and were rejected
+  ("Unknown DXF code 330 for HATCH"), leaving num_boundary_handles set
+  with a NULL boundary_handles array. The encoder then emitted a short
+  handle stream ("Invalid boundary_handles size 1. Need min. 8 bits,
+  have 3"), corrupting the rest of the entity: on decode the hatch came
+  back with pattern_scale 0 and no definition lines.
+
+Minimized reproducer: an associative two-path hatch (ring of two arc
+edges, each path with one source boundary handle). Before: pattern
+ANSI31 scale 2.5 -> scale 0.0, 0 pattern lines. After: identical
+roundtrip. On the originating real-world plan, all 57 hatches now
+roundtrip with zero differences.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+
+diff --git a/src/in_dxf.c b/src/in_dxf.c
+index fe6aaed0..1ce7871c 100644
+--- a/src/in_dxf.c
++++ b/src/in_dxf.c
+@@ -3675,6 +3675,12 @@ add_HATCH (Dwg_Object *restrict obj, Bit_Chain *restrict dat,
+               next_330_boundary_handles = true;
+               o->paths[j].num_boundary_handles = pair->value.l;
+               // o->num_boundary_handles += pair->value.l;
++              // each path carries its own handle list; without this reset
++              // the 330s of every path after the first were rejected,
++              // leaving num_boundary_handles set with a NULL array - which
++              // the encoder then turns into a short handle stream,
++              // corrupting the rest of the HATCH (pattern lost)
++              hdl_idx = -1;
+               LOG_TRACE (
+                   "HATCH.paths[%d].num_boundary_handles = %ld [BL 97]\n", j,
+                   pair->value.l);
+@@ -3708,6 +3714,7 @@ add_HATCH (Dwg_Object *restrict obj, Bit_Chain *restrict dat,
+           o->paths[j].num_boundary_handles = pair->value.l;
+           next_330_boundary_handles = true;
+           // o->num_boundary_handles += pair->value.l;
++          hdl_idx = -1; // see the non-polyline 97 handler above
+           LOG_TRACE (
+               "HATCH.paths[%d].num_boundary_handles = %ld [BL 97] (1)\n", j,
+               pair->value.l);
