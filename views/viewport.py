@@ -50,7 +50,8 @@ SHADER_DIR = Path(__file__).resolve().parents[1] / "resources" / "shaders"
 # Classic dark model space (near-black, slightly blue like AutoCAD's default).
 BACKGROUND = (0.129, 0.149, 0.169)
 AXIS_LEN = 1.0e6  # world units; clipped by GL, cheap to keep "infinite"
-CROSSHAIR_COLOR = QColor(215, 215, 215, 210)
+CROSSHAIR_COLOR = QColor(215, 215, 215, 210)        # over the dark canvas
+CROSSHAIR_COLOR_LIGHT = QColor(40, 40, 40, 210)     # over paper-white layouts
 PICKBOX_PX = 8
 # Lineweight display: mm of paper -> logical pixels (96 dpi reference,
 # AutoCAD LWT look). 0.5 mm ~ 2 px, 1.0 mm ~ 4 px.
@@ -262,7 +263,10 @@ class Viewport(QOpenGLWidget):
         gl.glDisable(GL_DEPTH_TEST)
         gl.glEnable(GL_BLEND)
         gl.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        gl.glClearColor(*BACKGROUND, 1.0)
+        if self._scene is not None and self._scene.background is not None:
+            gl.glClearColor(*self._scene.background)
+        else:
+            gl.glClearColor(*BACKGROUND, 1.0)
         gl.glClear(GL_COLOR_BUFFER_BIT)
 
         if self._scene_dirty:
@@ -363,8 +367,15 @@ class Viewport(QOpenGLWidget):
         p.drawLine(QPointF(ox, oy - size), QPointF(ox + 4, oy - size + 8))
         p.drawText(QPointF(ox - 4, oy - size - 6), "Y")
 
+    def _light_background(self) -> bool:
+        if self._scene is None or self._scene.background is None:
+            return False
+        r, g, b, _a = self._scene.background
+        return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 0.5
+
     def _draw_crosshair(self, p: QPainter, pos: QPointF) -> None:
-        p.setPen(QPen(CROSSHAIR_COLOR, 1))
+        color = CROSSHAIR_COLOR_LIGHT if self._light_background() else CROSSHAIR_COLOR
+        p.setPen(QPen(color, 1))
         x, y = pos.x(), pos.y()
         half = PICKBOX_PX / 2
         # Full-viewport crosshair with the pick box gap-free on top (classic).

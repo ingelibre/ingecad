@@ -157,6 +157,8 @@ class Scene:
     skipped: list[str] = field(default_factory=list)
     # Paperspace layout shown instead of an empty modelspace, if any.
     layout_name: Optional[str] = None
+    # Canvas color for that layout (RGBA floats); None = viewport default.
+    background: Optional[tuple[float, float, float, float]] = None
 
     @property
     def is_empty(self) -> bool:

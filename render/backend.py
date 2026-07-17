@@ -63,6 +63,7 @@ class VertexBackend(Backend):
         self.buckets: dict[tuple, Bucket] = {}
         self._flatten = flatten_distance
         self._kind = ""
+        self.background: str | None = None
 
     def enter_entity(self, entity, properties) -> None:
         super().enter_entity(entity, properties)
@@ -154,7 +155,9 @@ class VertexBackend(Backend):
         pass
 
     def set_background(self, color: str) -> None:
-        pass  # viewport keeps its own model-space background
+        # Captured for paperspace layouts (white paper, like AutoCAD's
+        # layout tabs); modelspace keeps the viewport's own dark canvas.
+        self.background = color
 
     def clear(self) -> None:
         self.buckets.clear()
@@ -292,4 +295,13 @@ def build_scene(document: Document) -> Scene:
     scene = pack(backend.buckets)
     scene.skipped = list(frontend.skipped)
     scene.layout_name = layout_name
+    if layout_name is not None:
+        # Paper-white background like AutoCAD's layout tabs; the sheet's
+        # colors were resolved by ezdxf against this background already.
+        from render.batches import parse_color
+
+        scene.background = (
+            parse_color(backend.background) if backend.background
+            else (1.0, 1.0, 1.0, 1.0)
+        )
     return scene

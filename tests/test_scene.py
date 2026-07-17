@@ -146,6 +146,10 @@ def test_empty_modelspace_falls_back_to_paperspace_layout():
     scene = build_scene(Document(doc))
     assert not scene.is_empty
     assert scene.layout_name == "Layout1"
+    # Paper-white canvas for layouts (AutoCAD layout-tab look).
+    assert scene.background is not None
+    r, g, b, _a = scene.background
+    assert (r + g + b) / 3 > 0.8
     # A drawing with modelspace content keeps layout_name None.
     doc2 = ezdxf.new("R2018")
     doc2.modelspace().add_line((0, 0), (1, 1))
