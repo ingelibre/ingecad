@@ -11,7 +11,7 @@ import pytest
 
 from core.document import Document, DocumentError
 from render.backend import build_scene
-from render.batches import VERTEX_FLOATS, parse_color
+from render.batches import parse_color
 
 
 def make_document() -> Document:
@@ -45,8 +45,7 @@ def test_scene_origin_recenters_utm_coordinates():
     assert abs(ox - 500_050.0) < 100.0
     assert abs(oy - 8_500_040.0) < 100.0
     # Stored vertices are small numbers: float32 keeps full drawing precision.
-    verts = scene.lines.data.reshape(-1, VERTEX_FLOATS)
-    assert np.abs(verts[:, :2]).max() < 1000.0
+    assert np.abs(scene.lines.positions()).max() < 1000.0
 
 
 def test_scene_extents_match_drawing():
@@ -60,7 +59,7 @@ def test_scene_extents_match_drawing():
 def test_circle_flattening_is_accurate():
     scene = build_scene(make_document())
     ox, oy = scene.origin
-    verts = scene.lines.data.reshape(-1, VERTEX_FLOATS)[:, :2].astype(np.float64)
+    verts = scene.lines.positions().astype(np.float64)
     # Vertices on the circle sit 25 units from its center.
     cx, cy = 500_050.0 - ox, 8_500_050.0 - oy
     radii = np.hypot(verts[:, 0] - cx, verts[:, 1] - cy)
@@ -75,14 +74,11 @@ def test_thick_lineweights_become_quads():
     msp.add_line((0.0, 0.0), (0.0, 100.0), dxfattribs={"lineweight": 13})   # 0.13 mm
     scene = build_scene(Document(doc))
 
-    from render.batches import THICK_FLOATS
-
     # The 0.50 mm line becomes one quad (6 vertices); the thin one stays GL_LINES.
     assert scene.thick.vertex_count == 6
     assert scene.lines.vertex_count == 2
     assert scene.thick.ranges[0].lineweight == pytest.approx(0.5)
-    verts = scene.thick.data.reshape(-1, THICK_FLOATS)
-    normals = verts[:, 2:4]
+    normals = scene.thick.data["normal"]
     assert np.allclose(np.hypot(normals[:, 0], normals[:, 1]), 1.0, atol=1e-5)
     # The horizontal segment's expansion direction is vertical.
     assert np.allclose(np.abs(normals[:, 1]), 1.0, atol=1e-5)
@@ -116,6 +112,28 @@ def test_malformed_entity_is_skipped_not_fatal():
     assert scene.lines.vertex_count >= 2      # the LINE still renders
     assert len(scene.skipped) == 1
     assert scene.skipped[0].startswith("HATCH")
+
+
+def test_view_culling_and_tiny_text_skip():
+    doc = ezdxf.new("R2018")
+    msp = doc.modelspace()
+    # Two clusters far apart, plus a small text label near the first one.
+    msp.add_line((0.0, 0.0), (10.0, 0.0))
+    msp.add_line((10_000.0, 10_000.0), (10_010.0, 10_000.0))
+    msp.add_text("A1", height=2.0, dxfattribs={"insert": (5.0, 5.0)})
+    scene = build_scene(Document(doc))
+
+    # Zoomed into the first cluster: the far line's ranges are culled.
+    near = scene.lines.visible_runs((-50, -50, 50, 50), 10.0, 0.0)
+    everything = scene.lines.visible_runs(scene.extents, 10.0, 0.0)
+    assert sum(c for _f, c in near) < sum(c for _f, c in everything)
+
+    # Text ranges disappear when glyphs are sub-pixel, reappear when legible.
+    assert scene.triangles.vertex_count > 0  # the glyphs
+    tiny = scene.triangles.visible_runs(scene.extents, 0.0001, 2.0)
+    legible = scene.triangles.visible_runs(scene.extents, 10.0, 2.0)
+    assert sum(c for _f, c in tiny) == 0
+    assert sum(c for _f, c in legible) == scene.triangles.vertex_count
 
 
 def test_parse_color_rgb_and_rgba():

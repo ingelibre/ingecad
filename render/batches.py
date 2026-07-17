@@ -8,22 +8,33 @@ E=500 000 — architectural principle #3). ``pack`` subtracts the scene origin
 precision loss lands in coordinates that are small by construction. The
 viewport adds the origin back when building its matrix.
 
-Vertices are interleaved ``[x, y, r, g, b, a]`` (6 x float32). Draw ranges
-per (layer, color) bucket are kept so layer visibility and highlighting can
-skip ranges without re-uploading the buffer.
+Vertex formats (colors as normalized uint8 — half the memory of floats):
+- standard: [x f32, y f32, rgba u8x4]                     -> 12 bytes
+- thick:    [x f32, y f32, nx f32, ny f32, rgba u8x4]     -> 20 bytes
+
+Primitives are reordered by a coarse spatial grid inside each (layer, color,
+lineweight, kind) bucket, and draw ranges carry world bounds so the viewport
+can cull to the visible rect and skip illegible text (a cadastre's 43 M
+glyph vertices are 90 % of the scene but invisible below a few pixels).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Optional
 
 import numpy as np
 
-VERTEX_FLOATS = 6        # x, y, r, g, b, a
-THICK_FLOATS = 8         # x, y, nx, ny, r, g, b, a (n: unit perpendicular)
+VERTEX_DTYPE = np.dtype([("pos", "<f4", 2), ("rgba", "u1", 4)])          # 12 B
+THICK_DTYPE = np.dtype([("pos", "<f4", 2), ("normal", "<f4", 2),
+                        ("rgba", "u1", 4)])                              # 20 B
+
 # AutoCAD LWT displays weights up to 0.25 mm as one pixel; above that the
 # line grows with the weight. Same split here: thin -> GL_LINES, thick ->
 # screen-constant quads expanded in the shader.
 THIN_MAX_MM = 0.25
+
+# Spatial grid resolution per axis for view culling.
+GRID_DIV = 16
 
 
 def parse_color(color: str) -> tuple[float, float, float, float]:
@@ -36,16 +47,32 @@ def parse_color(color: str) -> tuple[float, float, float, float]:
     return r, g, b, a
 
 
+def _color_u8(color: str) -> np.ndarray:
+    h = color.lstrip("#")
+    r = int(h[0:2], 16)
+    g = int(h[2:4], 16)
+    b = int(h[4:6], 16)
+    a = int(h[6:8], 16) if len(h) >= 8 else 255
+    return np.array([r, g, b, a], dtype=np.uint8)
+
+
 @dataclass
 class Bucket:
-    """Primitives of one (layer, color, lineweight) group, world float64."""
+    """Primitives of one (layer, color, lineweight, kind) group, float64."""
 
     layer: str
     color: str
     lineweight: float = 0.25                              # mm, resolved
+    kind: str = ""                                        # "T" = text glyphs
     lines: list[float] = field(default_factory=list)      # x,y per endpoint
     triangles: list[float] = field(default_factory=list)  # x,y per corner
     points: list[float] = field(default_factory=list)     # x,y per point
+    text_height_sum: float = 0.0                          # glyph extents, world
+    text_count: int = 0
+
+    @property
+    def avg_text_height(self) -> float:
+        return self.text_height_sum / self.text_count if self.text_count else 0.0
 
 
 @dataclass
@@ -53,22 +80,67 @@ class DrawRange:
     """A contiguous vertex run inside a packed array."""
 
     layer: str
-    first: int  # vertex index (not float index)
+    first: int  # vertex index (not byte index)
     count: int
     lineweight: float = 0.25  # mm; drives u_half_world for thick ranges
 
 
-@dataclass
 class Batch:
-    """One primitive type packed: interleaved float32 array + its ranges."""
+    """One primitive type packed: interleaved array + culling metadata."""
 
-    data: np.ndarray  # shape (n * floats_per_vertex,), float32
-    ranges: list[DrawRange]
-    floats_per_vertex: int = VERTEX_FLOATS
+    def __init__(self, data: np.ndarray, ranges: list[DrawRange],
+                 bounds: Optional[np.ndarray] = None,
+                 is_text: Optional[np.ndarray] = None,
+                 text_height: Optional[np.ndarray] = None) -> None:
+        self.data = data                    # structured array
+        self.ranges = ranges
+        # Parallel arrays for vectorized culling (one row per range):
+        n = len(ranges)
+        self.firsts = np.fromiter((r.first for r in ranges), np.int64, n)
+        self.counts = np.fromiter((r.count for r in ranges), np.int64, n)
+        self.bounds = bounds                # (n, 4) world min_x,min_y,max_x,max_y
+        self.is_text = is_text              # (n,) bool
+        self.text_height = text_height      # (n,) avg glyph height, world units
 
     @property
     def vertex_count(self) -> int:
-        return len(self.data) // self.floats_per_vertex
+        return len(self.data)
+
+    def positions(self) -> np.ndarray:
+        """(N, 2) float32 view of the vertex positions (tests, picking)."""
+        return self.data["pos"]
+
+    def visible_runs(self, view_rect, px_per_unit: float,
+                     min_text_px: float) -> list[tuple[int, int]]:
+        """Merged (first, count) vertex runs to draw for this view."""
+        if not len(self.ranges):
+            return []
+        if self.bounds is None:
+            return [(0, self.vertex_count)]
+        x0, y0, x1, y1 = view_rect
+        vis = (
+            (self.bounds[:, 0] <= x1) & (self.bounds[:, 2] >= x0)
+            & (self.bounds[:, 1] <= y1) & (self.bounds[:, 3] >= y0)
+        )
+        if self.is_text is not None and min_text_px > 0.0:
+            legible = self.text_height * px_per_unit >= min_text_px
+            vis &= ~self.is_text | legible
+        idx = np.nonzero(vis)[0]
+        if len(idx) == 0:
+            return []
+        firsts = self.firsts[idx]
+        counts = self.counts[idx]
+        # Merge runs that are contiguous in the buffer into single draws.
+        breaks = np.nonzero(firsts[1:] != firsts[:-1] + counts[:-1])[0] + 1
+        starts = np.concatenate(([0], breaks))
+        ends = np.concatenate((breaks, [len(idx)]))
+        return [
+            (int(firsts[s]), int(firsts[e - 1] + counts[e - 1] - firsts[s]))
+        for s, e in zip(starts, ends)]
+
+
+def _empty_batch(dtype=VERTEX_DTYPE) -> Batch:
+    return Batch(np.empty(0, dtype=dtype), [])
 
 
 @dataclass
@@ -77,8 +149,8 @@ class Scene:
 
     origin: tuple[float, float]                    # float64 world center
     extents: tuple[float, float, float, float]     # world min_x, min_y, max_x, max_y
-    lines: Batch                                   # thin: 6 floats per vertex
-    thick: Batch                                   # quads: 8 floats per vertex
+    lines: Batch                                   # thin lines
+    thick: Batch                                   # lineweight quads
     triangles: Batch
     points: Batch
     # Entities the tolerant frontend could not draw ("TYPE(#handle): why").
@@ -94,12 +166,27 @@ class Scene:
         )
 
 
-def _pack_primitive(
-    buckets: list[Bucket], attr: str, origin: tuple[float, float]
+def _grid_cells(prims_xy: np.ndarray, extents, verts_per_prim: int) -> np.ndarray:
+    """Cell id per primitive from its first vertex (cheap, good enough)."""
+    min_x, min_y, max_x, max_y = extents
+    w = max(max_x - min_x, 1e-12)
+    h = max(max_y - min_y, 1e-12)
+    p0 = prims_xy[::verts_per_prim]
+    cx = np.clip(((p0[:, 0] - min_x) / w * GRID_DIV).astype(np.int32), 0, GRID_DIV - 1)
+    cy = np.clip(((p0[:, 1] - min_y) / h * GRID_DIV).astype(np.int32), 0, GRID_DIV - 1)
+    return cy * GRID_DIV + cx
+
+
+def _pack_standard(
+    buckets: list[Bucket], attr: str, verts_per_prim: int,
+    origin: tuple[float, float], extents,
 ) -> Batch:
     ox, oy = origin
     chunks: list[np.ndarray] = []
     ranges: list[DrawRange] = []
+    bounds: list[np.ndarray] = []
+    is_text: list[bool] = []
+    text_h: list[float] = []
     first = 0
     for bucket in buckets:
         coords = getattr(bucket, attr)
@@ -108,19 +195,51 @@ def _pack_primitive(
         if attr == "lines" and bucket.lineweight > THIN_MAX_MM:
             continue  # packed as quads by _pack_thick
         xy = np.asarray(coords, dtype=np.float64).reshape(-1, 2)
-        n = len(xy)
-        verts = np.empty((n, VERTEX_FLOATS), dtype=np.float32)
-        verts[:, 0] = xy[:, 0] - ox  # float64 subtraction, then float32 store
-        verts[:, 1] = xy[:, 1] - oy
-        verts[:, 2:6] = parse_color(bucket.color)
-        chunks.append(verts.reshape(-1))
-        ranges.append(DrawRange(bucket.layer, first, n, bucket.lineweight))
-        first += n
-    data = np.concatenate(chunks) if chunks else np.empty(0, dtype=np.float32)
-    return Batch(data, ranges)
+        n_prims = len(xy) // verts_per_prim
+        # Spatial order inside the bucket, so cell ranges are contiguous.
+        cells = _grid_cells(xy, extents, verts_per_prim)
+        order = np.argsort(cells, kind="stable")
+        xy = xy.reshape(n_prims, verts_per_prim, 2)[order]
+        cells = cells[order]
+
+        verts = np.empty(n_prims * verts_per_prim, dtype=VERTEX_DTYPE)
+        flat = xy.reshape(-1, 2)
+        verts["pos"][:, 0] = flat[:, 0] - ox  # float64 math, float32 store
+        verts["pos"][:, 1] = flat[:, 1] - oy
+        verts["rgba"] = _color_u8(bucket.color)
+        chunks.append(verts)
+
+        # One range per occupied cell.
+        cell_breaks = np.nonzero(cells[1:] != cells[:-1])[0] + 1
+        starts = np.concatenate(([0], cell_breaks))
+        ends = np.concatenate((cell_breaks, [n_prims]))
+        for s, e in zip(starts, ends):
+            block = xy[s:e].reshape(-1, 2)
+            ranges.append(DrawRange(
+                bucket.layer,
+                first + s * verts_per_prim,
+                (e - s) * verts_per_prim,
+                bucket.lineweight,
+            ))
+            bounds.append(np.array([
+                block[:, 0].min(), block[:, 1].min(),
+                block[:, 0].max(), block[:, 1].max(),
+            ]))
+            is_text.append(bucket.kind == "T")
+            text_h.append(bucket.avg_text_height)
+        first += n_prims * verts_per_prim
+    if not chunks:
+        return _empty_batch()
+    return Batch(
+        np.concatenate(chunks),
+        ranges,
+        np.vstack(bounds),
+        np.asarray(is_text, dtype=bool),
+        np.asarray(text_h, dtype=np.float64),
+    )
 
 
-def _pack_thick(buckets: list[Bucket], origin: tuple[float, float]) -> Batch:
+def _pack_thick(buckets: list[Bucket], origin: tuple[float, float], extents) -> Batch:
     """Thick line segments -> quads (2 triangles, 6 vertices) per segment.
 
     Each vertex stores the segment point plus a unit perpendicular; the
@@ -130,6 +249,7 @@ def _pack_thick(buckets: list[Bucket], origin: tuple[float, float]) -> Batch:
     ox, oy = origin
     chunks: list[np.ndarray] = []
     ranges: list[DrawRange] = []
+    bounds: list[np.ndarray] = []
     first = 0
     for bucket in buckets:
         if not bucket.lines or bucket.lineweight <= THIN_MAX_MM:
@@ -141,22 +261,38 @@ def _pack_thick(buckets: list[Bucket], origin: tuple[float, float]) -> Batch:
         seg, d, length = seg[ok], d[ok], length[ok]
         if len(seg) == 0:
             continue
+        cells = _grid_cells(seg.reshape(-1, 2), extents, 2)
+        order = np.argsort(cells, kind="stable")
+        seg, d, length, cells = seg[order], d[order], length[order], cells[order]
+
         normal = np.column_stack((-d[:, 1], d[:, 0])) / length[:, None]
         p0 = seg[:, 0] - (ox, oy)
         p1 = seg[:, 1] - (ox, oy)
         n_seg = len(seg)
-        verts = np.empty((n_seg, 6, THICK_FLOATS), dtype=np.float32)
-        # Triangle strip unrolled: (p0,+n) (p0,-n) (p1,+n) / (p1,+n) (p0,-n) (p1,-n)
+        verts = np.empty((n_seg, 6), dtype=THICK_DTYPE)
+        # Triangle pair: (p0,+n) (p0,-n) (p1,+n) / (p1,+n) (p0,-n) (p1,-n)
         corners = ((p0, 1), (p0, -1), (p1, 1), (p1, 1), (p0, -1), (p1, -1))
         for i, (p, sign) in enumerate(corners):
-            verts[:, i, 0:2] = p
-            verts[:, i, 2:4] = normal * sign
-        verts[:, :, 4:8] = parse_color(bucket.color)
+            verts["pos"][:, i] = p
+            verts["normal"][:, i] = normal * sign
+        verts["rgba"] = _color_u8(bucket.color)
         chunks.append(verts.reshape(-1))
-        ranges.append(DrawRange(bucket.layer, first, n_seg * 6, bucket.lineweight))
+
+        cell_breaks = np.nonzero(cells[1:] != cells[:-1])[0] + 1
+        starts = np.concatenate(([0], cell_breaks))
+        ends = np.concatenate((cell_breaks, [n_seg]))
+        for s, e in zip(starts, ends):
+            block = seg[s:e].reshape(-1, 2)
+            ranges.append(DrawRange(
+                bucket.layer, first + s * 6, (e - s) * 6, bucket.lineweight))
+            bounds.append(np.array([
+                block[:, 0].min(), block[:, 1].min(),
+                block[:, 0].max(), block[:, 1].max(),
+            ]))
         first += n_seg * 6
-    data = np.concatenate(chunks) if chunks else np.empty(0, dtype=np.float32)
-    return Batch(data, ranges, THICK_FLOATS)
+    if not chunks:
+        return _empty_batch(THICK_DTYPE)
+    return Batch(np.concatenate(chunks), ranges, np.vstack(bounds))
 
 
 def _world_extents(buckets: list[Bucket]) -> tuple[float, float, float, float]:
@@ -186,8 +322,8 @@ def pack(buckets: dict[tuple, Bucket]) -> Scene:
     return Scene(
         origin=origin,
         extents=extents,
-        lines=_pack_primitive(ordered, "lines", origin),
-        thick=_pack_thick(ordered, origin),
-        triangles=_pack_primitive(ordered, "triangles", origin),
-        points=_pack_primitive(ordered, "points", origin),
+        lines=_pack_standard(ordered, "lines", 2, origin, extents),
+        thick=_pack_thick(ordered, origin, extents),
+        triangles=_pack_standard(ordered, "triangles", 3, origin, extents),
+        points=_pack_standard(ordered, "points", 1, origin, extents),
     )

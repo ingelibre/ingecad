@@ -29,11 +29,12 @@ from PySide6.QtOpenGL import (
 )
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
-from render.batches import THICK_FLOATS, VERTEX_FLOATS, Batch, Scene
+from render.batches import THICK_DTYPE, VERTEX_DTYPE, Batch, Scene
 from render.view import ViewTransform2D
 
 # OpenGL constants — kept as literals so we don't depend on PyOpenGL.
 GL_FLOAT = 0x1406
+GL_UNSIGNED_BYTE = 0x1401
 GL_POINTS = 0x0000
 GL_LINES = 0x0001
 GL_TRIANGLES = 0x0004
@@ -53,19 +54,19 @@ PICKBOX_PX = 8
 # Lineweight display: mm of paper -> logical pixels (96 dpi reference,
 # AutoCAD LWT look). 0.5 mm ~ 2 px, 1.0 mm ~ 4 px.
 PX_PER_MM = 96.0 / 25.4
+# Text glyphs smaller than this on screen are illegible: skip their ranges
+# (they reappear instantly on zoom-in — the data stays on the GPU).
+MIN_TEXT_PX = 2.0
 
 
 def _axes_vertices() -> np.ndarray:
-    """X and Y world axes through the origin, interleaved pos(2) + color(4)."""
-    rx, gx, bx = 0.48, 0.18, 0.18   # muted red for X
-    ry, gy, by = 0.16, 0.42, 0.18   # muted green for Y
-    data = [
-        -AXIS_LEN, 0.0, rx, gx, bx, 1.0,
-        AXIS_LEN, 0.0, rx, gx, bx, 1.0,
-        0.0, -AXIS_LEN, ry, gy, by, 1.0,
-        0.0, AXIS_LEN, ry, gy, by, 1.0,
-    ]
-    return np.asarray(data, dtype=np.float32)
+    """X and Y world axes through the origin in the standard vertex format."""
+    data = np.zeros(4, dtype=VERTEX_DTYPE)
+    data["pos"] = [(-AXIS_LEN, 0.0), (AXIS_LEN, 0.0),
+                   (0.0, -AXIS_LEN), (0.0, AXIS_LEN)]
+    data["rgba"][0] = data["rgba"][1] = (122, 46, 46, 255)   # muted red X
+    data["rgba"][2] = data["rgba"][3] = (41, 107, 46, 255)   # muted green Y
+    return data
 
 
 class Viewport(QOpenGLWidget):
@@ -132,7 +133,7 @@ class Viewport(QOpenGLWidget):
             self._scene_dirty = True
 
     def _make_vao(self, data: np.ndarray) -> tuple:
-        """Upload interleaved [x, y, r, g, b, a] float32 data into a fresh VAO."""
+        """Upload standard-format vertices (12 B: pos f32x2 + rgba u8x4)."""
         loc_pos = self._program.attributeLocation("a_pos")
         loc_color = self._program.attributeLocation("a_color")
         vao = QOpenGLVertexArrayObject(self)
@@ -141,20 +142,22 @@ class Viewport(QOpenGLWidget):
         vbo = QOpenGLBuffer(QOpenGLBuffer.VertexBuffer)
         vbo.create()
         vbo.bind()
-        vbo.allocate(data.tobytes(), data.nbytes)
-        stride = VERTEX_FLOATS * 4
+        raw = data.tobytes()
+        vbo.allocate(raw, len(raw))
+        stride = VERTEX_DTYPE.itemsize
         self._program.bind()
         self._program.enableAttributeArray(loc_pos)
         self._program.setAttributeBuffer(loc_pos, GL_FLOAT, 0, 2, stride)
         self._program.enableAttributeArray(loc_color)
-        self._program.setAttributeBuffer(loc_color, GL_FLOAT, 2 * 4, 4, stride)
+        # Qt normalizes integer attribute types: u8 255 -> 1.0 in the vec4.
+        self._program.setAttributeBuffer(loc_color, GL_UNSIGNED_BYTE, 8, 4, stride)
         self._program.release()
         vao.release()
         vbo.release()
-        return vao, vbo, len(data) // VERTEX_FLOATS
+        return vao, vbo, len(data)
 
     def _make_thick_vao(self, data: np.ndarray) -> tuple:
-        """Upload interleaved [x, y, nx, ny, r, g, b, a] into a fresh VAO."""
+        """Upload thick-format vertices (20 B: pos + normal f32x2 + rgba u8x4)."""
         prog = self._thick_program
         loc_pos = prog.attributeLocation("a_pos")
         loc_normal = prog.attributeLocation("a_normal")
@@ -165,19 +168,20 @@ class Viewport(QOpenGLWidget):
         vbo = QOpenGLBuffer(QOpenGLBuffer.VertexBuffer)
         vbo.create()
         vbo.bind()
-        vbo.allocate(data.tobytes(), data.nbytes)
-        stride = THICK_FLOATS * 4
+        raw = data.tobytes()
+        vbo.allocate(raw, len(raw))
+        stride = THICK_DTYPE.itemsize
         prog.bind()
         prog.enableAttributeArray(loc_pos)
         prog.setAttributeBuffer(loc_pos, GL_FLOAT, 0, 2, stride)
         prog.enableAttributeArray(loc_normal)
-        prog.setAttributeBuffer(loc_normal, GL_FLOAT, 2 * 4, 2, stride)
+        prog.setAttributeBuffer(loc_normal, GL_FLOAT, 8, 2, stride)
         prog.enableAttributeArray(loc_color)
-        prog.setAttributeBuffer(loc_color, GL_FLOAT, 4 * 4, 4, stride)
+        prog.setAttributeBuffer(loc_color, GL_UNSIGNED_BYTE, 16, 4, stride)
         prog.release()
         vao.release()
         vbo.release()
-        return vao, vbo, len(data) // THICK_FLOATS
+        return vao, vbo, len(data)
 
     def _upload_scene(self) -> None:
         """(Re)build the scene buffers. Requires a current GL context."""
@@ -250,6 +254,7 @@ class Viewport(QOpenGLWidget):
 
         if self._scene is not None and self._scene_bufs:
             scene_mvp = self._mvp(*self._scene.origin)
+            view_rect = self._view_world_rect()
             self._program.setUniformValue(self._loc_mvp, scene_mvp)
             # Fills first, then lines and points on top of them.
             for name, mode in (("triangles", GL_TRIANGLES),
@@ -258,28 +263,43 @@ class Viewport(QOpenGLWidget):
                 buf = self._scene_bufs.get(name)
                 if buf is None:
                     continue
-                vao, _vbo, count = buf
+                vao, _vbo, _count = buf
+                batch: Batch = getattr(self._scene, name)
                 vao.bind()
-                gl.glDrawArrays(mode, 0, count)
+                for first, count in batch.visible_runs(
+                        view_rect, self.view.scale, MIN_TEXT_PX):
+                    gl.glDrawArrays(mode, first, count)
                 vao.release()
             self._program.release()
-            self._draw_thick(gl, scene_mvp)
+            self._draw_thick(gl, scene_mvp, view_rect)
         else:
             self._program.release()
 
         self._paint_overlay()
 
-    def _draw_thick(self, gl, scene_mvp: QMatrix4x4) -> None:
-        """Thick lineweight quads: one draw per weight range (uniform width)."""
+    def _view_world_rect(self) -> tuple[float, float, float, float]:
+        x0, y1 = self.view.screen_to_world(0.0, 0.0)          # top-left
+        x1, y0 = self.view.screen_to_world(self.width(), self.height())
+        return (x0, y0, x1, y1)
+
+    def _draw_thick(self, gl, scene_mvp: QMatrix4x4, view_rect) -> None:
+        """Thick lineweight quads: one draw per visible weight range."""
         buf = self._scene_bufs.get("thick")
         if buf is None:
             return
         vao, _vbo, _count = buf
+        batch = self._scene.thick
+        x0, y0, x1, y1 = view_rect
         prog = self._thick_program
         prog.bind()
         prog.setUniformValue(self._loc_thick_mvp, scene_mvp)
         vao.bind()
-        for rng in self._scene.thick.ranges:
+        # No run merging here: u_half_world changes per lineweight.
+        for i, rng in enumerate(batch.ranges):
+            if batch.bounds is not None:
+                bx0, by0, bx1, by1 = batch.bounds[i]
+                if bx0 > x1 or bx1 < x0 or by0 > y1 or by1 < y0:
+                    continue
             px = max(1.0, rng.lineweight * PX_PER_MM)
             half_world = (px / 2.0) / self.view.scale
             prog.setUniformValue1f(self._loc_half_world, half_world)

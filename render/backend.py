@@ -49,20 +49,37 @@ HATCH_DENSITY_REL = 1.0 / 64.0
 HATCHING_TIMEOUT = 5.0
 
 
+# Entity types whose fills are text glyphs; they dominate label-heavy plans
+# (a cadastre: 43 M of 49 M vertices) and the viewport hides them when they
+# would be smaller than a few pixels.
+_TEXT_TYPES = frozenset(("TEXT", "MTEXT", "ATTRIB", "ATTDEF"))
+
+
 class VertexBackend(Backend):
     """Collects frontend primitives into per-(layer, color) buckets."""
 
     def __init__(self, flatten_distance: float) -> None:
         super().__init__()
-        self.buckets: dict[tuple[str, str], Bucket] = {}
+        self.buckets: dict[tuple, Bucket] = {}
         self._flatten = flatten_distance
+        self._kind = ""
+
+    def enter_entity(self, entity, properties) -> None:
+        super().enter_entity(entity, properties)
+        self._kind = "T" if entity.dxftype() in _TEXT_TYPES else ""
+
+    def exit_entity(self, entity) -> None:
+        super().exit_entity(entity)
+        self._kind = ""
 
     def _bucket(self, properties: BackendProperties) -> Bucket:
-        key = (properties.layer, properties.color, properties.lineweight)
+        key = (properties.layer, properties.color, properties.lineweight,
+               self._kind)
         bucket = self.buckets.get(key)
         if bucket is None:
             bucket = self.buckets[key] = Bucket(
-                properties.layer, properties.color, properties.lineweight
+                properties.layer, properties.color, properties.lineweight,
+                self._kind,
             )
         return bucket
 
@@ -105,6 +122,12 @@ class VertexBackend(Backend):
             if not rings:
                 continue
             rings.sort(key=_ring_extent, reverse=True)
+            if self._kind == "T":
+                # Legibility metric for the viewport's tiny-text culling.
+                ys = [v.y for v in rings[0]]
+                bucket = self._bucket(properties)
+                bucket.text_height_sum += max(ys) - min(ys)
+                bucket.text_count += 1
             self._fill(rings[0], rings[1:], properties)
 
     def _fill(
