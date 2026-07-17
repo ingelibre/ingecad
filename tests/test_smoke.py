@@ -150,6 +150,34 @@ def test_trim_full_flow_through_controller(qapp):
     win.close()
 
 
+def test_edges_stay_highlighted_during_trim(qapp):
+    # Preselect circles -> TR: AutoCAD keeps the cutting edges highlighted
+    # to guide the picks; the highlight clears when the command ends.
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    qapp.processEvents()
+    win.dispatcher.submit("c")
+    win.tools.on_click(0, 0)
+    win.tools.on_text("10")
+    win.dispatcher.submit("c")
+    win.tools.on_click(12, 0)
+    win.tools.on_text("10")
+
+    win.tools.on_hover(0, 10, 2.0)
+    win.tools.on_click(0, 10)       # pick circle 1 (idle selection)
+    win.tools.on_click(12, -10)     # pick circle 2
+    assert len(win.tools.selection) == 2
+    win.dispatcher.submit("tr")
+    assert win.tools.active()
+    assert len(win.tools.selection) == 2      # edges stay lit during TRIM
+    win.tools.on_click(10.5, 0)               # trim c1's right arc
+    win.tools.on_text("")                     # Enter ends
+    assert not win.tools.selection            # highlight off after command
+    win.close()
+
+
 def test_trim_by_crossing_window(qapp):
     # TRIM targets can be captured with a window/crossing rectangle: two
     # parallel lines crossing a cutter, one crossing rect trims both spans.

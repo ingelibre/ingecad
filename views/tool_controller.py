@@ -101,9 +101,11 @@ class ToolController(QObject):
         self.tool.start()
         if self.tool is not None and self.tool.wants_selection:
             if self.selection:
-                # noun-verb: the preselected set feeds the command directly
+                # noun-verb: the preselected set feeds the command directly.
+                # The highlight STAYS while the command runs (AutoCAD keeps
+                # the cutting edges lit during TRIM to guide the picks);
+                # _finish clears it.
                 entities = self._selection_entities()
-                self.clear_selection()
                 self.tool.on_selection(entities)
             else:
                 self._selecting_for = self.tool
@@ -146,6 +148,7 @@ class ToolController(QObject):
         self.snap_hit = None
         self._selecting_for = None
         self._window_anchor = None
+        self.selection = set()  # command done: highlight goes off
         self.changed.emit()
 
     def cancel(self) -> None:
@@ -321,7 +324,8 @@ class ToolController(QObject):
             return
         self._selecting_for = None
         entities = self._selection_entities()
-        self.clear_selection()
+        self._window_anchor = None
+        # keep the highlight while the command runs (AutoCAD behavior)
         tool.on_selection(entities)
         self.changed.emit()
 
