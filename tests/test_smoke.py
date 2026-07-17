@@ -217,6 +217,37 @@ def test_trim_by_crossing_window(qapp):
     win.close()
 
 
+def test_extend_by_rect_both_directions(qapp):
+    # EXTEND targets by rectangle: quick-mode semantics, BOTH drag
+    # directions act as crossing (whatever the rect touches extends).
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    qapp.processEvents()
+    for y in (0.0, 5.0):
+        win.dispatcher.submit("l")
+        win.tools.on_click(0, y)
+        win.tools.on_click(40, y)
+        win.tools.on_text("")
+    win.dispatcher.submit("l")
+    win.tools.on_click(100, -10)
+    win.tools.on_click(100, 15)
+    win.tools.on_text("")
+
+    win.dispatcher.submit("ex")
+    win.tools.on_text("")
+    win.tools.on_hover(38, 2.5, 2.0)
+    win.tools.start_window(30.0, -2.0)
+    win.tools.on_click(45.0, 7.0)       # LEFT-to-RIGHT drag: still crossing
+    ends = sorted(round(l.dxf.end.x, 1)
+                  for l in win.document.modelspace().query("LINE")
+                  if l.dxf.start.y == l.dxf.end.y)
+    assert ends == [100.0, 100.0]
+    win.tools.cancel()
+    win.close()
+
+
 def test_zoom_extents_frames_placeholder_bounds(qapp):
     from views.main_window import MainWindow
 

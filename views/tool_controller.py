@@ -264,12 +264,13 @@ class ToolController(QObject):
         self.tool.shift = shift
         if self.tool.accepts_target_windows and self.index is not None:
             if self._window_anchor is not None:
-                # complete a target window/crossing (drag or click-click)
+                # complete a target rectangle (drag or click-click). AutoCAD
+                # quick-mode TRIM/EXTEND treats BOTH directions as crossing:
+                # whatever the rect touches is a target.
                 ax, ay = self._window_anchor
                 self._window_anchor = None
                 rect = (min(ax, wx), min(ay, wy), max(ax, wx), max(ay, wy))
-                handles = (self.index.window(rect) if wx >= ax
-                           else self.index.crossing(rect))
+                handles = self.index.crossing(rect)
                 entities = [e for h in handles
                             if (e := self.index.entity(h)) is not None
                             and e.is_alive]
