@@ -136,6 +136,22 @@ def test_view_culling_and_tiny_text_skip():
     assert sum(c for _f, c in legible) == scene.triangles.vertex_count
 
 
+def test_empty_modelspace_falls_back_to_paperspace_layout():
+    # ArchiCAD-published sheets: modelspace empty, everything composed in a
+    # paperspace layout. The scene must show the layout and say so.
+    doc = ezdxf.new("R2018")
+    psp = doc.layout("Layout1")
+    psp.add_line((0.0, 0.0), (420.0, 0.0))
+    psp.add_line((0.0, 0.0), (0.0, 297.0))
+    scene = build_scene(Document(doc))
+    assert not scene.is_empty
+    assert scene.layout_name == "Layout1"
+    # A drawing with modelspace content keeps layout_name None.
+    doc2 = ezdxf.new("R2018")
+    doc2.modelspace().add_line((0, 0), (1, 1))
+    assert build_scene(Document(doc2)).layout_name is None
+
+
 def test_parse_color_rgb_and_rgba():
     assert parse_color("#ff0000") == (1.0, 0.0, 0.0, 1.0)
     r, g, b, a = parse_color("#00ff0080")

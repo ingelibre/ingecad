@@ -169,10 +169,32 @@ def _ring_extent(ring: list[Vec2]) -> float:
     return (max(xs) - min(xs)) * (max(ys) - min(ys))
 
 
-def _modelspace_extents(document: Document):
+def pick_layout(document: Document):
+    """The layout worth showing: modelspace, or the fullest paper layout.
+
+    ArchiCAD-published sheets (and some AutoCAD workflows) leave modelspace
+    genuinely empty and compose everything in a paperspace layout (VIEWPORT +
+    INSERT). AutoCAD opens those showing the layout; a blank canvas here
+    would read as a converter bug. Returns (layout, name) — name is None for
+    plain modelspace.
+    """
     msp = document.modelspace()
+    if len(msp) > 0:
+        return msp, None
+    best = None
+    for layout in document.doc.layouts:
+        if layout.name == "Model":
+            continue
+        if len(layout) > 0 and (best is None or len(layout) > len(best)):
+            best = layout
+    if best is not None:
+        return best, best.name
+    return msp, None
+
+
+def _layout_extents(layout):
     try:
-        return bbox.extents(msp, fast=True)
+        return bbox.extents(layout, fast=True)
     except Exception:
         # One malformed entity (e.g. a HATCH spline edge with bad knots)
         # aborts the whole-layout pass; retry entity by entity and keep
@@ -180,7 +202,7 @@ def _modelspace_extents(document: Document):
         from ezdxf.math import BoundingBox
 
         total = BoundingBox()
-        for entity in msp:
+        for entity in layout:
             try:
                 one = bbox.extents([entity], fast=True)
             except Exception:
@@ -190,8 +212,8 @@ def _modelspace_extents(document: Document):
         return total
 
 
-def _flatten_distance(document: Document) -> float:
-    extents = _modelspace_extents(document)
+def _flatten_distance(layout) -> float:
+    extents = _layout_extents(layout)
     if not extents.has_data:
         return 0.01
     dx = extents.extmax.x - extents.extmin.x
@@ -255,12 +277,19 @@ def frontend_config(flatten: float) -> Configuration:
 
 
 def build_scene(document: Document) -> Scene:
-    """Run the ezdxf frontend over modelspace and pack the result ("regen")."""
-    flatten = _flatten_distance(document)
+    """Run the ezdxf frontend over the drawing and pack the result ("regen").
+
+    Renders modelspace, or — when modelspace is empty — the fullest
+    paperspace layout (ArchiCAD-published sheets); Scene.layout_name
+    records the fallback so the UI can say so.
+    """
+    layout, layout_name = pick_layout(document)
+    flatten = _flatten_distance(layout)
     backend = VertexBackend(flatten)
     context = TolerantRenderContext(document.doc)
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
-    frontend.draw_layout(document.modelspace())
+    frontend.draw_layout(layout)
     scene = pack(backend.buckets)
     scene.skipped = list(frontend.skipped)
+    scene.layout_name = layout_name
     return scene

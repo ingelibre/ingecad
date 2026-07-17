@@ -155,6 +155,8 @@ class Scene:
     points: Batch
     # Entities the tolerant frontend could not draw ("TYPE(#handle): why").
     skipped: list[str] = field(default_factory=list)
+    # Paperspace layout shown instead of an empty modelspace, if any.
+    layout_name: Optional[str] = None
 
     @property
     def is_empty(self) -> bool:

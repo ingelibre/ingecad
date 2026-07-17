@@ -88,11 +88,23 @@ def check_one(dwg_path_str: str, dwg2dxf: str) -> dict:
 
         n_msp = len(doc.modelspace())
         row["entities"] = n_msp
-        if n_msp == 0 and len(doc.entitydb) > 100:
-            row["category"] = "EMPTY_SALVAGE"
-            row["signature"] = stderr_tail
-        elif n_msp == 0:
-            row["category"] = "EMPTY"
+        if n_msp == 0:
+            n_paper = max(
+                (len(lay) for lay in doc.layouts if lay.name != "Model"),
+                default=0,
+            )
+            n_blocks = sum(len(b) for b in doc.blocks
+                           if not b.name.lower().startswith("*model_space"))
+            if n_paper > 0 and n_blocks > 100:
+                # ArchiCAD-style sheet: content composed in a paperspace
+                # layout; IngeCAD shows it via the pick_layout fallback.
+                row["category"] = "PAPERSPACE_ONLY"
+                row["entities"] = n_blocks
+            elif len(doc.entitydb) > 100:
+                row["category"] = "EMPTY_SALVAGE"
+                row["signature"] = stderr_tail
+            else:
+                row["category"] = "EMPTY"
         else:
             row["category"] = "OK"
         return row

@@ -36,6 +36,7 @@
   "Cannot open {name}: {error}": "No se puede abrir {name}: {error}",
   "Opened {name}": "Se abrió {name}",
   "Opened {name} — {count} damaged entities could not be drawn": "Se abrió {name} — {count} entidades dañadas no se pudieron dibujar",
+  "Opened {name} — showing layout \"{layout}\" (model space is empty)": "Se abrió {name} — mostrando el layout \"{layout}\" (el espacio modelo está vacío)",
   "Opening {name}...": "Abriendo {name}...",
   "Still opening the previous drawing...": "Todavía se está abriendo el dibujo anterior..."
 }

@@ -365,7 +365,13 @@ class MainWindow(QMainWindow):
         self.viewport.set_scene(scene)
         self.viewport.zoom_extents()
         self.setWindowTitle(f"IngeCAD — {document.name}")
-        if scene.skipped:
+        if scene.layout_name:
+            self.statusBar().showMessage(
+                tr("Opened {name} — showing layout \"{layout}\" (model space is empty)",
+                   name=document.name, layout=scene.layout_name),
+                10000,
+            )
+        elif scene.skipped:
             self.statusBar().showMessage(
                 tr("Opened {name} — {count} damaged entities could not be drawn",
                    name=document.name, count=len(scene.skipped)),
