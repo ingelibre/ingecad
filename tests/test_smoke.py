@@ -260,3 +260,30 @@ def test_zoom_extents_frames_placeholder_bounds(qapp):
         sx, sy = v.world_to_screen(wx, wy)
         assert 0 <= sx <= v.width and 0 <= sy <= v.height
     win.close()
+
+
+def test_polyline_midgrip_inserts_one_vertex(qapp):
+    # The round midpoint grip must insert ONE vertex on grab and then move
+    # it — not re-insert every mouse move (the "caos de puntos" bug).
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    qapp.processEvents()
+    win.dispatcher.submit("pl")
+    for p in ((0, 0), (10, 0), (10, 10)):
+        win.tools.on_click(*p)
+    win.tools.on_text("")           # Enter ends PLINE
+    win.regen_in_memory()
+
+    pl = win.document.modelspace().query("LWPOLYLINE")[0]
+    win.tools.selection = {pl.dxf.handle}
+    grips = win.tools.grip_points()
+    mid = next(g for g in grips if g[2] == "mid")   # (x, y, role, handle, i)
+    win.tools.begin_grip_drag(mid)
+    for tgt in ((5, -4), (5, -6), (6, -8)):         # live follow, many frames
+        win.tools.update_grip_drag(*tgt)
+    win.tools.finish_grip_drag(6, -8)
+    pts = win.document.modelspace().query("LWPOLYLINE")[0].get_points("xy")
+    assert len(pts) == 4                            # exactly ONE inserted
+    win.close()

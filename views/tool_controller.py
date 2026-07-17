@@ -499,12 +499,22 @@ class ToolController(QObject):
 
     def begin_grip_drag(self, grip) -> None:
         from core.actions import SnapshotCommand
+        from core.select import entity_grips
 
-        _x, _y, role, handle, index = grip
+        gx, gy, role, handle, index = grip
         entity = self.index.entity(handle)
         if entity is None:
             return
-        self._grip_drag = (handle, index, role, SnapshotCommand([entity]))
+        snap = SnapshotCommand([entity])   # captures the pre-grab state
+        # A polyline midpoint grip inserts ONE vertex here, then behaves as
+        # a vertex-move — otherwise the live follow re-inserts every frame.
+        if entity.dxftype() == "LWPOLYLINE" and role == "mid":
+            n = len(entity.get_points("xy"))
+            seg = index - n
+            apply_grip_edit(entity, index, role, (gx, gy))  # insert once
+            index, role = seg + 1, "vertex"
+            self._invalidate_geometry()
+        self._grip_drag = (handle, index, role, snap)
         # Hide the base-scene copy ONCE (a full-scene re-upload); from here
         # the live entity rides the cheap 1-entity overlay each frame.
         self.window.viewport.hide_handles([handle])
