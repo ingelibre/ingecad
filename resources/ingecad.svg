@@ -38,8 +38,8 @@
   <!-- origin joint -->
   <rect x="29" y="89" width="10" height="10" rx="2" fill="#e8eaed"/>
 
-  <!-- the "i": bright stem, AutoSnap-yellow square dot -->
-  <rect x="66" y="49" width="12" height="37" rx="6" fill="#eceff4"/>
+  <!-- the "i": sky-blue stem, AutoSnap-yellow square dot -->
+  <rect x="66" y="49" width="12" height="37" rx="6" fill="#4dabf7"/>
   <rect x="65" y="29" width="14" height="14" rx="2.5" fill="#ffd23f"/>
 
   <!-- subtle tile edge -->
