@@ -1,0 +1,7 @@
+Subject: bits_test: r2000 TV length carries no trailing NUL
+
+Companion to the bit_write_TV fix (TV-ZERO is r2004+, not r2000). The test
+asserted the old r2000 behaviour (length incl. NUL). Split it: r2000 "GNU"
+lands at @4.2 (BS(3)+3), r2004 at @5.2 (BS(4)+3). All 254 unit tests pass.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>

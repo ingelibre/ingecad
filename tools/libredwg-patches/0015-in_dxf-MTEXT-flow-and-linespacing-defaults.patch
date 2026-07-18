@@ -1,0 +1,31 @@
+Subject: in_dxf: apply MTEXT flow/line-spacing defaults the DXF omits
+
+MTEXT flow direction and line spacing live only in the DWG; ezdxf omits
+them so LibreDWG shipped the calloc zeros — flow_dir 0, line-spacing style
+0, factor 0 — which AutoCAD/BricsCAD mis-lay-out. Seed ODA's defaults
+(flow_dir 1, style 1, factor 1.0) in the per-entity "set defaults not in
+dxf" block, so any 72/73/44 pairs the DXF carries still overwrite them.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+--- a/src/in_dxf.c
++++ b/src/in_dxf.c
+@@ -9903,6 +9903,26 @@ new_object (char *restrict name, char *restrict dxfname,
+         pt.z = 0.0;
+       }
++    // MTEXT flow direction and line spacing live only in the DWG, not the
++    // DXF; ezdxf omits them so the calloc zeros ship, and flow_dir 0 /
++    // line-spacing style 0 / factor 0 make AutoCAD/BricsCAD mis-lay-out the
++    // text. ODA writes flow_dir 1 (by style), lspace style 1, factor 1.0.
++    if (obj->fixedtype == DWG_TYPE_MTEXT)
++      {
++        Dwg_Entity_MTEXT *o = obj->tio.entity->tio.MTEXT;
++        if (o->flow_dir == 0)
++          { o->flow_dir = 1; LOG_TRACE ("MTEXT.flow_dir = 1 [default]\n"); }
++        if (o->linespace_style == 0)
++          { o->linespace_style = 1;
++            LOG_TRACE ("MTEXT.linespace_style = 1 [default]\n"); }
++        if (o->linespace_factor == 0.0)
++          { o->linespace_factor = 1.0;
++            LOG_TRACE ("MTEXT.linespace_factor = 1.0 [default]\n"); }
++      }
