@@ -1,0 +1,33 @@
+Subject: in_dxf: don't strlen() the whole remaining buffer per character
+
+dxf_read_string's per-character loop probes each byte for a "\M+n" MIF
+escape with memBEGINc, whose implementation calls strlen(s1). Here s
+points into the raw file buffer, so every character of every string
+value scanned the entire remaining file: DXF import cost O(file_size^2).
+A 19 MB DXF (a real pavement-details plan exported by ezdxf) needed
+minutes of pure strlen before this and converts in seconds after.
+
+Compare the three escape bytes directly with an explicit bounds check
+against dat->size — faster and safer than relying on a terminating NUL
+in a memory-mapped buffer.
+
+Found by IngeCAD's round-trip fidelity harness over a corpus of 1385
+real-world DWGs (same hunt as #1311-#1315).
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+--- a/src/in_dxf.c
++++ b/src/in_dxf.c
+@@ -658,7 +658,11 @@ dxf_read_string (Bit_Chain *dat, char **string)
+            dat->byte++)
+         {
+           char *s = (char *)&dat->chain[dat->byte];
+-          if (memBEGINc (s, "\\M+") && s[3] >= '1' && s[3] <= '5')
++          // Compare the 3 bytes directly: memBEGINc would strlen() the whole
++          // remaining multi-MB buffer for EVERY character of EVERY string,
++          // making DXF import quadratic in file size (a 19 MB DXF "hangs").
++          if (dat->byte + 3 < dat->size && s[0] == '\\' && s[1] == 'M'
++              && s[2] == '+' && s[3] >= '1' && s[3] <= '5')
+             {
+               const Dwg_Codepage mif_tbl[]
+                   = { CP_UNDEFINED, CP_ANSI_932,  CP_ANSI_950,

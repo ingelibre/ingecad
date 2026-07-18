@@ -1,0 +1,28 @@
+Subject: in_dxf: BLOCKROTATEACTION's third connection point is 96/305
+
+The DXF writer emits conn_pts groups as dxf + vcount with vcount starting
+at the field offset (dwg2.spec BlockAction_ConnectionPts), so a rotation
+action's conn_pts[2] goes out as 96/305 — matching AutoCAD's own DXF. The
+reader, however, expected bl_code + i - first = 94/303, so LibreDWG could
+not re-read its own output (nor AutoCAD's): every real drawing carrying a
+dynamic block with a rotation action failed with "Unexpected DXF code 96,
+expected 94". Align the reader call with the writer.
+
+Found by IngeCAD's round-trip fidelity harness (same hunt as #1311-#1315).
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+--- a/src/in_dxf.c
++++ b/src/in_dxf.c
+@@ -8472,7 +8472,10 @@ add_AcDbBlockRotationAction (Dwg_Object *restrict obj, Bit_Chain *restrict dat)
+ {
+   Dwg_Data *dwg = obj->parent;
+   Dxf_Pair *pair;
+-  pair = add_BlockAction_ConnectionPts (obj, dat, 2, 1, 94, 303);
++  // conn_pts[2] of a rotation action is written as group 96/305 (the DXF
++  // writer emits dxf + vcount with vcount starting at 2, matching AutoCAD);
++  // expecting 94/303 here rejected every real file carrying one.
++  pair = add_BlockAction_ConnectionPts (obj, dat, 2, 1, 96, 305);
+   if (pair)
+     return pair;
+   return NULL;

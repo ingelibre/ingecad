@@ -1,0 +1,41 @@
+Subject: dwg: a duplicate handleref must not disable the ordered-ref index
+
+ordered_ref_add treats a duplicate (code, absref) pair as "should never
+happen" and reacts by freeing the whole bsearch index, demoting every
+subsequent ordered_ref_find to a linear scan over all refs. But
+duplicates are reachable through a normal path: dwg_add_handleref only
+dedupes via ordered_ref_find on some branches (e.g. obj == NULL), yet
+unconditionally calls ordered_ref_add at the end. One duplicate early in
+a big DXF import turns the whole run quadratic — together with the
+in_dxf strlen fix this took a real 19 MB DXF from >5 minutes (killed) to
+1.8 s, with byte-identical DWG output.
+
+Refs sharing a key are interchangeable by design (the dedupe branch
+returns whichever is indexed), so simply skip inserting the duplicate
+and keep the index alive.
+
+Found by IngeCAD's round-trip fidelity harness over a corpus of 1385
+real-world DWGs (same hunt as #1311-#1315).
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+--- a/src/dwg.c
++++ b/src/dwg.c
+@@ -4049,11 +4049,14 @@ ordered_ref_add (Dwg_Data *dwg, Dwg_Object_Ref *ref)
+     }
+   else
+     {
+-      // There are duplicates, disable bsearch
+-      // It should never happen !
+-      free (dwg->object_ordered_ref);
+-      dwg->object_ordered_ref = NULL;
+-      dwg->num_object_ordered_refs = -1;
++      // Duplicate (code, absref) pair. This DOES happen: dwg_add_handleref
++      // only dedupes via ordered_ref_find on some paths (e.g. obj == NULL),
++      // yet always calls ordered_ref_add. Disabling the index here demoted
++      // every later lookup to a linear scan over all refs — quadratic DXF
++      // import (minutes for a 19 MB file). Refs with the same key are
++      // interchangeable by design (the dedupe branch returns any of them),
++      // so just skip the duplicate and keep the index alive.
+     }
+ }

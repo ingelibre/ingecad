@@ -1,0 +1,31 @@
+Subject: in_dxf: don't abort the whole file on DIMENSION arc-point 16/26/36
+
+Group 16/26/36 (the dimension-arc definition point) is legitimate DXF on
+angular dimensions, but subtypes whose DWG struct has no such field —
+DIMENSION_ANG3PT as written by AutoCAD and ezdxf — fell through to the
+importable-class check and hit `goto invalid_dxf`, killing the entire
+conversion of any drawing that carries one 3-point angular dimension
+(seen in a real municipal base plan). Skip the pair with a warning
+instead.
+
+Found by IngeCAD's round-trip fidelity harness (same hunt as #1311-#1315).
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+--- a/src/in_dxf.c
++++ b/src/in_dxf.c
+@@ -13195,6 +13195,17 @@ new_object (char *restrict name, char *restrict dxfname,
++              // group 16,26,36 (dimension-arc definition point) is valid
++              // DXF on angular dimensions; subtypes whose DWG struct has no
++              // such field (DIMENSION_ANG3PT as written by AutoCAD/ezdxf)
++              // must skip it, not abort the whole file.
++              else if (obj->supertype == DWG_SUPERTYPE_ENTITY
++                       && memBEGINc (obj->name, "DIMENSION")
++                       && (pair->code == 16 || pair->code == 26
++                           || pair->code == 36))
++                {
++                  LOG_WARN ("Ignored DXF code %d for %s", pair->code, name);
++                }
+               // accept wrong colors
+               else if (is_dxf_class_importable (obj->name)
+                        && (pair->code < 60 || pair->code > 68))
