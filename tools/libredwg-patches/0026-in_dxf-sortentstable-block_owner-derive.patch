@@ -1,0 +1,20 @@
+Subject: in_dxf: derive SORTENTSTABLE.block_owner from the ownership chain
+
+An empty SORTENTSTABLE carries no explicit block_owner in DXF. The importer
+then misread the table's object owner (its extension DICTIONARY) as
+block_owner, so block_owner pointed at a DICTIONARY instead of the
+BLOCK_HEADER whose entities the table sorts. AutoCAD/ODA flag the owning
+block ("Invalid input <AcDbBlockTableRecord>"). block_owner is the owner of
+the extension dictionary that owns the table, so derive it (owner->owner) in
+a SORTENTSTABLE postprocess; a non-empty table whose explicit block_owner
+already differs from its owner is trusted as-is. 254 unit tests green.
+
+NOTE: this corrects block_owner fidelity but does NOT by itself clear the
+non-fatal "<AcDbBlockEnd> needs recovery" recovery warning on casa bueno's
+_ARCHTICK block, which has a deeper, not-minimally-reproducible cause.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+--- a/src/in_dxf.c
++++ b/src/in_dxf.c
+@@ add dxf_postprocess_SORTENTSTABLE + dispatch in new_object tail
