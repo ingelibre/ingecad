@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._build_status_bar()
         self._build_command_line()
+        self._build_sidebar()
         self.viewport.cursorMoved.connect(self._on_cursor_moved)
 
         # Frameless windows have no system resize borders; an app-wide filter
@@ -289,21 +290,29 @@ class MainWindow(QMainWindow):
             self._layers_panel.refresh()
         self.setWindowTitle(f"IngeCAD — {tr('Untitled')}")
 
-    def toggle_layers_panel(self) -> None:
-        if self._layers_dock is None:
-            from views.layers_panel import LayersPanel
+    def _build_sidebar(self) -> None:
+        """Persistent right sidebar with the layers panel (always docked)."""
+        from views.layers_panel import LayersPanel
 
-            self._layers_panel = LayersPanel(self)
-            self._layers_panel.changed.connect(self.viewport.update)
-            dock = QDockWidget(tr("Layers"), self)
-            dock.setObjectName("layers_dock")
-            dock.setWidget(self._layers_panel)
-            dock.setMinimumWidth(260)
-            self.addDockWidget(Qt.RightDockWidgetArea, dock)
-            self._layers_dock = dock
+        self._layers_panel = LayersPanel(self)
+        self._layers_panel.changed.connect(self.viewport.update)
+        dock = QDockWidget(self)
+        dock.setObjectName("layers_dock")
+        dock.setTitleBarWidget(QWidget(dock))   # no dock chrome: panel owns it
+        dock.setFeatures(QDockWidget.NoDockWidgetFeatures)  # fixed, always there
+        dock.setWidget(self._layers_panel)
+        dock.setMinimumWidth(250)
+        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.resizeDocks([dock], [280], Qt.Horizontal)
+        self._layers_dock = dock
+
+    def toggle_layers_panel(self) -> None:
+        # LA / Format>Layers expands the sidebar if it was collapsed.
+        if self._layers_panel is None:
+            return
+        if self._layers_panel._collapsed:
+            self._layers_panel.expand()
         else:
-            self._layers_dock.setVisible(not self._layers_dock.isVisible())
-        if self._layers_dock.isVisible():
             self._layers_panel.refresh()
 
     def regen_in_memory(self) -> None:

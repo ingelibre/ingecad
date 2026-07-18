@@ -15,9 +15,11 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -48,12 +50,54 @@ def nearest_aci(color: QColor) -> int:
     return best
 
 
+COLLAPSED_WIDTH = 22
+
+_PANEL_STYLE = """
+LayersPanel { background: #26262a; }
+LayersPanel QTableWidget { font-size: 11px; background: #1e1e22;
+    alternate-background-color: #232327; }
+LayersPanel QHeaderView::section { background: #2d2d31; padding: 1px;
+    border: none; font-size: 11px; }
+LayersPanel QToolButton { border: none; color: #c8c8c8; padding: 2px 5px;
+    font-size: 11px; }
+LayersPanel QToolButton:hover { background: #3a3940; }
+LayersPanel #sideLabel { color: #b0b0b0; font-weight: bold; }
+"""
+
+
 class LayersPanel(QWidget):
     changed = Signal()   # a layer edit landed: repaint the viewport
 
     def __init__(self, window) -> None:
         super().__init__(window)
         self.window = window
+        self.setObjectName("LayersPanel")
+        self.setStyleSheet(_PANEL_STYLE)
+        self._collapsed = False
+
+        # -- collapsed strip: a single vertical expand button ------------------
+        self._strip = QToolButton(self)
+        self._strip.setObjectName("sideLabel")
+        # Vertical stack of characters fits the narrow collapsed strip.
+        self._strip.setText("‹\n" + "\n".join(tr("Layers")))
+        self._strip.setToolTip(tr("Expand"))
+        self._strip.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._strip.clicked.connect(self.expand)
+        self._strip.setVisible(False)
+        self._strip.setFixedWidth(COLLAPSED_WIDTH)
+
+        # -- header bar: title + collapse button -------------------------------
+        title = QLabel(tr("Layers"), self)
+        title.setStyleSheet("font-weight: bold; color: #c8c8c8;")
+        self._collapse_btn = QToolButton(self)
+        self._collapse_btn.setText("›")
+        self._collapse_btn.setToolTip(tr("Collapse"))
+        self._collapse_btn.clicked.connect(self.collapse)
+        header_bar = QHBoxLayout()
+        header_bar.setContentsMargins(4, 2, 2, 2)
+        header_bar.addWidget(title)
+        header_bar.addStretch()
+        header_bar.addWidget(self._collapse_btn)
 
         # Columns: Cur, Name, On, Freeze, Lock, Color, Linetype, Lineweight
         self.table = QTableWidget(0, 8, self)
@@ -70,38 +114,74 @@ class LayersPanel(QWidget):
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setDefaultSectionSize(22)  # compact rows
+        self.table.verticalHeader().setDefaultSectionSize(20)  # compact rows
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(1, QHeaderView.Stretch)    # Name takes room
         for col in (0, 2, 3, 4, 5, 6, 7):
             header.setSectionResizeMode(col, QHeaderView.Fixed)
-        for col, w in ((0, 26), (2, 32), (3, 32), (4, 32), (5, 44),
-                       (6, 96), (7, 76)):
+        for col, w in ((0, 22), (2, 26), (3, 26), (4, 26), (5, 40),
+                       (6, 84), (7, 68)):
             self.table.setColumnWidth(col, w)
 
         self.table.cellDoubleClicked.connect(self._on_double_click)
         self.table.cellChanged.connect(self._on_cell_changed)
         self.table.cellClicked.connect(self._on_cell_clicked)
 
-        new_btn = QPushButton(tr("New"), self)
-        new_btn.clicked.connect(self._new_layer)
-        del_btn = QPushButton(tr("Delete"), self)
-        del_btn.clicked.connect(self._delete_layer)
-        cur_btn = QPushButton(tr("Set current"), self)
-        cur_btn.clicked.connect(self._set_current_selected)
-
+        # Compact icon-buttons instead of wide text buttons.
+        new_btn = self._tool_button("＋", tr("New layer"), self._new_layer)
+        del_btn = self._tool_button("🗑", tr("Delete layer"), self._delete_layer)
+        cur_btn = self._tool_button("✓", tr("Set current"),
+                                    self._set_current_selected)
         buttons = QHBoxLayout()
+        buttons.setContentsMargins(2, 0, 2, 0)
+        buttons.setSpacing(1)
         for b in (new_btn, del_btn, cur_btn):
             buttons.addWidget(b)
         buttons.addStretch()
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.addLayout(buttons)
-        layout.addWidget(self.table)
+        self._content = QWidget(self)
+        content_layout = QVBoxLayout(self._content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(1)
+        content_layout.addLayout(header_bar)
+        content_layout.addLayout(buttons)
+        content_layout.addWidget(self.table)
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._strip)
+        outer.addWidget(self._content)
 
         self._loading = False
+        self.refresh()
+
+    def _tool_button(self, text, tip, slot) -> QToolButton:
+        btn = QToolButton(self)
+        btn.setText(text)
+        btn.setToolTip(tip)
+        btn.clicked.connect(slot)
+        return btn
+
+    # -- collapse / expand ----------------------------------------------------
+    def collapse(self) -> None:
+        self._collapsed = True
+        self._content.setVisible(False)
+        self._strip.setVisible(True)
+        dock = self.parentWidget()
+        if dock is not None:
+            dock.setFixedWidth(COLLAPSED_WIDTH)
+
+    def expand(self) -> None:
+        self._collapsed = False
+        self._strip.setVisible(False)
+        self._content.setVisible(True)
+        dock = self.parentWidget()
+        if dock is not None:
+            dock.setMinimumWidth(250)
+            dock.setMaximumWidth(16777215)
+            dock.resize(280, dock.height())
         self.refresh()
 
     @staticmethod
