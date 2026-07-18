@@ -22,13 +22,15 @@ from core.snap import SnapEngine, SnapHit
 from render.backend import _flatten_distance, build_scene_for_entities
 from tools.base import Tool, ToolContext
 from tools.blocks import BLOCK_TOOL_CLASSES
+from tools.dimension import DIM_TOOL_CLASSES
 from tools.draw import TOOL_CLASSES
 from tools.edit import EDIT_TOOL_CLASSES
 
 SNAP_PX = 12.0   # aperture in logical pixels
 PICK_PX = 8.0    # pick box half-size in logical pixels
 
-ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES}
+ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES,
+                    **DIM_TOOL_CLASSES}
 
 
 class ToolController(QObject):
@@ -302,7 +304,11 @@ class ToolController(QObject):
                 h for h in self.selection
                 if (e := self.index.entity(h)) is not None and e.is_alive
             }
-        if isinstance(command, actions.AddEntityCommand):
+        if isinstance(command, actions.AddDimensionCommand):
+            # A dimension renders into an anonymous block; the overlay can't
+            # show that cheaply, so regen now (creating one dim is not hot).
+            self.window.regen_in_memory()
+        elif isinstance(command, actions.AddEntityCommand):
             self._refresh_overlay()
         else:
             # hide the OLD geometry instantly (surgical, no regen) and show

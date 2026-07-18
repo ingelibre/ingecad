@@ -311,12 +311,10 @@ class StylesPanel(QWidget):
             self._make_current(name)
             self._rebold(name)
             self._start_tool("TEXT")
-        else:   # dimension drawing is v0.2; set current for now
+        else:   # dimension: set it current, then start DIMLINEAR
             self._make_current(name)
             self._rebold(name)
-            self.window.command_line.echo(
-                tr("Dimension style '{n}' is current "
-                   "(creating dimensions arrives in v0.2).", n=name))
+            self._start_tool("DIMLINEAR")
         self.changed.emit()
 
     def _start_tool(self, command: str) -> None:

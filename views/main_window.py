@@ -254,6 +254,11 @@ class MainWindow(QMainWindow):
 
         # -- Dimension --------------------------------------------------------
         dim_menu = menu_bar.addMenu(tr("Dimension"))
+        cmd_item(dim_menu, tr("Linear"), "DIMLINEAR", icon=False)
+        cmd_item(dim_menu, tr("Aligned"), "DIMALIGNED", icon=False)
+        cmd_item(dim_menu, tr("Radius"), "DIMRADIUS", icon=False)
+        cmd_item(dim_menu, tr("Diameter"), "DIMDIAMETER", icon=False)
+        dim_menu.addSeparator()
         cmd_item(dim_menu, tr("Area"), "AREA", icon=False)
 
         # -- Modify -----------------------------------------------------------
@@ -664,7 +669,8 @@ class MainWindow(QMainWindow):
                      "ELLIPSE", "POINT", "TEXT", "MTEXT",
                      "ERASE", "MOVE", "COPY", "ROTATE", "SCALE", "MIRROR",
                      "OFFSET", "TRIM", "EXTEND", "FILLET",
-                     "BLOCK", "INSERT", "EXPLODE", "HATCH"):
+                     "BLOCK", "INSERT", "EXPLODE", "HATCH",
+                     "DIMLINEAR", "DIMALIGNED", "DIMRADIUS", "DIMDIAMETER"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
         # In-scope commands that land in later phases: answer honestly.
         for name, phase in (

@@ -504,6 +504,99 @@ def add_hatch(boundaries, pattern="SOLID", scale=1.0, angle=0.0,
     return AddEntityCommand("HATCH", factory)
 
 
+# -- dimensions (create) -------------------------------------------------------
+
+class AddDimensionCommand(Command):
+    """Create a dimension: the factory builds it, ``render()`` draws the
+    graphics into an anonymous *D block. Undo removes the dimension and that
+    block; the current dimension style ($DIMSTYLE) is used at render time.
+    """
+
+    name = "DIMENSION"
+
+    def __init__(self, factory) -> None:
+        self._factory = factory
+        self.dim = None
+        self._block_name = None
+
+    def do(self, document) -> None:
+        override = self._factory(document.modelspace(), document)
+        override.render()
+        self.dim = override.dimension
+        self._block_name = self.dim.dxf.get("geometry", None)
+        current = document.doc.header.get("$CLAYER", "0")
+        if current in document.doc.layers:
+            self.dim.dxf.layer = current
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        msp = document.modelspace()
+        if self.dim is not None and self.dim.is_alive:
+            msp.delete_entity(self.dim)
+        if self._block_name and self._block_name in document.doc.blocks:
+            try:
+                document.doc.blocks.delete_block(self._block_name, safe=False)
+            except Exception:
+                pass
+        self.dim = None
+        document.dirty = True
+
+
+def _current_dimstyle(document) -> str:
+    name = document.doc.header.get("$DIMSTYLE", "Standard")
+    return name if name in document.doc.dimstyles else "Standard"
+
+
+def dim_linear(p1, p2, location) -> AddDimensionCommand:
+    """DIMLINEAR: horizontal or vertical, chosen by the dimension-line pick."""
+    mid = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+    horizontal = abs(location[1] - mid[1]) >= abs(location[0] - mid[0])
+    angle = 0.0 if horizontal else 90.0
+
+    def factory(msp, document):
+        return msp.add_linear_dim(
+            base=(location[0], location[1]),
+            p1=(p1[0], p1[1]), p2=(p2[0], p2[1]),
+            angle=angle, dimstyle=_current_dimstyle(document))
+    return AddDimensionCommand(factory)
+
+
+def dim_aligned(p1, p2, location) -> AddDimensionCommand:
+    """DIMALIGNED: dimension parallel to p1->p2, offset to the picked side."""
+    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+    length = math.hypot(dx, dy) or 1.0
+    nx, ny = -dy / length, dx / length      # unit normal
+    distance = (location[0] - p1[0]) * nx + (location[1] - p1[1]) * ny
+
+    def factory(msp, document):
+        return msp.add_aligned_dim(
+            p1=(p1[0], p1[1]), p2=(p2[0], p2[1]),
+            distance=distance, dimstyle=_current_dimstyle(document))
+    return AddDimensionCommand(factory)
+
+
+def dim_radius(center, radius: float, location) -> AddDimensionCommand:
+    angle = math.degrees(math.atan2(location[1] - center[1],
+                                    location[0] - center[0]))
+
+    def factory(msp, document):
+        return msp.add_radius_dim(
+            center=(center[0], center[1]), radius=radius, angle=angle,
+            dimstyle=_current_dimstyle(document))
+    return AddDimensionCommand(factory)
+
+
+def dim_diameter(center, radius: float, location) -> AddDimensionCommand:
+    angle = math.degrees(math.atan2(location[1] - center[1],
+                                    location[0] - center[0]))
+
+    def factory(msp, document):
+        return msp.add_diameter_dim(
+            center=(center[0], center[1]), radius=radius, angle=angle,
+            dimstyle=_current_dimstyle(document))
+    return AddDimensionCommand(factory)
+
+
 def move_entities(entities, dx: float, dy: float) -> TransformCommand:
     from ezdxf.math import Matrix44
 
