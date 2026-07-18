@@ -55,11 +55,10 @@ def test_dxf_dwg_dxf_roundtrip(tmp_path):
     assert circles[0].dxf.radius == pytest.approx(12.5)
 
 
-def test_empty_salvage_without_oda_raises_actionable_error(tmp_path, monkeypatch):
+def test_empty_salvage_raises_actionable_error(tmp_path, monkeypatch):
     # Real bench case (BASE COTAHUASI.dwg): LibreDWG emits broken DXF where
-    # recover salvages a big entitydb but modelspace comes out empty. Without
-    # ODA installed the user must get an actionable message, not a blank
-    # drawing.
+    # recover salvages a big entitydb but modelspace comes out empty. The user
+    # must get an actionable message, not a blank drawing.
     doc = ezdxf.new("R2018")
     block = doc.blocks.new("ORPHANED")
     for i in range(150):
@@ -68,8 +67,7 @@ def test_empty_salvage_without_oda_raises_actionable_error(tmp_path, monkeypatch
     doc.saveas(fake_dxf)
 
     monkeypatch.setattr(dwg_bridge, "dwg_to_dxf", lambda p: fake_dxf)
-    monkeypatch.setattr(dwg_bridge, "find_oda", lambda: None)
-    with pytest.raises(DwgBridgeError, match="ODA File Converter"):
+    with pytest.raises(DwgBridgeError, match="could not fully convert"):
         load_dwg(tmp_path / "colega.dwg")
 
 
@@ -87,7 +85,6 @@ def test_paperspace_only_sheet_is_not_rejected(tmp_path, monkeypatch):
     doc.saveas(fake_dxf)
 
     monkeypatch.setattr(dwg_bridge, "dwg_to_dxf", lambda p: fake_dxf)
-    monkeypatch.setattr(dwg_bridge, "find_oda", lambda: None)
     document = load_dwg(tmp_path / "lamina.dwg")
     assert len(document.modelspace()) == 0
     assert any(len(lay) for lay in document.doc.layouts if lay.name != "Model")

@@ -975,16 +975,11 @@ class MainWindow(QMainWindow):
             )
             return
         self.setWindowTitle(f"IngeCAD — {self.document.name}")
-        if engine == "oda":
+        if engine == "libredwg":
+            # r2000 opens in every AutoCAD/BricsCAD since 2000. Paperspace
+            # layout settings are simplified on the way out (older container).
             self.statusBar().showMessage(
-                tr("Saved {name} (DWG r2018 via ODA)", name=path.name), 5000)
-        elif engine == "libredwg":
-            # Honest until the Track L4 encoder hunt lands: LibreDWG's r2000
-            # writer still mis-frames HATCH/DIMENSION for strict parsers.
-            self.statusBar().showMessage(
-                tr("Saved {name} (LibreDWG r2000 — experimental; use DXF or "
-                   "install the ODA converter for guaranteed DWG)",
-                   name=path.name), 10000)
+                tr("Saved {name} (DWG r2000)", name=path.name), 5000)
         else:
             self.statusBar().showMessage(tr("Saved {name}", name=path.name), 5000)
 

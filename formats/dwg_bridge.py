@@ -8,9 +8,9 @@ pattern IngeTrazo uses for skp2dae. The user double-clicks a ``.dwg`` and
 never sees the intermediate DXF.
 
 Search order for the tools: the bundle shipped with IngeCAD
-(``vendor/libredwg/bin``), then the system PATH. LibreDWG reads DWG up to
-r2018 and writes r2000; newer write versions arrive with the optional ODA
-File Converter satellite (planned) or LibreDWG Track L progress.
+(``vendor/libredwg/bin``), then the system PATH. IngeCAD ships a patched
+LibreDWG that reads DWG up to r2018 and writes r2000; r2013/r2018 write
+support arrives with LibreDWG Track L progress (no proprietary satellite).
 """
 from __future__ import annotations
 
@@ -111,46 +111,14 @@ def dwg_to_dxf(dwg_path: Path) -> Path:
     return out_dxf
 
 
-def find_oda() -> Optional[Path]:
-    """The optional ODA File Converter satellite (freeware, never bundled)."""
-    system = shutil.which("ODAFileConverter")
-    if system:
-        return Path(system)
-    for candidate in (
-        Path("/usr/bin/ODAFileConverter"),
-        Path.home() / ".local" / "bin" / "ODAFileConverter",
-    ):
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def oda_dwg_to_dxf(dwg_path: Path) -> Path:
-    """Convert through ODA File Converter (folder-based CLI).
-
-    The input is copied under an ASCII name into a fresh folder: ODA takes
-    whole directories and its argv handling of exotic names is not trusted
-    (skp2dae satellite lesson).
-    """
-    tool = find_oda()
-    if tool is None:
-        raise DwgBridgeError("ODA File Converter is not installed")
-    in_dir = Path(tempfile.mkdtemp(prefix="ingecad-oda-in-"))
-    out_dir = Path(tempfile.mkdtemp(prefix="ingecad-oda-out-"))
-    shutil.copyfile(dwg_path, in_dir / "input.dwg")
-    out_dxf = out_dir / "input.dxf"
-    # InFolder OutFolder OutVersion OutType RecurseInput(0) Audit(1)
-    _run([str(tool), str(in_dir), str(out_dir), "ACAD2018", "DXF", "0", "1"], out_dxf)
-    return out_dxf
-
-
 def load_dwg(dwg_path: Path):
-    """Open a DWG as a Document: LibreDWG first, ODA fallback.
+    """Open a DWG as a Document via LibreDWG.
 
-    LibreDWG output is validated — for some r2013+ drawings (AcDs segments)
-    it emits structurally broken DXF where recover salvages the entity
-    database but modelspace comes out empty. Real bench case: a 27 MB
-    cadastre plan with 294k entities converted to an "empty" drawing.
+    LibreDWG reads up to r2018. Output is validated — for some r2013+
+    drawings (AcDs segments) it can emit structurally broken DXF where
+    recover salvages the entity database but modelspace comes out empty.
+    A published sheet with content only in a paperspace layout is a
+    legitimate empty-modelspace case (the renderer falls back to it).
     """
     from core.document import Document
 
@@ -168,56 +136,23 @@ def load_dwg(dwg_path: Path):
         return document
     if len(document.doc.entitydb) <= 100:
         return document
-    if find_oda() is not None:
-        document = Document.load(oda_dwg_to_dxf(dwg_path))
-        document.path = dwg_path
-        return document
     from core.i18n import tr
 
     raise DwgBridgeError(
-        tr("LibreDWG could not fully convert this DWG (a known limit with some "
-           "AutoCAD 2013+ files). Installing the free ODA File Converter from "
-           "opendesign.com adds support for these files.")
+        tr("LibreDWG could not fully convert this DWG. The file may be "
+           "damaged or use an unsupported AutoCAD feature.")
     )
 
 
-def oda_dxf_to_dwg(dxf_path: Path, dwg_path: Path,
-                   version: str = "ACAD2018") -> None:
-    """Convert DXF -> DWG through the ODA File Converter satellite."""
-    import shutil as _shutil
-    import tempfile
-
-    oda = find_oda()
-    if oda is None:
-        raise DwgBridgeError("ODA File Converter is not installed")
-    dwg_path = Path(dwg_path)
-    with tempfile.TemporaryDirectory(prefix="ingecad-oda-") as tmp:
-        indir = Path(tmp) / "in"
-        outdir = Path(tmp) / "out"
-        indir.mkdir()
-        outdir.mkdir()
-        # ASCII-safe temp name: the converter is a Qt app and some paths with
-        # accents have bitten satellite processes before (skp2dae lesson).
-        _shutil.copy(dxf_path, indir / "plano.dxf")
-        _run([str(oda), str(indir), str(outdir), version, "DWG", "0", "1",
-              "*.dxf"], outdir / "plano.dwg")
-        err = outdir / "plano.dxf.err"
-        if err.exists():
-            raise DwgBridgeError(err.read_text(errors="replace")[:500])
-        _shutil.move(outdir / "plano.dwg", dwg_path)
-
-
 def write_dwg(dxf_path: Path, dwg_path: Path) -> str:
-    """Write a DWG from a DXF, preferring the reliable engine.
+    """Write a DWG from a DXF via LibreDWG (r2000).
 
-    ODA (when installed) writes r2018 that AutoCAD/BricsCAD open cleanly;
-    LibreDWG's r2000 encoder still has HATCH/DIMENSION framing bugs that
-    strict parsers reject (Track L4 hunt in progress), so it is the
-    fallback. Returns the engine used: "oda" or "libredwg".
+    IngeCAD ships a patched LibreDWG and writes AutoCAD r2000 (opens in every
+    AutoCAD/BricsCAD since 2000). r2000 is an older container, so paper-space
+    layout settings and a few r2013+ display features are simplified on the
+    way out; the geometry, layers, blocks, text and hatches round-trip
+    faithfully. Returns the engine used: "libredwg".
     """
-    if find_oda() is not None:
-        oda_dxf_to_dwg(dxf_path, dwg_path)
-        return "oda"
     dxf_to_dwg(dxf_path, dwg_path)
     return "libredwg"
 

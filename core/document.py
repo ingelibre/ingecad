@@ -110,10 +110,9 @@ class Document:
         return self.doc.modelspace()
 
     def save_as(self, path: Path) -> str:
-        """Save as DXF directly, or as DWG through the best available engine.
+        """Save as DXF directly, or as DWG via the bundled LibreDWG.
 
-        Returns the engine used: "dxf", "oda" (r2018) or "libredwg" (r2000,
-        still experimental for HATCH/DIMENSION — Track L4).
+        Returns the engine used: "dxf" or "libredwg" (r2000).
         """
         path = Path(path)
         if path.suffix.lower() == ".dwg":
