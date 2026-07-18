@@ -418,6 +418,21 @@ def _restore_entity(entity, snapshot) -> None:
         entity.set_points(snapshot.get_points("xyseb"), format="xyseb")
 
 
+def apply_in_place(history, entities, mutate) -> None:
+    """Run an in-place mutation on ``entities`` with exact snapshot undo.
+
+    For edits that ezdxf performs through many small setters (a Vec3 component,
+    text contents) a before/after tag snapshot is the simplest reversible route
+    — same mechanism the grip drag uses. Records straight onto the history so
+    the change joins the normal undo stack.
+    """
+    snap = SnapshotCommand(entities)
+    mutate()
+    snap.commit(history.document)
+    history._undo.append(snap)
+    history._redo.clear()
+
+
 class SetPropertyCommand(Command):
     """Set a DXF property (layer/color/linetype/lineweight) on entities.
 
