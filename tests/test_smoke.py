@@ -115,6 +115,19 @@ def test_typed_alias_wins_over_inline_completion(qapp):
     win.close()
 
 
+def test_pan_command_enters_hand_mode(qapp):
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    qapp.processEvents()
+    win.dispatcher.submit("p")               # P = PAN alias
+    assert win.viewport._pan_mode
+    win._on_prompt_cancelled()               # Esc exits
+    assert not win.viewport._pan_mode
+    win.close()
+
+
 def test_toolbar_buttons_start_commands(qapp):
     # Draw and Modify toolbars fire the same commands as typing them.
     from views.main_window import MainWindow

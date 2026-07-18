@@ -104,6 +104,7 @@ class Viewport(QOpenGLWidget):
         self._overlay_bufs: dict[str, tuple] = {}
         self._sel_press = None  # pending left press in selection mode
         self._grip_hover = None  # grip under the cursor, if any
+        self._pan_mode = False   # interactive PAN command (open-hand cursor)
         # Interactive tool hook (ToolController): hover/click/preview/markers.
         self.tool_delegate = None
 
@@ -112,6 +113,21 @@ class Viewport(QOpenGLWidget):
         """Adopt a packed scene; the GL upload happens on the next frame."""
         self._scene = scene
         self._scene_dirty = True
+        self.update()
+
+    # -- interactive PAN command (open/closed hand, AutoCAD-style) ------------
+    def start_pan_mode(self) -> None:
+        self._pan_mode = True
+        self._cursor = None            # hide the crosshair; show the hand
+        self.setCursor(Qt.OpenHandCursor)
+        self.update()
+
+    def stop_pan_mode(self) -> None:
+        if not self._pan_mode:
+            return
+        self._pan_mode = False
+        self._panning = False
+        self.setCursor(Qt.BlankCursor)
         self.update()
 
     def set_overlay_scene(self, scene: Optional[Scene]) -> None:
@@ -572,6 +588,15 @@ class Viewport(QOpenGLWidget):
 
     # -- input -----------------------------------------------------------------
     def mousePressEvent(self, event) -> None:
+        if self._pan_mode:
+            if event.button() == Qt.LeftButton:
+                self._panning = True   # grab: closed hand, pan follows cursor
+                self._last_pos = event.position()
+                self.setCursor(Qt.ClosedHandCursor)
+                return
+            if event.button() == Qt.RightButton:
+                self.stop_pan_mode()   # right-click ends PAN, like AutoCAD
+                return
         if self._zoom_window and event.button() == Qt.LeftButton:
             self._rubber_origin = event.position()
             if self._rubber is None:
@@ -615,6 +640,10 @@ class Viewport(QOpenGLWidget):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._pan_mode and event.button() == Qt.LeftButton:
+            self._panning = False           # release: back to open hand
+            self.setCursor(Qt.OpenHandCursor)
+            return
         if self._zoom_window and event.button() == Qt.LeftButton:
             self._zoom_window = False
             self.setCursor(Qt.BlankCursor)
@@ -655,6 +684,13 @@ class Viewport(QOpenGLWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
+        if self._pan_mode:
+            if self._panning:
+                delta = pos - self._last_pos
+                self._last_pos = pos
+                self.view.pan_pixels(delta.x(), delta.y())
+                self.update()
+            return   # open hand otherwise: no crosshair, no hover
         if self._zoom_window and self._rubber is not None and self._rubber.isVisible():
             x0, y0 = self._rubber_origin.x(), self._rubber_origin.y()
             self._rubber.setGeometry(int(min(x0, pos.x())), int(min(y0, pos.y())),

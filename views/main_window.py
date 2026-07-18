@@ -202,6 +202,7 @@ class MainWindow(QMainWindow):
         item(view_menu, tr("Zoom Extents"), self.viewport.zoom_extents)
         item(view_menu, tr("Zoom Window"),
              lambda: self._invoke_command("ZOOM"))
+        item(view_menu, tr("Pan"), lambda: self._invoke_command("PAN"))
         item(view_menu, tr("Regenerate"), self.regen_in_memory)
         view_menu.addSeparator()
         item(view_menu, tr("Layers panel"), self.toggle_layers_panel)
@@ -319,8 +320,17 @@ class MainWindow(QMainWindow):
 
     def _on_prompt_cancelled(self) -> None:
         # tools.cancel() handles both cases: active tool, or idle selection
+        if self.viewport._pan_mode:
+            self.viewport.stop_pan_mode()
         self.tools.cancel()
         self.dispatcher.cancel()
+
+    def _cmd_pan(self, *args) -> None:
+        """Interactive PAN: open hand, left-drag pans, Esc/right-click ends."""
+        self.viewport.start_pan_mode()
+        self.command_line.echo(
+            tr("Press Esc or right-click to exit pan."))
+        self.viewport.setFocus()
 
     # -- drafting mode toggles (F3/F8/F10, classic status bar) ------------------
     def _build_mode_toggles(self) -> None:
@@ -589,8 +599,7 @@ class MainWindow(QMainWindow):
     def _register_commands(self) -> None:
         d = self.dispatcher
         d.register("ZOOM", self._cmd_zoom)
-        d.register("PAN", lambda *a: self.command_line.echo(
-            tr("PAN: drag with the middle mouse button")))
+        d.register("PAN", self._cmd_pan)
         d.register("REGEN", self._cmd_regen)
         d.register("U", self._cmd_undo)
         d.register("UNDO", self._cmd_undo)
