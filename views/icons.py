@@ -92,6 +92,50 @@ def _polygon():
     return pm
 
 
+def _ellipse():
+    pm, p = _canvas()
+    p.drawEllipse(QRectF(3, 7, 18, 10))
+    p.end()
+    return pm
+
+
+def _point():
+    pm, p = _canvas()
+    p.drawLine(12, 6, 12, 18)
+    p.drawLine(6, 12, 18, 12)
+    p.setBrush(QBrush(_STROKE))
+    p.drawEllipse(QPointF(12, 12), 1.6, 1.6)
+    p.end()
+    return pm
+
+
+def _text():
+    pm, p = _canvas()
+    from PySide6.QtGui import QFont
+    f = QFont()
+    f.setPixelSize(16)
+    f.setBold(True)
+    p.setFont(f)
+    p.drawText(QRectF(0, 0, SIZE, SIZE), Qt.AlignCenter, "A")
+    p.end()
+    return pm
+
+
+def _mtext():
+    pm, p = _canvas()
+    from PySide6.QtGui import QFont
+    f = QFont()
+    f.setPixelSize(11)
+    f.setBold(True)
+    p.setFont(f)
+    p.drawText(QRectF(2, 1, SIZE, SIZE), Qt.AlignLeft | Qt.AlignVCenter, "A")
+    p.setPen(QPen(_STROKE, 1.0))
+    for y in (14, 18, 22):
+        p.drawLine(4, y, 20, y)
+    p.end()
+    return pm
+
+
 # -- modify icons --------------------------------------------------------------
 
 def _erase():
@@ -205,7 +249,8 @@ def _fillet():
 
 _PAINTERS = {
     "LINE": _line, "CIRCLE": _circle, "ARC": _arc, "PLINE": _pline,
-    "RECTANG": _rectang, "POLYGON": _polygon,
+    "RECTANG": _rectang, "POLYGON": _polygon, "ELLIPSE": _ellipse,
+    "POINT": _point, "TEXT": _text, "MTEXT": _mtext,
     "ERASE": _erase, "MOVE": _move, "COPY": _copy, "ROTATE": _rotate,
     "SCALE": _scale, "MIRROR": _mirror, "OFFSET": _offset, "TRIM": _trim,
     "EXTEND": _extend, "FILLET": _fillet,

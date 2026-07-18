@@ -220,9 +220,13 @@ class MainWindow(QMainWindow):
         draw_menu = menu_bar.addMenu(tr("Draw"))
         for label, name in ((tr("Line"), "LINE"), (tr("Polyline"), "PLINE"),
                             (tr("Circle"), "CIRCLE"), (tr("Arc"), "ARC"),
-                            (tr("Rectangle"), "RECTANG"), (tr("Polygon"), "POLYGON")):
+                            (tr("Ellipse"), "ELLIPSE"),
+                            (tr("Rectangle"), "RECTANG"), (tr("Polygon"), "POLYGON"),
+                            (tr("Point"), "POINT")):
             cmd_item(draw_menu, label, name)
         draw_menu.addSeparator()
+        cmd_item(draw_menu, tr("Text"), "TEXT")
+        cmd_item(draw_menu, tr("Multiline text"), "MTEXT")
         cmd_item(draw_menu, tr("Hatch"), "HATCH")
 
         # -- Dimension --------------------------------------------------------
@@ -380,7 +384,9 @@ class MainWindow(QMainWindow):
 
         draw = [("LINE", tr("Line")), ("PLINE", tr("Polyline")),
                 ("CIRCLE", tr("Circle")), ("ARC", tr("Arc")),
-                ("RECTANG", tr("Rectangle")), ("POLYGON", tr("Polygon"))]
+                ("ELLIPSE", tr("Ellipse")), ("RECTANG", tr("Rectangle")),
+                ("POLYGON", tr("Polygon")), ("POINT", tr("Point")),
+                ("TEXT", tr("Text")), ("MTEXT", tr("Multiline text"))]
         modify = [("ERASE", tr("Erase")), ("MOVE", tr("Move")),
                   ("COPY", tr("Copy")), ("ROTATE", tr("Rotate")),
                   ("SCALE", tr("Scale")), ("MIRROR", tr("Mirror")),
@@ -611,6 +617,7 @@ class MainWindow(QMainWindow):
         d.register("LAYER", lambda *a: self.toggle_layers_panel())
         # Phase 4 drawing + Phase 5 editing tools.
         for name in ("LINE", "CIRCLE", "ARC", "PLINE", "RECTANG", "POLYGON",
+                     "ELLIPSE", "POINT", "TEXT", "MTEXT",
                      "ERASE", "MOVE", "COPY", "ROTATE", "SCALE", "MIRROR",
                      "OFFSET", "TRIM", "EXTEND", "FILLET"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))

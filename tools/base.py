@@ -21,6 +21,9 @@ class ToolContext:
     prompt: Callable[[str], None]              # show prompt text
     echo: Callable[[str], None]                # log a message
     finish: Callable[[], None]                 # tool is done: deactivate
+    # Ask the user for a text string (TEXT/MTEXT content) — a small dialog in
+    # the GUI, a fake in tests. Returns None on cancel.
+    ask_text: Callable[[str, str], Optional[str]] = lambda prompt, default="": None
     # Editing services (selection, entity picking, edge geometry). The GUI
     # supplies the ToolController; tests supply a fake with the same duck
     # methods: pick_entity(point), edges_geometry(handles|None).

@@ -107,6 +107,7 @@ class ToolController(QObject):
             echo=self.window.command_line.echo,
             finish=self._finish,
             services=self,
+            ask_text=self._ask_text,
         )
         self.tool = ALL_TOOL_CLASSES[name](ctx)
         self.tool.start()
@@ -186,6 +187,13 @@ class ToolController(QObject):
         self.selection = set()
         self._window_anchor = None
         self.changed.emit()
+
+    def _ask_text(self, prompt: str, default: str = "") -> Optional[str]:
+        from PySide6.QtWidgets import QInputDialog
+
+        text, ok = QInputDialog.getMultiLineText(
+            self.window, prompt, prompt, default)
+        return text if ok else None
 
     def _finish(self) -> None:
         self.tool = None

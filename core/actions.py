@@ -448,3 +448,71 @@ class SetPropertyCommand(Command):
             else:
                 e.dxf.set(self.prop, old)
         document.dirty = True
+
+
+def add_ellipse(center, major_axis, ratio: float) -> AddEntityCommand:
+    """major_axis: vector from center to the major-axis endpoint. ratio =
+    minor/major in (0, 1]."""
+    return AddEntityCommand(
+        "ELLIPSE",
+        lambda msp: msp.add_ellipse((center[0], center[1]),
+                                    major_axis=(major_axis[0], major_axis[1]),
+                                    ratio=ratio))
+
+
+def ellipse_from_axis(p1, p2, other_dist: float):
+    """Axis endpoints p1,p2 + distance to the other axis -> (center, major, ratio)."""
+    center = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+    major = ((p2[0] - p1[0]) / 2.0, (p2[1] - p1[1]) / 2.0)
+    major_len = math.hypot(*major)
+    ratio = min(1.0, other_dist / major_len) if major_len > 1e-12 else 1.0
+    return center, major, ratio
+
+
+def ellipse_from_center(center, axis_end, other_dist: float):
+    """Center + major-axis endpoint + distance to the other axis."""
+    major = (axis_end[0] - center[0], axis_end[1] - center[1])
+    major_len = math.hypot(*major)
+    ratio = min(1.0, other_dist / major_len) if major_len > 1e-12 else 1.0
+    return center, major, ratio
+
+
+def add_point(pos) -> AddEntityCommand:
+    return AddEntityCommand(
+        "POINT", lambda msp: msp.add_point((pos[0], pos[1])))
+
+
+def add_text(pos, text: str, height: float, rotation: float = 0.0) -> AddEntityCommand:
+    def make(msp):
+        entity = msp.add_text(
+            text, height=height,
+            dxfattribs={"rotation": rotation})
+        entity.set_placement((pos[0], pos[1]))
+        return entity
+    return AddEntityCommand("TEXT", make)
+
+
+def add_mtext(p1, p2, text: str, char_height: float) -> AddEntityCommand:
+    width = abs(p2[0] - p1[0])
+    top_left = (min(p1[0], p2[0]), max(p1[1], p2[1]))
+
+    def make(msp):
+        m = msp.add_mtext(text, dxfattribs={"char_height": char_height,
+                                            "width": width})
+        m.set_location(top_left)
+        return m
+    return AddEntityCommand("MTEXT", make)
+
+
+def add_arc_sce(start, center, end) -> AddEntityCommand:
+    """Arc by Start, Center, End (AutoCAD's second arc method).
+
+    Radius from center->start; ccw from start angle to end angle (the end
+    point sets the direction; its distance is ignored, AutoCAD does the same).
+    """
+    radius = math.hypot(start[0] - center[0], start[1] - center[1])
+    a_start = math.degrees(math.atan2(start[1] - center[1], start[0] - center[0]))
+    a_end = math.degrees(math.atan2(end[1] - center[1], end[0] - center[0]))
+    return AddEntityCommand(
+        "ARC", lambda msp: msp.add_arc((center[0], center[1]), radius,
+                                       a_start, a_end))
