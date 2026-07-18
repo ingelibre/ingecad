@@ -1,0 +1,40 @@
+Subject: bits: the r2000 TV string length must exclude the trailing NUL
+
+bit_write_TV added 1 to the string length ("TV-ZERO") for every version
+>= R_14, but the trailing NUL in the length is an r2004+ container
+convention. In an r2000 DWG this wrote every text value one byte longer
+than AutoCAD/ODA do, shifting the entire object body by one byte — so a
+strict parser (BricsCAD/AutoCAD/Teigha) rejected the objects that follow
+a string, most visibly HATCH ("Object improperly read: <AcDbHatch>").
+
+Verified against ODA File Converter's own ACAD2000 output: with this fix
+a SOLID and an ANSI31 HATCH decode byte-identically to ODA's reference
+(0 field-position differences via dwgread -v5), where before the whole
+object was offset by one byte. LibreDWG's unit tests stay green.
+
+The reader side already only expected the terminating NUL from >= r2004
+writer apps (bit_read_TV's "only observed >=r2004 as writer app"), so
+this aligns the writer with both the reader and AutoCAD.
+
+Found by IngeCAD's DWG round-trip hunt, using ODA as a strict oracle
+(same corpus as #1311-#1315). Part of making LibreDWG's r2000 writer
+100%% AutoCAD-clean before tackling a modern (r2018) writer.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+--- a/src/bits.c
++++ b/src/bits.c
+@@ -2247,7 +2247,12 @@ bit_write_TV (Bit_Chain *restrict dat, BITCODE_TV restrict chain)
+     }
+   else
+     {
+-      if (dat->version >= R_14 && length)
++      // The trailing NUL in the TV length is an r2004+ convention: the
++      // reader side only ever observed zero-terminated strings from
++      // >= r2004 writer apps, and pre-r2004 lengths equal strlen (ODA's
++      // ACAD2000 output confirms: "SOLID" is written as 5, not 6). Writing
++      // the NUL into r2000 made every string one byte off AutoCAD's layout.
++      if (dat->version >= R_2004 && length)
+         length++; // TV-ZERO
+       bit_write_BS (dat, (BITCODE_BS)length);
+     }
