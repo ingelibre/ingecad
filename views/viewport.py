@@ -429,6 +429,7 @@ class Viewport(QOpenGLWidget):
             self._draw_grips(p)
             if self.tool_delegate.active():
                 self._draw_tool_preview(p)
+            self._draw_live_text(p)
         if self._cursor is not None and not self._panning:
             self._draw_crosshair(p, self._cursor)
         p.end()
@@ -467,6 +468,30 @@ class Viewport(QOpenGLWidget):
             else:
                 p.drawRect(sx - s, sy - s, 2 * s, 2 * s)  # square: vertices/ends
         p.setBrush(Qt.NoBrush)
+
+    def _draw_live_text(self, p: QPainter) -> None:
+        info = self.tool_delegate.live_text()
+        if info is None:
+            return
+        from PySide6.QtGui import QFont
+
+        pos, buffer, height, rotation = info
+        sx, sy = self.view.world_to_screen(pos[0], pos[1])
+        px = max(6.0, height * self.view.scale)   # world height -> pixels
+        p.save()
+        p.translate(sx, sy)
+        p.rotate(-rotation)                        # world CCW -> screen
+        font = QFont()
+        font.setPixelSize(int(px))
+        p.setFont(font)
+        p.setPen(QPen(QColor(230, 230, 230)))
+        text = buffer if buffer else ""
+        fm = p.fontMetrics()
+        p.drawText(QPointF(0, 0), text)            # baseline at the pick point
+        caret_x = fm.horizontalAdvance(text)
+        p.setPen(QPen(QColor(255, 200, 0), 1))     # blinking-less caret bar
+        p.drawLine(QPointF(caret_x + 1, -px * 0.75), QPointF(caret_x + 1, px * 0.15))
+        p.restore()
 
     def _draw_selection(self, p: QPainter) -> None:
         delegate = self.tool_delegate

@@ -188,6 +188,35 @@ class ToolController(QObject):
         self._window_anchor = None
         self.changed.emit()
 
+    # -- in-place text typing (DTEXT) -----------------------------------------
+    def text_capturing(self) -> bool:
+        return self.tool is not None and getattr(self.tool, "typing", False)
+
+    def text_char(self, ch: str) -> None:
+        if self.text_capturing():
+            self.tool.on_char(ch)
+            self.changed.emit()
+
+    def text_backspace(self) -> None:
+        if self.text_capturing():
+            self.tool.on_backspace()
+            self.changed.emit()
+
+    def text_newline(self) -> None:
+        if self.text_capturing():
+            self.tool.on_enter()
+            self.changed.emit()
+
+    def text_finish(self) -> None:
+        if self.text_capturing():
+            self.tool.finish_typing()
+            self.changed.emit()
+
+    def live_text(self):
+        tool = self.tool
+        return tool.live_text() if tool is not None and hasattr(tool, "live_text") \
+            else None
+
     def _ask_text(self, prompt: str, default: str = "") -> Optional[str]:
         from PySide6.QtWidgets import QInputDialog
 

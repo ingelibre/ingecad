@@ -254,21 +254,37 @@ class PointTool(Tool):
 
 
 class TextTool(Tool):
+    """Single-line TEXT (DTEXT): type in place on the canvas, AutoCAD-style.
+
+    After start point / height / rotation, a caret appears at the point and
+    the typed characters show live. Enter commits the line and starts a new
+    one below; clicking a new point commits and restarts there; Esc finishes,
+    keeping every completed line.
+    """
+
     default_height = 2.5   # session-sticky, like AutoCAD's last height
 
     def start(self) -> None:
         self.name = "TEXT"
         self._pos = None
         self._height = None
+        self.typing = False
+        self._buffer = ""
+        self._rotation = 0.0
         self.ctx.prompt(tr("TEXT Specify start point:"))
 
     def on_point(self, point: Point) -> None:
+        if self.typing:
+            self._commit_line()      # picking a new point restarts text there
+            self._pos = point
+            self._buffer = ""
+            return
         self._pos = point
         self.last_point = point
         self.ctx.prompt(tr("Specify height <{h}>:", h=type(self).default_height))
 
     def on_option(self, text: str) -> bool:
-        if self._pos is None:
+        if self._pos is None or self.typing:
             return False
         if self._height is None:
             try:
@@ -278,30 +294,59 @@ class TextTool(Tool):
             type(self).default_height = self._height
             self.ctx.prompt(tr("Specify rotation angle <0>:"))
             return True
-        # rotation, then ask for the text via dialog
         try:
-            rotation = float(text) if text else 0.0
+            self._rotation = float(text) if text else 0.0
         except ValueError:
             return False
-        self._finish_text(rotation)
+        self._begin_typing()
         return True
 
     def on_enter(self) -> None:
-        # Enter accepts the default at each numeric prompt.
+        if self.typing:
+            self._commit_line()      # Enter: commit and drop to a new line
+            self._pos = self._next_line_pos()
+            self._buffer = ""
+            return
         if self._pos is None:
             self.ctx.finish()
         elif self._height is None:
             self._height = type(self).default_height
             self.ctx.prompt(tr("Specify rotation angle <0>:"))
         else:
-            self._finish_text(0.0)
+            self._begin_typing()
 
-    def _finish_text(self, rotation: float) -> None:
-        content = self.ctx.ask_text(tr("Enter text:"), "")
-        if content:
-            self.ctx.execute(actions.add_text(self._pos, content,
-                                              self._height, rotation))
+    def _begin_typing(self) -> None:
+        self.typing = True
+        self._buffer = ""
+        self.ctx.prompt(tr("Enter text (Enter for new line, Esc to finish):"))
+
+    # -- live in-place typing --------------------------------------------------
+    def on_char(self, ch: str) -> None:
+        self._buffer += ch
+
+    def on_backspace(self) -> None:
+        self._buffer = self._buffer[:-1]
+
+    def finish_typing(self) -> None:
+        self._commit_line()
+        self.typing = False
         self.ctx.finish()
+
+    def live_text(self):
+        if self.typing and self._pos is not None:
+            return (self._pos, self._buffer, self._height, self._rotation)
+        return None
+
+    def _commit_line(self) -> None:
+        if self._buffer.strip():
+            self.ctx.execute(actions.add_text(
+                self._pos, self._buffer, self._height, self._rotation))
+
+    def _next_line_pos(self) -> Point:
+        # baseline drops by 1.5x the height, in the text's local -Y direction
+        d = 1.5 * self._height
+        r = math.radians(self._rotation)
+        return (self._pos[0] + d * math.sin(r), self._pos[1] - d * math.cos(r))
 
 
 class MTextTool(Tool):

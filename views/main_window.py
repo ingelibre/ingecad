@@ -126,14 +126,30 @@ class MainWindow(QMainWindow):
         return edges
 
     def keyPressEvent(self, event) -> None:
-        # Global Esc fallback: whatever widget holds focus, Esc must cancel
-        # the active tool / clear the selection (AutoCAD reflex).
+        # While DTEXT is typing in place, Esc finishes the text (keeping it),
+        # otherwise Esc cancels the active tool / clears the selection.
         if event.key() == Qt.Key_Escape:
-            self._on_prompt_cancelled()
+            if self.tools.text_capturing():
+                self.tools.text_finish()
+            else:
+                self._on_prompt_cancelled()
             return
         super().keyPressEvent(event)
 
     def eventFilter(self, obj, event) -> bool:
+        # In-place TEXT typing captures the keyboard before the command line.
+        if (event.type() == QEvent.KeyPress and self.tools.text_capturing()
+                and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)):
+            key = event.key()
+            if key in (Qt.Key_Return, Qt.Key_Enter):
+                self.tools.text_newline()
+            elif key == Qt.Key_Escape:
+                self.tools.text_finish()
+            elif key == Qt.Key_Backspace:
+                self.tools.text_backspace()
+            elif event.text() and event.text().isprintable():
+                self.tools.text_char(event.text())
+            return True
         # AutoCAD feel: typing over the canvas lands in the command line.
         if (
             event.type() == QEvent.KeyPress

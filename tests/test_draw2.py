@@ -68,13 +68,24 @@ def test_point_repeats():
     assert not h.finished          # stays active until Enter/Esc
 
 
-def test_text_tool_flow():
-    h = Harness(text_answer="PLANO")
+def _type(tool, s):
+    for ch in s:
+        tool.on_char(ch)
+
+
+def test_text_tool_in_place_typing():
+    # DTEXT: point -> height -> rotation -> type in place; Esc finishes.
+    h = Harness()
     tool = TextTool(h.ctx)
     tool.start()
     tool.on_point((5, 5))
     tool.on_option("3")            # height 3
     tool.on_option("45")           # rotation 45
+    assert tool.typing
+    _type(tool, "PLANO")
+    tool.on_backspace()            # -> PLAN
+    _type(tool, "O")               # -> PLANO
+    tool.finish_typing()           # Esc keeps the text
     t = h.msp.query("TEXT")[0]
     assert t.dxf.text == "PLANO"
     assert t.dxf.height == pytest.approx(3.0)
@@ -82,15 +93,23 @@ def test_text_tool_flow():
     assert h.finished
 
 
-def test_text_tool_enter_defaults():
-    h = Harness(text_answer="X")
+def test_text_tool_multiple_lines():
+    # Enter commits a line and drops to a new one below (separate TEXT each).
+    h = Harness()
     tool = TextTool(h.ctx)
     tool.start()
     tool.on_point((0, 0))
-    tool.on_enter()               # accept default height
-    tool.on_enter()               # accept rotation 0
-    t = h.msp.query("TEXT")[0]
-    assert t.dxf.rotation == pytest.approx(0.0)
+    tool.on_enter()               # default height
+    tool.on_enter()               # rotation 0 -> begin typing
+    _type(tool, "linea uno")
+    tool.on_enter()               # commit, new line below
+    _type(tool, "linea dos")
+    tool.finish_typing()
+    texts = sorted(t.dxf.text for t in h.msp.query("TEXT"))
+    assert texts == ["linea dos", "linea uno"]
+    # second line sits 1.5*height below the first
+    ys = sorted(t.dxf.insert.y for t in h.msp.query("TEXT"))
+    assert ys[0] == pytest.approx(-1.5 * TextTool.default_height)
 
 
 def test_mtext_tool():

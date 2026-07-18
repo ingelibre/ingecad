@@ -132,6 +132,7 @@
   "Specify height <{h}>:": "Especifique la altura <{h}>:",
   "Specify rotation angle <0>:": "Especifique el ángulo de rotación <0>:",
   "Enter text:": "Ingrese el texto:",
+  "Enter text (Enter for new line, Esc to finish):": "Escriba el texto (Enter nueva línea, Esc termina):",
   "MTEXT Specify first corner:": "TEXTOM Especifique la primera esquina:",
   "Specify opposite corner:": "Especifique la esquina opuesta:",
   "Specify end point of arc:": "Especifique el punto final del arco:",
