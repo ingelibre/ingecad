@@ -160,13 +160,12 @@ class StylesPanel(QWidget):
 
     def _fill_hatch(self) -> None:
         from tools.blocks import HatchTool
-        from views.hatch_dialog import _pattern_pixmap
-        pat = HatchTool._last.get("pattern", "SOLID")
-        item = QListWidgetItem(QIcon(_pattern_pixmap(pat)),
-                               tr("Current: {p}", p=pat))
-        item.setData(Qt.UserRole, pat)
-        self.list.addItem(item)
-        self._hatch_editor()
+        from views.hatch_dialog import HatchDialog, _pattern_pixmap
+        cur = HatchTool._last.get("pattern", "SOLID")
+        for name in HatchDialog.COMMON:
+            self._add_item(name, QIcon(_pattern_pixmap(name)), name == cur)
+        self._hatch_editor()          # angle / scale / color for the default
+        self._update_preview(cur)
 
     def _add_item(self, name: str, icon: QIcon, current: bool) -> None:
         label = f"{name}   ({tr('current')})" if current else name
@@ -186,15 +185,31 @@ class StylesPanel(QWidget):
     def _on_select(self) -> None:
         if self._loading:
             return
-        self._clear_editor()
         name = self._selected()
-        if name is None or self._cat == _HATCH:
+        if self._cat == _HATCH:
+            # In the hatch gallery, picking a pattern makes it the default.
+            if name is not None:
+                self._pick_hatch_pattern(name)
+            return
+        self._clear_editor()
+        if name is None:
             return
         if self._cat == _TEXT:
             self._text_editor(name)
         else:
             self._dim_editor(name)
         self._update_preview(name)
+
+    def _pick_hatch_pattern(self, name: str) -> None:
+        from tools.blocks import HatchTool
+        HatchTool._last["pattern"] = name
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            f = it.font()
+            f.setBold(it.data(Qt.UserRole) == name)
+            it.setFont(f)
+        self._update_preview(name)
+        self.changed.emit()
 
     def _update_preview(self, name: str) -> None:
         if self._cat == _TEXT:
@@ -204,7 +219,8 @@ class StylesPanel(QWidget):
             props = style_ops.dim_style_props(self._document, name)
             pm = prev.dim_style_pixmap(props, 240, 60)
         else:
-            return
+            from views.hatch_dialog import _pattern_pixmap
+            pm = _pattern_pixmap(name).scaled(56, 56)
         self.preview.setPixmap(pm)
         self.preview.setVisible(True)
 
@@ -307,19 +323,31 @@ class StylesPanel(QWidget):
 
     # -- hatch ----------------------------------------------------------------
     def _hatch_editor(self) -> None:
-        box = QWidget(self._editor_host)
-        v = QVBoxLayout(box)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(3)
-        note = QLabel(
-            tr("AutoCAD has no named hatch styles; set the default pattern."),
-            box)
-        note.setWordWrap(True)
-        v.addWidget(note)
-        btn = QPushButton(tr("Choose pattern..."), box)
+        from tools.blocks import HatchTool
+        from views.layers_panel import fill_color_combo
+        s = HatchTool._last
+        form = self._editor_box(tr("Hatch default"))
+        angle = self._num(s.get("angle", 0.0), -360, 360, 1)
+        angle.valueChanged.connect(lambda v: self._set_hatch("angle", v))
+        scale = self._num(s.get("scale", 1.0), 0.0001, 1e5, 4)
+        scale.valueChanged.connect(lambda v: self._set_hatch("scale", v))
+        color = QComboBox()
+        fill_color_combo(color)
+        idx = color.findData(s.get("color", 256))
+        color.setCurrentIndex(idx if idx >= 0 else 0)
+        color.activated.connect(
+            lambda i, cb=color: self._set_hatch("color", cb.itemData(i)))
+        form.addRow(tr("Angle"), angle)
+        form.addRow(tr("Scale"), scale)
+        form.addRow(tr("Color"), color)
+        btn = QPushButton(tr("All patterns..."))
         btn.clicked.connect(self._choose_hatch)
-        v.addWidget(btn)
-        self._editor_layout.addWidget(box)
+        form.addRow(btn)
+
+    def _set_hatch(self, key: str, value) -> None:
+        from tools.blocks import HatchTool
+        HatchTool._last[key] = value
+        self.changed.emit()
 
     def _choose_hatch(self) -> None:
         from tools.blocks import HatchTool

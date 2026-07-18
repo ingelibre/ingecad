@@ -32,6 +32,15 @@ def test_document_new_seeds_iso25():
     assert p["dimasz"] == pytest.approx(2.5)
 
 
+def test_document_new_seeds_dim_scale_series():
+    doc = Document.new()
+    names = st.dim_style_names(doc)
+    for scale in st.DIM_SCALES:
+        assert f"Acot-{scale}" in names
+    # each scale style carries the matching DIMSCALE
+    assert st.dim_style_props(doc, "Acot-100")["dimscale"] == pytest.approx(100)
+
+
 def test_create_and_delete_text_style():
     doc, h = _doc()
     h.execute(st.NewTextStyleCommand("Titulos", {"font": "arial.ttf",

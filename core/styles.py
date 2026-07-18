@@ -34,11 +34,26 @@ ISO25_DIM = {
 }
 
 
+# Plot scales an engineer dimensions at; each seeds a dim style whose overall
+# scale (DIMSCALE) matches, so model-space dimensions plot at the right size.
+DIM_SCALES = (50, 100, 200, 500)
+
+
 def install_default_styles(document) -> None:
-    """Seed the standard styles a fresh AutoCAD drawing carries (idempotent)."""
+    """Seed the standard styles a fresh AutoCAD drawing carries (idempotent).
+
+    A metric ISO-25 dimension style plus one per common plot scale (1:50 …
+    1:500), so the Dimension tab opens with a ready series to pick from.
+    """
     doc = document.doc
     if "ISO-25" not in doc.dimstyles:
         doc.dimstyles.new("ISO-25", dxfattribs=dict(ISO25_DIM))
+    for scale in DIM_SCALES:
+        name = f"Acot-{scale}"        # ':' is not a valid DXF table name char
+        if name not in doc.dimstyles:
+            attribs = dict(ISO25_DIM)
+            attribs["dimscale"] = float(scale)
+            doc.dimstyles.new(name, dxfattribs=attribs)
     if doc.header.get("$DIMSTYLE", "Standard") not in doc.dimstyles:
         doc.header["$DIMSTYLE"] = "ISO-25"
 
