@@ -1,0 +1,45 @@
+Subject: dwg_set_next_objhandle: don't reuse a stale next_hdl that collides
+
+A freshly ezdxf-authored drawing (IngeCAD "new drawing" + a couple of
+entities) produced a DWG that AutoCAD/BricsCAD/ODA refused to open:
+"Object of class AcDbRegAppTableRecord / AcDbBlockTableRecord can't be cast
+to AcDbEntity". Cause: the encoder adds table records after DXF import
+(the "LibreDWG"/ACAD_MLEADERVER/AcadAnnotative APPIDs for the r2018->r2000
+downconvert). dwg_set_next_objhandle honored dwg->next_hdl verbatim when
+set, WITHOUT checking the object_map, so a stale next_hdl left over from
+import landed on a handle already owned by another table record (e.g. an
+LTYPE at handle B) -> two objects share a handle -> the handle map is
+ambiguous and a table record resolves where an entity is expected.
+
+Only reuse next_hdl when it is still free (or already maps to this same
+object); otherwise fall through to a fresh handseed. Real bench (dwg2dxf
+sourced) files are unaffected; every freshly-created ezdxf drawing now
+opens. 254 unit tests green.
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com>
+
+--- a/src/dwg.c
++++ b/src/dwg.c
+@@ dwg_set_next_objhandle
+   if (dwg->next_hdl)
+     {
+-      obj->handle.value = dwg->next_hdl;
+-      dwg_set_handle_size (&obj->handle);
+-      hash_set (dwg->object_map, obj->handle.value, (uint64_t)obj->index);
+-      dwg->next_hdl = 0;
+-      return;
++      uint64_t existing = dwg->object_map
++                              ? hash_get (dwg->object_map, dwg->next_hdl)
++                              : HASH_NOT_FOUND;
++      if (existing == HASH_NOT_FOUND || existing == (uint64_t)obj->index)
++        {
++          obj->handle.value = dwg->next_hdl;
++          dwg_set_handle_size (&obj->handle);
++          if (!dwg->object_map)
++            dwg->object_map = hash_new (200);
++          hash_set (dwg->object_map, obj->handle.value, (uint64_t)obj->index);
++          dwg->next_hdl = 0;
++          return;
++        }
++      dwg->next_hdl = 0; /* stale/colliding: use a fresh handseed below */
+     }
