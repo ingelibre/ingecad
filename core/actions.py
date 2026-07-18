@@ -428,35 +428,78 @@ def explode_entities(entities) -> ExplodeCommand:
 
 # -- hatch (Phase 6) -----------------------------------------------------------
 
-def _add_boundary(hatch, entity) -> None:
-    """Add ``entity`` (closed) as a boundary path of ``hatch``."""
-    t = entity.dxftype()
+def _std_patterns():
+    """The 172 predefined ACAD/ISO hatch patterns, loaded once."""
+    global _STD_PATTERNS
+    try:
+        return _STD_PATTERNS
+    except NameError:
+        from ezdxf.tools import pattern as _pat
+        _STD_PATTERNS = _pat.load()
+        return _STD_PATTERNS
+
+
+def hatch_pattern_names() -> list:
+    """Sorted predefined pattern names (for the hatch style picker)."""
+    return sorted(_std_patterns().keys())
+
+
+def _add_boundary(hatch, item, flags: int) -> None:
+    """Add one boundary path: an ezdxf entity (closed) or a point list."""
+    if isinstance(item, (list, tuple)) and item and isinstance(item[0], (list, tuple)):
+        pts = [(p[0], p[1]) for p in item]
+        hatch.paths.add_polyline_path(pts, is_closed=True, flags=flags)
+        return
+    t = item.dxftype()
     if t == "LWPOLYLINE":
-        pts = list(entity.get_points("xyb"))   # (x, y, bulge)
-        hatch.paths.add_polyline_path(
-            [(p[0], p[1], p[2]) for p in pts], is_closed=True)
+        pts = [(p[0], p[1], p[2]) for p in item.get_points("xyb")]
+        hatch.paths.add_polyline_path(pts, is_closed=True, flags=flags)
     elif t == "CIRCLE":
-        c = entity.dxf.center
-        path = hatch.paths.add_edge_path()
-        path.add_arc((c.x, c.y), entity.dxf.radius, 0, 360)
+        c = item.dxf.center
+        path = hatch.paths.add_edge_path(flags=flags)
+        path.add_arc((c.x, c.y), item.dxf.radius, 0, 360)
     elif t == "ELLIPSE":
-        c = entity.dxf.center
-        maj = entity.dxf.major_axis
-        path = hatch.paths.add_edge_path()
-        path.add_ellipse((c.x, c.y), (maj.x, maj.y), entity.dxf.ratio, 0, 360)
+        c = item.dxf.center
+        maj = item.dxf.major_axis
+        path = hatch.paths.add_edge_path(flags=flags)
+        path.add_ellipse((c.x, c.y), (maj.x, maj.y), item.dxf.ratio, 0, 360)
+    else:
+        from core.hatch_boundary import boundary_polygon
+
+        poly = boundary_polygon(item)
+        if poly:
+            hatch.paths.add_polyline_path(poly, is_closed=True, flags=flags)
 
 
 def add_hatch(boundaries, pattern="SOLID", scale=1.0, angle=0.0,
-              color=7) -> AddEntityCommand:
-    """SOLID or a named pattern (ANSI31…), bounded by closed entities."""
+              color=256, islands=None) -> AddEntityCommand:
+    """SOLID or a predefined pattern (ANSI31…) inside closed boundaries.
+
+    ``boundaries`` and ``islands`` are ezdxf entities or point lists. Islands
+    are added as inner paths so the region is filled with holes ("Normal"
+    island style). ``color`` is an ACI; 256 = ByLayer (AutoCAD's default for a
+    new hatch).
+    """
+    from ezdxf.lldxf.const import (
+        BOUNDARY_PATH_EXTERNAL, BOUNDARY_PATH_OUTERMOST)
+
+    name = str(pattern).upper()
+    aci = 7 if color in (256, 0) else color
+
     def factory(msp):
-        h = msp.add_hatch(color=color)
-        if str(pattern).upper() == "SOLID":
-            h.set_solid_fill(color=color)
+        h = msp.add_hatch(color=aci)
+        h.dxf.hatch_style = 0   # Normal: nested islands alternate fill
+        if name == "SOLID":
+            h.set_solid_fill(color=aci)
         else:
-            h.set_pattern_fill(pattern, color=color, angle=angle, scale=scale)
+            defn = _std_patterns().get(name)
+            h.set_pattern_fill(name, color=aci, angle=angle, scale=scale,
+                               definition=defn)
         for b in boundaries:
-            _add_boundary(h, b)
+            _add_boundary(h, b, BOUNDARY_PATH_EXTERNAL)
+        for isl in (islands or ()):
+            _add_boundary(h, isl, BOUNDARY_PATH_OUTERMOST)
+        h.dxf.color = color   # keep ByLayer sentinel when requested
         return h
     return AddEntityCommand("HATCH", factory)
 

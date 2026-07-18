@@ -117,76 +117,92 @@ class ExplodeTool(Tool):
         self.ctx.finish()
 
 
-class HatchTool(Tool):
-    """HATCH: fill closed boundary objects (SOLID or a pattern/scale/angle)."""
+def _is_boundary(e) -> bool:
+    t = e.dxftype()
+    if t == "LWPOLYLINE":
+        return bool(e.closed)
+    if t == "POLYLINE":
+        return bool(getattr(e, "is_closed", False))
+    return t in ("CIRCLE", "ELLIPSE")
 
-    wants_selection = True
+
+class HatchTool(Tool):
+    """HATCH: choose a style, then pick internal points (or select objects).
+
+    Mirrors AutoCAD: the style/pattern dialog comes first (SOLID among the
+    predefined patterns), then the ``Pick internal point or [Select objects/
+    seTtings]`` prompt — click inside closed areas, Enter to apply. Islands
+    (closed loops inside the picked region) become holes.
+    """
+
+    # Last-used settings persist for the session (AutoCAD remembers them).
+    _last = {"pattern": "SOLID", "scale": 1.0, "angle": 0.0, "color": 256}
 
     def start(self) -> None:
         self.name = "HATCH"
-        self._bounds: list = []
-        self._pattern = "SOLID"
-        self._scale = 1.0
-        self._angle = 0.0
-        self._await: str | None = None
-
-    def _is_boundary(self, e) -> bool:
-        t = e.dxftype()
-        if t == "LWPOLYLINE":
-            return bool(e.closed)
-        return t in ("CIRCLE", "ELLIPSE")
-
-    def on_selection(self, entities: list) -> None:
-        bounds = [e for e in entities if self._is_boundary(e)]
-        if not bounds:
-            self.ctx.echo(tr("Select closed boundary objects (polyline/circle)."))
+        self.mode = "pick"
+        self.outer: list = []      # picked outer boundaries (point lists)
+        self.islands: list = []    # island loops (holes)
+        self.selected: list = []   # boundary entities from Select objects
+        self.settings = dict(HatchTool._last)
+        chosen = self.ctx.ask_hatch(self.settings)
+        if chosen is None:
             self.ctx.finish()
             return
-        self._bounds = bounds
-        self.ctx.prompt(
-            tr("HATCH [Pattern/Scale/Angle] <{p}, Enter to apply>:",
-               p=self._pattern))
+        self.settings = chosen
+        HatchTool._last = dict(chosen)
+        self._prompt()
+
+    def _prompt(self) -> None:
+        self.ctx.prompt(tr(
+            "Pick internal point or [Select objects/seTtings], Enter to apply:"))
 
     def on_option(self, text: str) -> bool:
         t = text.strip().upper()
-        if self._await is None and t in ("P", "PATTERN"):
-            self._await = "pattern"
-            self.ctx.prompt(tr("Enter pattern name (SOLID/ANSI31/ANSI37/…):"))
+        if t in ("S", "SELECT"):
+            self.mode = "select"
+            self.ctx.prompt(tr("Select boundary objects, Enter to apply:"))
             return True
-        if self._await is None and t in ("S", "SCALE"):
-            self._await = "scale"
-            self.ctx.prompt(tr("Enter pattern scale <{v}>:", v=self._scale))
-            return True
-        if self._await is None and t in ("A", "ANGLE"):
-            self._await = "angle"
-            self.ctx.prompt(tr("Enter pattern angle <{v}>:", v=self._angle))
-            return True
-        if self._await == "pattern":
-            self._pattern = text.strip().upper() or "SOLID"
-            self._await = None
-            self._reprompt()
-            return True
-        if self._await in ("scale", "angle"):
-            try:
-                value = float(text)
-            except ValueError:
-                return False
-            setattr(self, "_scale" if self._await == "scale" else "_angle", value)
-            self._await = None
-            self._reprompt()
+        if t in ("T", "SETTINGS", "K"):
+            chosen = self.ctx.ask_hatch(self.settings)
+            if chosen is not None:
+                self.settings = chosen
+                HatchTool._last = dict(chosen)
+            self._prompt()
             return True
         return False
 
-    def _reprompt(self) -> None:
-        self.ctx.prompt(
-            tr("HATCH [Pattern/Scale/Angle] <{p}, Enter to apply>:",
-               p=self._pattern))
+    def on_point(self, point) -> None:
+        if self.mode == "select":
+            e = self.ctx.services.pick_entity(point) if self.ctx.services else None
+            if e is not None and _is_boundary(e):
+                if e not in self.selected:
+                    self.selected.append(e)
+                    self.ctx.echo(tr("1 boundary added."))
+            else:
+                self.ctx.echo(tr("No closed boundary at that point."))
+            return
+        region = self.ctx.services.hatch_region_at(point) \
+            if self.ctx.services else None
+        if region is None:
+            self.ctx.echo(tr("No closed boundary found at that point."))
+            return
+        outer, islands = region
+        self.outer.append(outer)
+        self.islands.extend(islands)
+        self.ctx.echo(tr("Boundary found."))
 
     def on_enter(self) -> None:
-        if self._bounds:
-            self.ctx.execute(actions.add_hatch(
-                self._bounds, self._pattern, self._scale, self._angle))
-            self.ctx.echo(tr("Hatch created."))
+        boundaries = list(self.selected) + list(self.outer)
+        if not boundaries:
+            self.ctx.echo(tr("No boundaries picked."))
+            self.ctx.finish()
+            return
+        s = self.settings
+        self.ctx.execute(actions.add_hatch(
+            boundaries, s["pattern"], s["scale"], s["angle"],
+            color=s.get("color", 256), islands=self.islands))
+        self.ctx.echo(tr("Hatch created."))
         self.ctx.finish()
 
 

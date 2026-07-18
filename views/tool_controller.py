@@ -110,6 +110,7 @@ class ToolController(QObject):
             services=self,
             ask_text=self._ask_text,
             ask_choice=self._ask_choice,
+            ask_hatch=self._ask_hatch,
         )
         self.tool = ALL_TOOL_CLASSES[name](ctx)
         self.tool.start()
@@ -233,6 +234,23 @@ class ToolController(QObject):
         text, ok = QInputDialog.getItem(
             self.window, prompt, prompt, list(items), start, editable=False)
         return text if ok else None
+
+    def _ask_hatch(self, settings: dict) -> Optional[dict]:
+        from views.hatch_dialog import HatchDialog
+
+        dlg = HatchDialog(self.window, settings)
+        if dlg.exec():
+            return dlg.settings()
+        return None
+
+    def hatch_region_at(self, point):
+        """(outer_polygon, [island_polygons]) under a Pick-internal-point."""
+        from core.hatch_boundary import region_at_point
+
+        if self.window.document is None:
+            return None
+        return region_at_point(
+            list(self.window.document.modelspace()), point)
 
     def block_names(self) -> list:
         """User block definitions (not *Model_Space/*Paper_Space/anonymous)."""

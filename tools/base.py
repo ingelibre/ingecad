@@ -27,6 +27,9 @@ class ToolContext:
     # Ask the user to choose one item from a list (INSERT block picker). GUI:
     # a dropdown dialog; tests: a fake. Returns None on cancel.
     ask_choice: Callable[[str, list, str], Optional[str]] = lambda prompt, items, default="": None
+    # Open the hatch style picker with the current settings; returns the chosen
+    # settings dict {pattern, scale, angle, color} or None on cancel.
+    ask_hatch: Callable[[dict], Optional[dict]] = lambda settings: None
     # Editing services (selection, entity picking, edge geometry). The GUI
     # supplies the ToolController; tests supply a fake with the same duck
     # methods: pick_entity(point), edges_geometry(handles|None).
