@@ -37,6 +37,28 @@ MERGE_THRESHOLD = 50
 STAMP_MIN = 25
 
 
+class _CacheWarmer(QThread):
+    """Build the snap/pick caches off the UI thread right after a document
+    opens — the first click on a cadastre paid a 5-8 s synchronous walk."""
+
+    done = Signal(object, object, object, int)  # document, index, snap, rev
+
+    def __init__(self, document) -> None:
+        super().__init__()
+        self._document = document
+
+    def run(self) -> None:
+        revision = self._document.revision
+        index = GeometryIndex(self._document)
+        engine = SnapEngine(self._document)
+        try:
+            index._build()
+            engine._build()
+        except Exception:
+            index = engine = None   # doc mutated mid-walk: discard
+        self.done.emit(self._document, index, engine, revision)
+
+
 class _GhostWorker(QThread):
     """Tessellate the drag preview off the UI thread (big selections take
     seconds; Ctrl+V must not freeze). Same GIL/discard rules as RegenWorker."""
@@ -87,6 +109,10 @@ class ToolController(QObject):
         # Stamped commits (big MOVE/COPY/PASTE): id(command) -> record.
         self._stamp_records: dict = {}
         self._pending_stamps: list = []   # record keys awaiting ghost scene
+        # Per-frame caches keyed on (index.version, selection).
+        self._highlight_cache = None
+        self._grips_cache = None
+        self._warmers: set = set()        # background cache builders
         # Selection state (idle noun set, or the set a tool is acquiring).
         self.index: Optional[GeometryIndex] = None
         self.selection: set[str] = set()
@@ -118,7 +144,15 @@ class ToolController(QObject):
         self._ghost_wanted = None
         self._stamp_records = {}
         self._pending_stamps = []
+        self._highlight_cache = None
+        self._grips_cache = None
         self.window.viewport.clear_stamps()
+        # warm the caches in the background so the FIRST pick/hover on a big
+        # drawing does not pay the full modelspace walk synchronously
+        warmer = _CacheWarmer(document)
+        warmer.done.connect(self._on_caches_warm)
+        self._warmers.add(warmer)
+        warmer.start()
         self.selection = set()
         self._selecting_for = None
         self._window_anchor = None
@@ -128,6 +162,24 @@ class ToolController(QObject):
         self.window.history.document = document
         self.window.history.clear()
         self._refresh_overlay()
+
+    def _on_caches_warm(self, document, index, engine, revision) -> None:
+        worker = self.sender()
+        if worker in self._warmers:
+            worker.wait()   # thread has emitted; joins immediately
+            self._warmers.discard(worker)
+        if index is None or engine is None:
+            return
+        if (self.window.document is not document
+                or document.revision != revision):
+            return          # the user edited or opened another file: stale
+        # adopt only what the user has not built already
+        if self.index is not None and self.index._dirty:
+            self.index = index
+            self._highlight_cache = None
+            self._grips_cache = None
+        if self.snap_engine is not None and self.snap_engine._dirty:
+            self.snap_engine = engine
 
     def mark_scene_merged(self) -> None:
         """A full regen just happened: overlay entities now live in the base."""
@@ -215,15 +267,14 @@ class ToolController(QObject):
         if handles is not None:
             wanted = set(handles)
             wanted.discard(exclude)
-            smask &= np.fromiter((h in wanted for h in self.index._seg_owner),
-                                 bool, len(seg_arr))
-            cmask &= np.fromiter((h in wanted for h in self.index._circle_owner),
-                                 bool, len(circ_arr))
+            ids = self.index._ids_of(wanted)
+            smask &= np.isin(self.index._seg_oidx, ids)
+            cmask &= np.isin(self.index._circle_oidx, ids)
         elif exclude is not None:
-            smask &= np.fromiter((h != exclude for h in self.index._seg_owner),
-                                 bool, len(seg_arr))
-            cmask &= np.fromiter((h != exclude for h in self.index._circle_owner),
-                                 bool, len(circ_arr))
+            ex = self.index._owner_ids.get(exclude)
+            if ex is not None:
+                smask &= self.index._seg_oidx != ex
+                cmask &= self.index._circle_oidx != ex
         if near is not None and len(seg_arr):
             x0, y0, x1, y1 = near
             smask &= ((np.minimum(seg_arr[:, 0], seg_arr[:, 2]) <= x1)
@@ -1081,13 +1132,19 @@ class ToolController(QObject):
             return []
         if self.tool is not None or not self.selection or self.index is None:
             return []
+        # per-frame AND per-hover (grip_at): cache per (version, selection)
+        key = (self.index.version, frozenset(self.selection))
+        cached = self._grips_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
         out = []
-        for h in list(self.selection)[:200]:   # cap: grips get noisy past that
+        for h in sorted(self.selection)[:200]:  # cap: grips get noisy past that
             e = self.index.entity(h)
             if e is None or not e.is_alive:
                 continue
             for i, (x, y, role) in enumerate(entity_grips(e)):
                 out.append((x, y, role, h, i))
+        self._grips_cache = (key, out)
         return out
 
     def grip_at(self, wx: float, wy: float, tol: float):
@@ -1158,12 +1215,21 @@ class ToolController(QObject):
         return [entity] if entity is not None and entity.is_alive else []
 
     def highlight_geometry(self):
-        """(segments, circles, boxes) of the current selection, world coords."""
-        if not self.selection or self.index is None:
-            import numpy as np
+        """(segments, circles, boxes) of the current selection, world coords.
 
+        Called every paint frame: cached per (index version, selection) —
+        the isin sweep over a cadastre's 1.35 M rows costs ~40 ms and must
+        not run per frame.
+        """
+        if not self.selection or self.index is None:
             empty = np.empty((0, 4))
             return empty, empty, empty
-        return (self.index.segments_of(self.selection),
-                self.index.circles_of(self.selection),
-                self.index.boxes_of(self.selection))
+        key = (self.index.version, frozenset(self.selection))
+        cached = self._highlight_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        result = (self.index.segments_of(self.selection),
+                  self.index.circles_of(self.selection),
+                  self.index.boxes_of(self.selection))
+        self._highlight_cache = (key, result)
+        return result

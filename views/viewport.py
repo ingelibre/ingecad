@@ -240,6 +240,10 @@ class Viewport(QOpenGLWidget):
             if not self._scene_bufs:
                 # nothing uploaded yet: the full upload will carry the zeros
                 self._scene_dirty = True
+            elif len(self._pending_hide) > 4096:
+                # mass erase: one full re-upload beats thousands of writes
+                self._pending_hide.clear()
+                self._scene_dirty = True
             self.update()
 
     def unhide_handles(self, handles) -> None:
@@ -257,6 +261,9 @@ class Viewport(QOpenGLWidget):
                 touched = True
         if touched:
             if not self._scene_bufs:
+                self._scene_dirty = True
+            elif len(self._pending_hide) > 4096:
+                self._pending_hide.clear()
                 self._scene_dirty = True
             self.update()
 

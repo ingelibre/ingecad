@@ -7,6 +7,12 @@ NumPy arrays once (lazily, invalidated on edits), so each cursor move is a
 vectorized query instead of an entity walk — a cadastre-sized drawing
 stays interactive.
 
+Scale notes (1.35 M segment rows on a real cadastre): owners are interned
+to int32 ids for vectorized removal/translation, and ``find`` prefilters
+segments through a per-row bounds table — one vectorized pass selects the
+rows near the cursor and every snap kind works on those candidates only
+(the old per-kind full-array passes cost ~130 ms per mouse move).
+
 Supported: END, MID, CEN, NOD, INT, PER, NEA. Priorities follow AutoCAD:
 an endpoint beats a nearby midpoint beats "nearest".
 """
@@ -36,43 +42,55 @@ class SnapEngine:
     def __init__(self, document) -> None:
         self.document = document
         self._dirty = True
+        self._owners: list[str] = []
+        self._owner_ids: dict[str, int] = {}
         self._segs = np.empty((0, 4))     # x1 y1 x2 y2
+        self._seg_oidx = np.empty(0, dtype=np.int32)
+        self._seg_bounds = np.empty((0, 4))
         self._circles = np.empty((0, 3))  # cx cy r (full circles)
+        self._circle_oidx = np.empty(0, dtype=np.int32)
         self._arcs = np.empty((0, 5))     # cx cy r a0 a1 (ccw radians)
+        self._arc_oidx = np.empty(0, dtype=np.int32)
         self._points = np.empty((0, 2))   # NOD targets
-        # Owner handle per row, so modify commands can patch the cache
-        # (remove + re-add the touched entities) instead of invalidating it.
-        self._seg_owner: list = []
-        self._circle_owner: list = []
-        self._arc_owner: list = []
-        self._point_owner: list = []
+        self._point_oidx = np.empty(0, dtype=np.int32)
 
     def invalidate(self) -> None:
         self._dirty = True
 
+    def _intern(self, handle: str) -> int:
+        oid = self._owner_ids.get(handle)
+        if oid is None:
+            oid = len(self._owners)
+            self._owners.append(handle)
+            self._owner_ids[handle] = oid
+        return oid
+
+    def _ids_of(self, handles) -> np.ndarray:
+        ids = [self._owner_ids[h] for h in handles if h in self._owner_ids]
+        return np.asarray(ids, dtype=np.int32)
+
     # -- extraction -----------------------------------------------------------
     @staticmethod
-    def _extract(e, segs: list, circles: list, arcs: list, points: list,
-                 seg_o: list, circle_o: list, arc_o: list, point_o: list) -> None:
+    def _extract(e, oid, segs, seg_o, circles, circle_o,
+                 arcs, arc_o, points, point_o) -> None:
         t = e.dxftype()
         try:
-            h = e.dxf.handle
             if t == "LINE":
                 s, w = e.dxf.start, e.dxf.end
                 segs.append((s.x, s.y, w.x, w.y))
-                seg_o.append(h)
+                seg_o.append(oid)
             elif t == "LWPOLYLINE":
                 pts = e.get_points("xy")
                 for a, b in zip(pts, pts[1:]):
                     segs.append((a[0], a[1], b[0], b[1]))
-                    seg_o.append(h)
+                    seg_o.append(oid)
                 if e.closed and len(pts) > 2:
                     segs.append((pts[-1][0], pts[-1][1], pts[0][0], pts[0][1]))
-                    seg_o.append(h)
+                    seg_o.append(oid)
             elif t == "CIRCLE":
                 c = e.dxf.center
                 circles.append((c.x, c.y, e.dxf.radius))
-                circle_o.append(h)
+                circle_o.append(oid)
             elif t == "ARC":
                 c = e.dxf.center
                 a0 = math.radians(e.dxf.start_angle)
@@ -80,34 +98,52 @@ class SnapEngine:
                 if a1 <= a0:
                     a1 += math.tau
                 arcs.append((c.x, c.y, e.dxf.radius, a0, a1))
-                arc_o.append(h)
+                arc_o.append(oid)
             elif t == "POINT":
                 l = e.dxf.location
                 points.append((l.x, l.y))
-                point_o.append(h)
+                point_o.append(oid)
         except Exception:
             pass  # malformed entity: not snappable, not fatal
 
+    @staticmethod
+    def _seg_bounds_of(segs: np.ndarray) -> np.ndarray:
+        if not len(segs):
+            return np.empty((0, 4))
+        return np.column_stack((
+            np.minimum(segs[:, 0], segs[:, 2]),
+            np.minimum(segs[:, 1], segs[:, 3]),
+            np.maximum(segs[:, 0], segs[:, 2]),
+            np.maximum(segs[:, 1], segs[:, 3]),
+        ))
+
     def _build(self) -> None:
-        segs: list[tuple] = []
-        circles: list[tuple] = []
-        arcs: list[tuple] = []
-        points: list[tuple] = []
+        self._owners = []
+        self._owner_ids = {}
+        segs: list = []
         seg_o: list = []
+        circles: list = []
         circle_o: list = []
+        arcs: list = []
         arc_o: list = []
+        points: list = []
         point_o: list = []
         for e in self.document.modelspace():
-            self._extract(e, segs, circles, arcs, points,
-                          seg_o, circle_o, arc_o, point_o)
+            try:
+                oid = self._intern(e.dxf.handle)
+            except Exception:
+                continue
+            self._extract(e, oid, segs, seg_o, circles, circle_o,
+                          arcs, arc_o, points, point_o)
         self._segs = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
+        self._seg_oidx = np.asarray(seg_o, dtype=np.int32)
+        self._seg_bounds = self._seg_bounds_of(self._segs)
         self._circles = np.asarray(circles, dtype=np.float64).reshape(-1, 3)
+        self._circle_oidx = np.asarray(circle_o, dtype=np.int32)
         self._arcs = np.asarray(arcs, dtype=np.float64).reshape(-1, 5)
+        self._arc_oidx = np.asarray(arc_o, dtype=np.int32)
         self._points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
-        self._seg_owner = seg_o
-        self._circle_owner = circle_o
-        self._arc_owner = arc_o
-        self._point_owner = point_o
+        self._point_oidx = np.asarray(point_o, dtype=np.int32)
         self._dirty = False
 
     def add_entities(self, entities) -> None:
@@ -120,28 +156,45 @@ class SnapEngine:
         """
         if self._dirty:
             return
-        segs: list[tuple] = []
-        circles: list[tuple] = []
-        arcs: list[tuple] = []
-        points: list[tuple] = []
+        segs: list = []
+        seg_o: list = []
+        circles: list = []
+        circle_o: list = []
+        arcs: list = []
+        arc_o: list = []
+        points: list = []
+        point_o: list = []
         for e in entities:
-            self._extract(e, segs, circles, arcs, points,
-                          self._seg_owner, self._circle_owner,
-                          self._arc_owner, self._point_owner)
+            try:
+                oid = self._intern(e.dxf.handle)
+            except Exception:
+                continue
+            self._extract(e, oid, segs, seg_o, circles, circle_o,
+                          arcs, arc_o, points, point_o)
         if segs:
-            self._segs = np.vstack(
-                [self._segs, np.asarray(segs, dtype=np.float64).reshape(-1, 4)])
+            new = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
+            self._segs = np.vstack([self._segs, new])
+            self._seg_oidx = np.concatenate(
+                [self._seg_oidx, np.asarray(seg_o, dtype=np.int32)])
+            self._seg_bounds = np.vstack(
+                [self._seg_bounds, self._seg_bounds_of(new)])
         if circles:
             self._circles = np.vstack(
                 [self._circles,
                  np.asarray(circles, dtype=np.float64).reshape(-1, 3)])
+            self._circle_oidx = np.concatenate(
+                [self._circle_oidx, np.asarray(circle_o, dtype=np.int32)])
         if arcs:
             self._arcs = np.vstack(
                 [self._arcs, np.asarray(arcs, dtype=np.float64).reshape(-1, 5)])
+            self._arc_oidx = np.concatenate(
+                [self._arc_oidx, np.asarray(arc_o, dtype=np.int32)])
         if points:
             self._points = np.vstack(
                 [self._points,
                  np.asarray(points, dtype=np.float64).reshape(-1, 2)])
+            self._point_oidx = np.concatenate(
+                [self._point_oidx, np.asarray(point_o, dtype=np.int32)])
 
     def translate_handles(self, handles, dx: float, dy: float) -> None:
         """Shift the cached geometry of MOVEd entities in place.
@@ -151,23 +204,25 @@ class SnapEngine:
         """
         if self._dirty:
             return
-        moved = set(handles)
-        if not moved:
+        ids = self._ids_of(handles)
+        if not len(ids):
             return
-        for arr_name, owner_name, cols in (
-                ("_segs", "_seg_owner", (0, 1, 2, 3)),
-                ("_circles", "_circle_owner", (0, 1)),
-                ("_arcs", "_arc_owner", (0, 1)),
-                ("_points", "_point_owner", (0, 1))):
-            owners = getattr(self, owner_name)
-            if not owners:
+        mask = np.isin(self._seg_oidx, ids)
+        if mask.any():
+            shift4 = np.array([dx, dy, dx, dy])
+            self._segs[mask] += shift4
+            self._seg_bounds[mask] += shift4
+        for arr_name, oidx_name in (("_circles", "_circle_oidx"),
+                                    ("_arcs", "_arc_oidx"),
+                                    ("_points", "_point_oidx")):
+            oidx = getattr(self, oidx_name)
+            if not len(oidx):
                 continue
-            mask = np.fromiter((h in moved for h in owners), bool, len(owners))
-            if not mask.any():
-                continue
-            arr = getattr(self, arr_name)
-            for c in cols:
-                arr[mask, c] += dx if c % 2 == 0 else dy
+            m = np.isin(oidx, ids)
+            if m.any():
+                arr = getattr(self, arr_name)
+                arr[m, 0] += dx
+                arr[m, 1] += dy
 
     def remove_handles(self, handles) -> None:
         """Drop the snap geometry of erased/modified entities (no rebuild).
@@ -178,22 +233,24 @@ class SnapEngine:
         """
         if self._dirty:
             return
-        dead = set(handles)
-        if not dead:
+        ids = self._ids_of(handles)
+        if not len(ids):
             return
-        for arr_name, owner_name in (("_segs", "_seg_owner"),
-                                     ("_circles", "_circle_owner"),
-                                     ("_arcs", "_arc_owner"),
-                                     ("_points", "_point_owner")):
-            owners = getattr(self, owner_name)
-            if not owners:
+        keep = ~np.isin(self._seg_oidx, ids)
+        if not keep.all():
+            self._segs = self._segs[keep]
+            self._seg_oidx = self._seg_oidx[keep]
+            self._seg_bounds = self._seg_bounds[keep]
+        for arr_name, oidx_name in (("_circles", "_circle_oidx"),
+                                    ("_arcs", "_arc_oidx"),
+                                    ("_points", "_point_oidx")):
+            oidx = getattr(self, oidx_name)
+            if not len(oidx):
                 continue
-            keep = np.fromiter((h not in dead for h in owners), bool,
-                               len(owners))
-            if not keep.all():
-                setattr(self, arr_name, getattr(self, arr_name)[keep])
-                setattr(self, owner_name,
-                        [h for h, k in zip(owners, keep) if k])
+            k = ~np.isin(oidx, ids)
+            if not k.all():
+                setattr(self, arr_name, getattr(self, arr_name)[k])
+                setattr(self, oidx_name, oidx[k])
 
     # -- query ----------------------------------------------------------------
     def find(
@@ -221,8 +278,16 @@ class SnapEngine:
             if best is None or key < (best[0], best[1]):
                 best = (PRIORITY[kind], d, SnapHit(x, y, kind))
 
-        segs, circles, arcs, points = (
-            self._segs, self._circles, self._arcs, self._points)
+        circles, arcs, points = self._circles, self._arcs, self._points
+
+        # ONE bounds pass selects the segments near the cursor; every snap
+        # kind below works on those candidates only.
+        segs = np.empty((0, 4))
+        if len(self._segs):
+            b = self._seg_bounds
+            near = ((b[:, 0] - threshold <= cx) & (b[:, 2] + threshold >= cx)
+                    & (b[:, 1] - threshold <= cy) & (b[:, 3] + threshold >= cy))
+            segs = self._segs[near]
 
         if "END" in kinds and len(segs):
             for exy in (segs[:, 0:2], segs[:, 2:4]):
@@ -253,11 +318,11 @@ class SnapEngine:
             i = int(np.argmin(d2))
             offer("NOD", float(points[i, 0]), float(points[i, 1]))
 
-        near_idx = self._segs_near(cursor, threshold)
+        near_idx = np.arange(len(segs))[:64]  # dense areas: cap pairwise work
         if "INT" in kinds and len(near_idx) >= 2:
             for j, a in enumerate(near_idx):
-                for b in near_idx[j + 1:]:
-                    hit = _seg_intersection(segs[a], segs[b])
+                for b_ in near_idx[j + 1:]:
+                    hit = _seg_intersection(segs[a], segs[b_])
                     if hit is not None:
                         offer("INT", hit[0], hit[1])
         if "PER" in kinds and from_point is not None and len(near_idx):
@@ -271,25 +336,17 @@ class SnapEngine:
                 p = _closest_on_segment(segs[a], cx, cy)
                 offer("NEA", p[0], p[1])
             for arr, full in ((circles, True), (arcs, False)):
-                for row in arr:
+                if not len(arr):
+                    continue
+                # only rims within reach of the cursor
+                rim = np.abs(np.hypot(cx - arr[:, 0], cy - arr[:, 1])
+                             - arr[:, 2]) <= threshold
+                for row in arr[rim]:
                     p = _closest_on_circle(row, cx, cy, full)
                     if p is not None:
                         offer("NEA", p[0], p[1])
 
         return best[2] if best else None
-
-    def _segs_near(self, cursor, threshold) -> np.ndarray:
-        if not len(self._segs):
-            return np.empty(0, dtype=int)
-        cx, cy = cursor
-        s = self._segs
-        min_x = np.minimum(s[:, 0], s[:, 2]) - threshold
-        max_x = np.maximum(s[:, 0], s[:, 2]) + threshold
-        min_y = np.minimum(s[:, 1], s[:, 3]) - threshold
-        max_y = np.maximum(s[:, 1], s[:, 3]) + threshold
-        mask = (cx >= min_x) & (cx <= max_x) & (cy >= min_y) & (cy <= max_y)
-        idx = np.nonzero(mask)[0]
-        return idx[:64]  # dense crossings: cap the pairwise work
 
 
 def _closest_on_segment(seg, px, py):
