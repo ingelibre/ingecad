@@ -48,7 +48,8 @@ def have_dwg_support() -> bool:
     return find_dwg2dxf() is not None
 
 
-def _run(cmd: list[str], out_path: Path) -> None:
+def _run(cmd: list[str], out_path: Path) -> str:
+    """Run a converter; return its stderr so callers can inspect warnings."""
     try:
         proc = subprocess.run(
             cmd,
@@ -66,6 +67,7 @@ def _run(cmd: list[str], out_path: Path) -> None:
         raise DwgBridgeError(
             "conversion produced no output: " + (" | ".join(tail) or f"rc={proc.returncode}")
         )
+    return proc.stderr or ""
 
 
 def _strip_null_handles(dxf_path: Path) -> None:
@@ -144,26 +146,87 @@ def load_dwg(dwg_path: Path):
     )
 
 
-def write_dwg(dxf_path: Path, dwg_path: Path) -> str:
-    """Write a DWG from a DXF via LibreDWG (r2000).
+def _converter_errors(stderr: str) -> list[str]:
+    """Genuinely fatal-looking lines the LibreDWG writer emitted.
+
+    NOTE: "Duplicate handle ..." is deliberately excluded — LibreDWG logs it
+    from a relative-handle optimisation even for files that open perfectly, so
+    it is noise here, not a verdict. The reliable net is the entity-count
+    re-read below; this only flags other, rarer hard errors.
+    """
+    hits: list[str] = []
+    for line in (stderr or "").splitlines():
+        s = line.strip()
+        if not s or "Duplicate handle" in s:
+            continue
+        if (s.startswith("ERROR")
+                or "can't be cast" in s
+                or "improperly read" in s
+                or "out of memory" in s.lower()):
+            hits.append(s)
+    return hits
+
+
+def _modelspace_count(dxf_path: Path) -> int:
+    """Count model-space entities in a DXF, tolerating a broken re-read."""
+    import ezdxf
+    from ezdxf import recover
+
+    try:
+        doc = ezdxf.readfile(dxf_path)
+    except Exception:
+        doc, _auditor = recover.readfile(dxf_path)
+    return sum(1 for _ in doc.modelspace())
+
+
+def verify_dwg(source_dxf: Path, dwg_path: Path, stderr: str = "") -> list[str]:
+    """Check a just-written DWG and return human-readable warnings (empty = OK).
+
+    Two cheap checks that need no proprietary tool:
+    1. Did the LibreDWG writer raise any error while packing the file?
+    2. Re-open the DWG and confirm the model-space entity count survived.
+
+    This is a safety net, not a guarantee: a bug LibreDWG both writes AND
+    reads the same wrong way (a "mirror" bug a strict parser would still
+    reject) can slip through. The developer bench (ODA/BricsCAD) covers those.
+    """
+    warnings: list[str] = []
+    if _converter_errors(stderr):
+        warnings.append(
+            "the DWG writer reported internal errors while packing the file")
+    try:
+        n_src = _modelspace_count(source_dxf)
+        n_back = _modelspace_count(dwg_to_dxf(dwg_path))
+        # A drop means geometry was lost. Allow tiny bookkeeping deltas.
+        if n_src and n_back < n_src:
+            warnings.append(
+                f"some drawing objects did not survive the save "
+                f"({n_src} → {n_back})")
+    except Exception:
+        warnings.append("could not re-open the saved DWG to verify it")
+    return warnings
+
+
+def write_dwg(dxf_path: Path, dwg_path: Path) -> list[str]:
+    """Write a DWG from a DXF via LibreDWG (r2000), then verify it.
 
     IngeCAD ships a patched LibreDWG and writes AutoCAD r2000 (opens in every
     AutoCAD/BricsCAD since 2000). r2000 is an older container, so paper-space
     layout settings and a few r2013+ display features are simplified on the
     way out; the geometry, layers, blocks, text and hatches round-trip
-    faithfully. Returns the engine used: "libredwg".
+    faithfully. Returns verification warnings (empty list = clean save).
     """
-    dxf_to_dwg(dxf_path, dwg_path)
-    return "libredwg"
+    stderr = dxf_to_dwg(dxf_path, dwg_path)
+    return verify_dwg(Path(dxf_path), Path(dwg_path), stderr)
 
 
-def dxf_to_dwg(dxf_path: Path, dwg_path: Path, version: str = "r2000") -> None:
-    """Convert a DXF to DWG (LibreDWG writes r2000 reliably)."""
+def dxf_to_dwg(dxf_path: Path, dwg_path: Path, version: str = "r2000") -> str:
+    """Convert a DXF to DWG; return the converter's stderr."""
     tool = find_dxf2dwg()
     if tool is None:
         raise DwgBridgeError("LibreDWG (dxf2dwg) is not available")
     dwg_path = Path(dwg_path)
-    _run(
+    return _run(
         [str(tool), "-y", "--as", version, "-o", str(dwg_path), str(Path(dxf_path))],
         dwg_path,
     )

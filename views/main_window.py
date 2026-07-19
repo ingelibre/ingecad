@@ -966,7 +966,7 @@ class MainWindow(QMainWindow):
         if path.suffix.lower() not in (".dwg", ".dxf"):
             path = path.with_suffix(".dwg" if "dwg" in selected.lower() else ".dxf")
         try:
-            engine = self.document.save_as(path)
+            engine, warnings = self.document.save_as(path)
         except Exception as exc:
             QMessageBox.warning(
                 self,
@@ -982,6 +982,19 @@ class MainWindow(QMainWindow):
                 tr("Saved {name} (DWG r2000)", name=path.name), 5000)
         else:
             self.statusBar().showMessage(tr("Saved {name}", name=path.name), 5000)
+        # Verified save: the file is written either way, but if the DWG did not
+        # check out, tell the user up front (non-blocking) and offer DXF, which
+        # is always exact. Never leave a possibly-bad DWG shipped silently.
+        if warnings:
+            detail = "\n".join(f"• {w}" for w in warnings)
+            QMessageBox.warning(
+                self,
+                tr("Saved with a warning"),
+                tr("{name} was saved, but the DWG check found a possible "
+                   "problem:\n\n{detail}\n\nIf a colleague cannot open it, save "
+                   "as DXF instead — DXF is always exact.",
+                   name=path.name, detail=detail),
+            )
 
     def open_path(self, path: Path) -> None:
         """OS file associations, argv[1], and File > Open land here."""

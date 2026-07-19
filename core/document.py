@@ -112,19 +112,23 @@ class Document:
     def save_as(self, path: Path) -> str:
         """Save as DXF directly, or as DWG via the bundled LibreDWG.
 
-        Returns the engine used: "dxf" or "libredwg" (r2000).
+        Returns ``(engine, warnings)``: engine is "dxf" or "libredwg" (r2000);
+        warnings is a list of human-readable strings from the verified save
+        (empty when the DWG checked out clean). DXF saves never warn.
         """
         path = Path(path)
+        warnings: list[str] = []
         if path.suffix.lower() == ".dwg":
             from formats.dwg_bridge import write_dwg
 
             with tempfile.TemporaryDirectory(prefix="ingecad-save-") as tmp:
                 tmp_dxf = Path(tmp) / "out.dxf"
                 self.doc.saveas(tmp_dxf)
-                engine = write_dwg(tmp_dxf, path)
+                warnings = write_dwg(tmp_dxf, path)
+            engine = "libredwg"
         else:
             self.doc.saveas(path)
             engine = "dxf"
         self.path = path
         self.dirty = False
-        return engine
+        return engine, warnings

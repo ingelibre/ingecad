@@ -101,3 +101,55 @@ def test_accented_paths_survive(tmp_path):
     dxf_to_dwg(dxf, dwg)
     back = dwg_to_dxf(dwg)
     assert len(Document.load(back).modelspace().query("LINE")) == 1
+
+
+def _dxf_with(n_entities, path):
+    doc = ezdxf.new("R2000")
+    for i in range(n_entities):
+        doc.modelspace().add_line((i, 0), (i, 1))
+    doc.saveas(path)
+    return path
+
+
+def test_verify_dwg_clean_when_counts_match(tmp_path, monkeypatch):
+    # Verified save: source and re-read agree, no writer errors -> no warning.
+    src = _dxf_with(5, tmp_path / "src.dxf")
+    back = _dxf_with(5, tmp_path / "back.dxf")
+    monkeypatch.setattr(dwg_bridge, "dwg_to_dxf", lambda p: back)
+    assert dwg_bridge.verify_dwg(src, tmp_path / "out.dwg", stderr="") == []
+
+
+def test_verify_dwg_flags_dropped_entities(tmp_path, monkeypatch):
+    # A DWG that lost geometry on the way out must warn the user.
+    src = _dxf_with(10, tmp_path / "src.dxf")
+    back = _dxf_with(6, tmp_path / "back.dxf")
+    monkeypatch.setattr(dwg_bridge, "dwg_to_dxf", lambda p: back)
+    warnings = dwg_bridge.verify_dwg(src, tmp_path / "out.dwg", stderr="")
+    assert warnings and any("did not survive" in w for w in warnings)
+
+
+def test_verify_dwg_flags_real_converter_error(tmp_path, monkeypatch):
+    src = _dxf_with(3, tmp_path / "src.dxf")
+    back = _dxf_with(3, tmp_path / "back.dxf")
+    monkeypatch.setattr(dwg_bridge, "dwg_to_dxf", lambda p: back)
+    stderr = "ERROR: HATCH no paths[0].segs\nSomething improperly read\n"
+    warnings = dwg_bridge.verify_dwg(src, tmp_path / "out.dwg", stderr=stderr)
+    assert any("internal errors" in w for w in warnings)
+
+
+def test_verify_dwg_ignores_duplicate_handle_noise(tmp_path, monkeypatch):
+    # "Duplicate handle" is logged even for files that open fine -> not a verdict.
+    src = _dxf_with(3, tmp_path / "src.dxf")
+    back = _dxf_with(3, tmp_path / "back.dxf")
+    monkeypatch.setattr(dwg_bridge, "dwg_to_dxf", lambda p: back)
+    stderr = "ERROR: Duplicate handle B for object 72 already points to object 48\n"
+    assert dwg_bridge.verify_dwg(src, tmp_path / "out.dwg", stderr=stderr) == []
+
+
+def test_verify_dwg_flags_unreadable_output(tmp_path, monkeypatch):
+    src = _dxf_with(3, tmp_path / "src.dxf")
+    def _boom(_p):
+        raise dwg_bridge.DwgBridgeError("cannot read")
+    monkeypatch.setattr(dwg_bridge, "dwg_to_dxf", _boom)
+    warnings = dwg_bridge.verify_dwg(src, tmp_path / "out.dwg", stderr="")
+    assert any("could not re-open" in w for w in warnings)
