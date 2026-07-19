@@ -11,6 +11,11 @@ Part of the **Inge** ecosystem, alongside
 [IngeTrazo](https://github.com/ingelibre/ingetrazo) (free 3D modeling / BIM)
 and IngePresupuestos (construction budgeting).
 
+![IngeCAD viewport](docs/images/viewport.png)
+
+> *A real cadastral DWG open in IngeCAD 0.1 on Linux — layers panel, classic
+> command line, Model/Layout tabs, and status-bar toggles.*
+
 ## Design pillars
 
 - **Faithful files first.** The document model *is* the DXF database (via
