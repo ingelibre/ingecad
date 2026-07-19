@@ -1,6 +1,6 @@
 # IngeCAD — CAD 2D libre estilo AutoCAD clásico
 
-**Autor:** Marco Sumari Tellez · **Licencia:** GPL-3.0-or-later · **Repo destino:** `github.com/tuxiasumari/ingecad`
+**Autor:** Marco Sumari Tellez · **Licencia:** GPL-3.0-or-later · **Repo destino:** `github.com/ingelibre/ingecad`
 **Hermanos:** [IngeTrazo](../ingetrazo/) (modelador 3D/BIM) · [IngePresupuestos](../ingepresupuestos-pyside6/) (presupuestos)
 
 > Plan fundacional definido el 2026-07-16 (conversación estratégica completa en memoria de Claude: `[[project-ingecad-nuevo-hermano-2d]]`). Este archivo guarda el **rumbo** (visión, principios, fases + DoD); el registro de lo hecho vive en los commits de git. No duplicar acá lo que git ya registra.

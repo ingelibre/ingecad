@@ -8,7 +8,7 @@ classic pre-ribbon interface (menus + toolbars + a real command line), and
 faithful round-tripping of the DWG/DXF files your colleagues send you.
 
 Part of the **Inge** ecosystem, alongside
-[IngeTrazo](https://github.com/tuxiasumari/ingetrazo) (free 3D modeling / BIM)
+[IngeTrazo](https://github.com/ingelibre/ingetrazo) (free 3D modeling / BIM)
 and IngePresupuestos (construction budgeting).
 
 ## Design pillars
@@ -53,7 +53,7 @@ roadmap.
 ## Running from source
 
 ```bash
-git clone https://github.com/tuxiasumari/ingecad.git
+git clone https://github.com/ingelibre/ingecad.git
 cd ingecad
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
