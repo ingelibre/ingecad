@@ -1,50 +1,176 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!-- IngeCAD app icon — GNOME/Yaru style: dark rounded tile, drafting grid,
      UCS axes (X red, Y green) and a lowercase "i" whose dot is the yellow
      AutoSnap square. SPDX-License-Identifier: GPL-3.0-or-later -->
-<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2a3039"/>
-      <stop offset="1" stop-color="#171b21"/>
+
+<svg
+   width="128"
+   height="128"
+   viewBox="0 0 128 128"
+   version="1.1"
+   id="svg12"
+   sodipodi:docname="ingecad.svg"
+   inkscape:version="1.4.3 (0d15f75042, 2025-12-25)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview12"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="5.0078125"
+     inkscape:cx="64"
+     inkscape:cy="64"
+     inkscape:window-width="1469"
+     inkscape:window-height="891"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="g4" />
+  <defs
+     id="defs2">
+    <linearGradient
+       id="bg"
+       x1="0"
+       y1="0"
+       x2="0"
+       y2="1">
+      <stop
+         offset="0"
+         stop-color="#2a3039"
+         id="stop1" />
+      <stop
+         offset="1"
+         stop-color="#171b21"
+         id="stop2" />
     </linearGradient>
-    <clipPath id="tile">
-      <rect x="8" y="8" width="112" height="112" rx="24"/>
+    <clipPath
+       id="tile">
+      <rect
+         x="8"
+         y="8"
+         width="112"
+         height="112"
+         rx="24"
+         id="rect2" />
     </clipPath>
   </defs>
-
   <!-- tile -->
-  <rect x="8" y="8" width="112" height="112" rx="24" fill="url(#bg)"/>
-
-  <g clip-path="url(#tile)">
+  <rect
+     x="8"
+     y="8"
+     width="112"
+     height="112"
+     rx="24"
+     fill="url(#bg)"
+     id="rect3" />
+  <g
+     clip-path="url(#tile)"
+     id="g6">
     <!-- drafting grid (minor lines, faint like the model-space GRID) -->
-    <g stroke="#2e3540" stroke-width="1">
-      <path d="M24 8V120 M40 8V120 M56 8V120 M72 8V120 M88 8V120 M104 8V120"/>
-      <path d="M8 24H120 M8 40H120 M8 56H120 M8 72H120 M8 88H120 M8 104H120"/>
+    <g
+       stroke="#2e3540"
+       stroke-width="1"
+       id="g4">
+      <path
+         d="M24 8V120 M40 8V120 M56 8V120 M72 8V120 M88 8V120 M104 8V120"
+         id="path3" />
+      <path
+         d="M8 24H120 M8 40H120 M8 56H120 M8 72H120 M8 88H120 M8 104H120"
+         id="path4" />
     </g>
     <!-- brighter major lines every 5th -->
-    <g stroke="#3a4250" stroke-width="1">
-      <path d="M8 88H120 M40 8V120"/>
+    <g
+       stroke="#3a4250"
+       stroke-width="1"
+       id="g5">
+      <path
+         d="M8 88H120 M40 8V120"
+         id="path5" />
     </g>
   </g>
-
   <!-- UCS axes: X red, Y green (AutoCAD colors), arrowheads -->
-  <g stroke-linecap="round">
-    <line x1="34" y1="94" x2="98" y2="94" stroke="#d94f3d" stroke-width="7"/>
-    <line x1="34" y1="94" x2="34" y2="32" stroke="#3fb950" stroke-width="7"/>
+  <g
+     stroke-linecap="round"
+     id="g7">
+    <line
+       x1="34"
+       y1="94"
+       x2="98"
+       y2="94"
+       stroke="#d94f3d"
+       stroke-width="7"
+       id="line6" />
+    <line
+       x1="34"
+       y1="94"
+       x2="34"
+       y2="32"
+       stroke="#3fb950"
+       stroke-width="7"
+       id="line7" />
   </g>
-  <path d="M96 85 L114 94 L96 103 Z" fill="#d94f3d"/>
-  <path d="M25 34 L34 16 L43 34 Z" fill="#3fb950"/>
+  <path
+     d="M96 85 L114 94 L96 103 Z"
+     fill="#d94f3d"
+     id="path7" />
+  <path
+     d="M25 34 L34 16 L43 34 Z"
+     fill="#3fb950"
+     id="path8" />
   <!-- origin joint -->
-  <rect x="29" y="89" width="10" height="10" rx="2" fill="#e8eaed"/>
-
+  <rect
+     x="29"
+     y="89"
+     width="10"
+     height="10"
+     rx="2"
+     fill="#e8eaed"
+     id="rect8" />
   <!-- the "i": sky-blue stem, AutoSnap-yellow square dot -->
-  <rect x="66" y="49" width="12" height="37" rx="6" fill="#4dabf7"/>
-  <rect x="65" y="29" width="14" height="14" rx="2.5" fill="#ffd23f"/>
-
+  <rect
+     x="66"
+     y="47"
+     width="12"
+     height="37"
+     rx="6"
+     fill="#4dabf7"
+     id="rect9"
+     style="stroke-width:0.999999" />
+  <rect
+     x="65"
+     y="29"
+     width="14"
+     height="14"
+     rx="6"
+     fill="#ffd23f"
+     id="rect10"
+     style="fill:#4dabf7;fill-opacity:1" />
   <!-- subtle tile edge -->
-  <rect x="8.5" y="8.5" width="111" height="111" rx="23.5" fill="none"
-        stroke="#000000" stroke-opacity="0.45"/>
-  <rect x="9.5" y="9.5" width="109" height="109" rx="22.5" fill="none"
-        stroke="#ffffff" stroke-opacity="0.05"/>
+  <rect
+     x="8.5"
+     y="8.5"
+     width="111"
+     height="111"
+     rx="23.5"
+     fill="none"
+     stroke="#000000"
+     stroke-opacity="0.45"
+     id="rect11" />
+  <rect
+     x="9.5"
+     y="9.5"
+     width="109"
+     height="109"
+     rx="22.5"
+     fill="none"
+     stroke="#ffffff"
+     stroke-opacity="0.05"
+     id="rect12" />
 </svg>
