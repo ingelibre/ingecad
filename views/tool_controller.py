@@ -388,11 +388,8 @@ class ToolController(QObject):
             if self.index is not None:
                 self.index.add_entities(added)
         elif isinstance(command, self._KNOWN_MODIFY):
-            # snap rebuild is a cheap attribute walk; the pick index is NOT
-            # (ezdxf bbox per exotic entity) — it gets patched surgically in
-            # the display branch below, where the touched sets are known.
-            if self.snap_engine is not None:
-                self.snap_engine.invalidate()
+            pass  # both caches are patched in the display branch below,
+                  # where the touched entity sets are known
         else:
             self._invalidate_geometry()
         if (isinstance(command, actions.ReplaceEntitiesCommand)
@@ -462,14 +459,20 @@ class ToolController(QObject):
                         new_ents = list(extra)
                         break
             self._pending_render.extend(new_ents)
+            alive = [e for e in new_ents if e.is_alive]
+            # patch both caches: O(touched) instead of a full rebuild
+            # (all calls no-op if the cache was invalidated above)
             if self.index is not None:
-                # patch the pick index: O(touched) instead of a full rebuild
-                # (both calls no-op if the index was invalidated above)
                 self.index.remove_handles(old_handles)
-                self.index.add_entities(
-                    [e for e in new_ents if e.is_alive])
+                self.index.add_entities(alive)
+            if self.snap_engine is not None:
+                self.snap_engine.remove_handles(old_handles)
+                self.snap_engine.add_entities(alive)
             self._refresh_overlay()
-            self._regen_timer.start()
+            # the result is already on screen (hide + overlay); reconcile on
+            # the IDLE timer — the old 400 ms regen landed exactly when the
+            # user made the NEXT trim/move and its GIL churn read as lag
+            self._merge_timer.start()
 
     def _run_deferred_regen(self) -> None:
         self.window.regen_in_memory()
@@ -487,11 +490,11 @@ class ToolController(QObject):
         everything the command touched are hidden surgically and the restored
         or current entities ride the overlay; the full regen stays coalesced.
         """
-        self._invalidate_geometry()
         if command is None or isinstance(command, actions.AddDimensionCommand):
             # unknown scope / dimension block graphics: only a regen is right;
             # hide what the undo just destroyed so it vanishes NOW (the regen
             # runs in the background and lands later)
+            self._invalidate_geometry()
             removed = getattr(command, "removed_handles", None)
             if removed:
                 self.window.viewport.hide_handles(removed)
@@ -513,12 +516,30 @@ class ToolController(QObject):
         hide += [e.dxf.handle for e in touched if e.is_alive]
         if hide:
             self.window.viewport.hide_handles(hide)
-        for e in touched:
-            if (e.is_alive and e.dxf.owner is not None
-                    and e not in self._pending_render):
+        alive = [e for e in touched
+                 if e.is_alive and e.dxf.owner is not None]
+        for e in alive:
+            if e not in self._pending_render:
                 self._pending_render.append(e)
-        self._refresh_overlay()
-        self._regen_timer.start()
+        patchable = self._KNOWN_MODIFY + (
+            actions.AddEntityCommand, actions.PasteCommand,
+            actions.CopyEntitiesCommand, actions.SnapshotCommand)
+        if isinstance(command, patchable):
+            # undo/redo of the everyday commands: patch the caches with the
+            # restored state instead of a full modelspace rebuild (U is
+            # hammered constantly — it must not re-freeze the next pick)
+            if self.index is not None:
+                self.index.remove_handles(hide)
+                self.index.add_entities(alive)
+            if self.snap_engine is not None:
+                self.snap_engine.remove_handles(hide)
+                self.snap_engine.add_entities(alive)
+            self._refresh_overlay()
+            self._merge_timer.start()
+        else:
+            self._invalidate_geometry()
+            self._refresh_overlay()
+            self._regen_timer.start()
 
     def _draw_commands(self):
         return [c for c in self.window.history._undo
@@ -821,15 +842,16 @@ class ToolController(QObject):
             snap.commit(self.window.document)
             self.window.history._undo.append(snap)
             self.window.history._redo.clear()
-            # grips/snap see the new shape; the pick index is patched, not
+            # grips/snap see the new shape; both caches are patched, not
             # rebuilt (a full rebuild froze the next pick on big files)
             if self.snap_engine is not None:
-                self.snap_engine.invalidate()
+                self.snap_engine.remove_handles([handle])
+                self.snap_engine.add_entities([entity])
             if self.index is not None:
                 self.index.remove_handles([handle])
                 self.index.add_entities([entity])
             self._refresh_overlay()
-            self._regen_timer.start()
+            self._merge_timer.start()
 
     def grip_overlay_entities(self):
         if self._grip_drag is None:

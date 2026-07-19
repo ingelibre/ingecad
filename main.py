@@ -80,6 +80,11 @@ def _init_language() -> None:
 
 
 def main() -> int:
+    # Background regens are pure-Python tessellation: with CPython's default
+    # 5 ms GIL switch interval the UI thread starves in 5 ms chunks and the
+    # crosshair stutters while a big drawing rebuilds. 1 ms keeps input smooth
+    # for a barely measurable regen slowdown.
+    sys.setswitchinterval(0.001)
     _configure_surface_format()
     app = QApplication(sys.argv)
     app.setApplicationName("IngeCAD")

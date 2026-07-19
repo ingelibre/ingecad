@@ -92,6 +92,36 @@ def test_index_remove_handles_noop_while_dirty():
     assert index.pick((5, 0), 0.5) == line.dxf.handle  # rebuild still has it
 
 
+def test_snap_remove_handles_drops_geometry():
+    document = _doc()
+    engine = SnapEngine(document)
+    msp = document.modelspace()
+    line = msp.query("LINE").first
+    assert engine.find((10, 0), 0.5).kind == "END"   # build
+
+    engine.remove_handles([line.dxf.handle])
+    assert not engine._dirty
+    assert engine.find((10, 0), 0.5) is None          # line gone
+    assert engine.find((20.1, 20.1), 0.5).kind == "CEN"  # circle untouched
+
+
+def test_snap_remove_then_add_models_a_trim():
+    document = _doc()
+    engine = SnapEngine(document)
+    msp = document.modelspace()
+    line = msp.query("LINE").first
+    engine.find((0, 0), 0.5)                          # build
+
+    # simulate TRIM: replace the line with a shorter survivor
+    line.dxf.end = (5, 0, 0)
+    engine.remove_handles([line.dxf.handle])
+    engine.add_entities([line])
+    assert not engine._dirty
+    hit = engine.find((5, 0), 0.4)
+    assert hit is not None and hit.kind == "END"
+    assert engine.find((10, 0), 0.4) is None          # old endpoint gone
+
+
 def test_index_add_entities_mixed_types():
     document = _doc()
     index = GeometryIndex(document)

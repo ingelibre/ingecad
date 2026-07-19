@@ -40,27 +40,39 @@ class SnapEngine:
         self._circles = np.empty((0, 3))  # cx cy r (full circles)
         self._arcs = np.empty((0, 5))     # cx cy r a0 a1 (ccw radians)
         self._points = np.empty((0, 2))   # NOD targets
+        # Owner handle per row, so modify commands can patch the cache
+        # (remove + re-add the touched entities) instead of invalidating it.
+        self._seg_owner: list = []
+        self._circle_owner: list = []
+        self._arc_owner: list = []
+        self._point_owner: list = []
 
     def invalidate(self) -> None:
         self._dirty = True
 
     # -- extraction -----------------------------------------------------------
     @staticmethod
-    def _extract(e, segs: list, circles: list, arcs: list, points: list) -> None:
+    def _extract(e, segs: list, circles: list, arcs: list, points: list,
+                 seg_o: list, circle_o: list, arc_o: list, point_o: list) -> None:
         t = e.dxftype()
         try:
+            h = e.dxf.handle
             if t == "LINE":
                 s, w = e.dxf.start, e.dxf.end
                 segs.append((s.x, s.y, w.x, w.y))
+                seg_o.append(h)
             elif t == "LWPOLYLINE":
                 pts = e.get_points("xy")
                 for a, b in zip(pts, pts[1:]):
                     segs.append((a[0], a[1], b[0], b[1]))
+                    seg_o.append(h)
                 if e.closed and len(pts) > 2:
                     segs.append((pts[-1][0], pts[-1][1], pts[0][0], pts[0][1]))
+                    seg_o.append(h)
             elif t == "CIRCLE":
                 c = e.dxf.center
                 circles.append((c.x, c.y, e.dxf.radius))
+                circle_o.append(h)
             elif t == "ARC":
                 c = e.dxf.center
                 a0 = math.radians(e.dxf.start_angle)
@@ -68,9 +80,11 @@ class SnapEngine:
                 if a1 <= a0:
                     a1 += math.tau
                 arcs.append((c.x, c.y, e.dxf.radius, a0, a1))
+                arc_o.append(h)
             elif t == "POINT":
                 l = e.dxf.location
                 points.append((l.x, l.y))
+                point_o.append(h)
         except Exception:
             pass  # malformed entity: not snappable, not fatal
 
@@ -79,12 +93,21 @@ class SnapEngine:
         circles: list[tuple] = []
         arcs: list[tuple] = []
         points: list[tuple] = []
+        seg_o: list = []
+        circle_o: list = []
+        arc_o: list = []
+        point_o: list = []
         for e in self.document.modelspace():
-            self._extract(e, segs, circles, arcs, points)
+            self._extract(e, segs, circles, arcs, points,
+                          seg_o, circle_o, arc_o, point_o)
         self._segs = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
         self._circles = np.asarray(circles, dtype=np.float64).reshape(-1, 3)
         self._arcs = np.asarray(arcs, dtype=np.float64).reshape(-1, 5)
         self._points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+        self._seg_owner = seg_o
+        self._circle_owner = circle_o
+        self._arc_owner = arc_o
+        self._point_owner = point_o
         self._dirty = False
 
     def add_entities(self, entities) -> None:
@@ -102,7 +125,9 @@ class SnapEngine:
         arcs: list[tuple] = []
         points: list[tuple] = []
         for e in entities:
-            self._extract(e, segs, circles, arcs, points)
+            self._extract(e, segs, circles, arcs, points,
+                          self._seg_owner, self._circle_owner,
+                          self._arc_owner, self._point_owner)
         if segs:
             self._segs = np.vstack(
                 [self._segs, np.asarray(segs, dtype=np.float64).reshape(-1, 4)])
@@ -117,6 +142,32 @@ class SnapEngine:
             self._points = np.vstack(
                 [self._points,
                  np.asarray(points, dtype=np.float64).reshape(-1, 2)])
+
+    def remove_handles(self, handles) -> None:
+        """Drop the snap geometry of erased/modified entities (no rebuild).
+
+        Together with ``add_entities`` this lets TRIM/MOVE patch the cache in
+        O(touched); the full rebuild walks every LWPOLYLINE in the drawing.
+        No-op while dirty.
+        """
+        if self._dirty:
+            return
+        dead = set(handles)
+        if not dead:
+            return
+        for arr_name, owner_name in (("_segs", "_seg_owner"),
+                                     ("_circles", "_circle_owner"),
+                                     ("_arcs", "_arc_owner"),
+                                     ("_points", "_point_owner")):
+            owners = getattr(self, owner_name)
+            if not owners:
+                continue
+            keep = np.fromiter((h not in dead for h in owners), bool,
+                               len(owners))
+            if not keep.all():
+                setattr(self, arr_name, getattr(self, arr_name)[keep])
+                setattr(self, owner_name,
+                        [h for h, k in zip(owners, keep) if k])
 
     # -- query ----------------------------------------------------------------
     def find(
