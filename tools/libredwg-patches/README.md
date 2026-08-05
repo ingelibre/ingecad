@@ -35,6 +35,11 @@ file got worse and 23 got better".
 
 Upstream's own suite: **270 PASS / 0 FAIL** (gcc 15.2.0) — after `0030` below.
 
+Full sweep afterwards: **1657 drawings, 98.2% usable, 19.1 M entities**, only
+24 failures across 9 distinct signatures — and **15 of those 24 are LibreDWG's
+own test files**, so the next round of reports needs no client drawings at all.
+See `docs/bench-libredwg-2026-08-04.md`.
+
 ## Pending patch
 
 | Patch | Status |

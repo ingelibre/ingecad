@@ -166,8 +166,16 @@ los reescribe el mantenedor y el crédito queda en el agradecimiento. Antes de e
 (el writer r2013/r2018)**, que es por definición un aporte grande, hay que decidir si se
 firma el CLA de la FSF; si no, ese trabajo solo puede vivir en el fork.
 
-Cuatro PRs (#1312, #1314, #1319, #1321) siguen marcados OPEN aunque su contenido ya está
-aplicado — conviene cerrarlos apuntando al commit que los reemplaza.
+Los cuatro PRs que seguían abiertos sin motivo (#1312, #1314, #1319, #1321) se **cerraron
+el 2026-08-04** apuntando al commit que los reemplaza. De la primera tanda no queda ninguno
+abierto.
+
+**Siguiente objetivo, ya identificado** (`docs/bench-libredwg-2026-08-04.md`): con 0.14.8556
+el corpus da **98,2% utilizable sobre 1657 planos**, y de los 24 fallos que quedan **15 son
+archivos de prueba del propio LibreDWG** — públicos y minúsculos, así que se pueden reportar
+sin exponer ningún plano de cliente. El más rentable: el round-trip de
+`examples/example_{2004,2007,2010,2013,2018}_new.dwg` produce un DXF ilegible
+(`Expected DXF entity LWPOLYLINE or SEQEND`) en las cinco versiones de formato.
 
 ---
 
