@@ -44,7 +44,7 @@ See `docs/bench-libredwg-2026-08-04.md`.
 
 | Patch | Status |
 |---|---|
-| `0030-add_test-const-correct-version-string-scanners.patch` | Ours, **not submitted yet** — `make check` does not COMPILE on gcc 15: `add_test.c` keeps `strchr()` results over `const` strings in plain `char *`, and the test suite builds with `-Werror`. One line. Test-only: it does not affect the shipped binaries, so `vendor/` does not need it. |
+| `0030-add_test-const-correct-version-string-scanners.patch` | Ours — submitted as [LibreDWG#1350](https://github.com/LibreDWG/libredwg/pull/1350). `make check` does not COMPILE on gcc 15: `add_test.c` keeps `strchr()` results over `const` strings in plain `char *`, and the test suite builds with `-Werror`. One line. Test-only: it does not affect the shipped binaries, so `vendor/` does not need it. |
 
 ## Rebuilding vendor/libredwg
 
