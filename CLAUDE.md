@@ -146,7 +146,28 @@ Objetivo de largo plazo: que el ecosistema libre no dependa del conversor de ODA
 3. **L3 — Patches quirúrgicos** asistidos por IA sobre los fallos que L1/L2 destapen.
 4. **L4 — El writer r2013/r2018** (el hueco histórico, spec ODA pública como guía). Aporte mayor; solo encararlo cuando L1-L3 hayan construido confianza con el mantenedor.
 
-Si upstream tarda o rechaza: **fork amistoso** (`tuxiasumari/libredwg`) — IngeCAD empaqueta el fork, los PRs se siguen ofreciendo upstream, divergencia mínima. Verificar antes de contribuir grande si GNU exige cesión de copyright a la FSF.
+Si upstream tarda o rechaza: **fork amistoso** (`tuxiasumari/libredwg`) — IngeCAD empaqueta el fork, los PRs se siguen ofreciendo upstream, divergencia mínima.
+
+### ✅ Balance de la primera tanda (2026-07-16 → 2026-08-04)
+
+**Los 12 PRs (#1311–#1322) están TODOS en el master de upstream.** Verificado: nuestro
+`af364d4c` es ancestro de `origin/master`, y los siete commits del 2026-07-26 firmados por
+Reini Urban corresponden uno a uno a nuestros temas. Cuatro se fusionaron como PR
+(#1311, #1313, #1315, #1318); el resto los **reimplementó él a partir de nuestra
+descripción**. Consecuencia práctica: **el stack de 29 parches de `tools/libredwg-patches/`
+quedó obsoleto** — reconstruir `vendor/libredwg` desde un release reciente en vez de desde
+`0.14 + parches`.
+
+⚠️ **La pregunta del CLA está respondida: SÍ hace falta.** Textual del mantenedor al cerrar
+#1317 y #1320: *«Excellent. But too big. Needs a CLA»* / *«Fixed independently by myself,
+thanks to your description. Dont want to wait for the CLA»*. O sea: **los parches chicos
+entran como PR; los grandes NO se fusionan sin cesión de copyright a la FSF** — como mucho
+los reescribe el mantenedor y el crédito queda en el agradecimiento. Antes de encarar **L4
+(el writer r2013/r2018)**, que es por definición un aporte grande, hay que decidir si se
+firma el CLA de la FSF; si no, ese trabajo solo puede vivir en el fork.
+
+Cuatro PRs (#1312, #1314, #1319, #1321) siguen marcados OPEN aunque su contenido ya está
+aplicado — conviene cerrarlos apuntando al commit que los reemplaza.
 
 ---
 

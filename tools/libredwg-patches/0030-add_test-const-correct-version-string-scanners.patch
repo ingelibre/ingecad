@@ -1,0 +1,30 @@
+From: Marco Sumari Tellez <ing.sumari@gmail.com>
+Subject: [PATCH] add_test: const-correct the version-string scanners
+
+test_api_version() scans two const strings returned by
+dwg_api_version_string() and dwg_api_so_version(), but holds the results
+of strchr() in plain `char *`. GCC 15 diagnoses the lost qualifier and,
+because the test suite builds with -Werror, `make check` fails to compile
+before a single test runs:
+
+  add_test.c:1296:6: error: assignment discards 'const' qualifier from
+      pointer target type [-Werror=discarded-qualifiers]
+
+d0/d1/d2 are only ever read (assert, &d0[1], atoi), so making them const
+is enough; no cast and no copy needed.
+
+With this, `make check` on 0.14.8556 is 270 PASS / 0 FAIL on
+Ubuntu with gcc 15.2.0.
+---
+diff --git a/test/unit-testing/add_test.c b/test/unit-testing/add_test.c
+--- a/test/unit-testing/add_test.c
++++ b/test/unit-testing/add_test.c
+@@ -1283,7 +1283,7 @@ test_api_version (void)
+ {
+   const char *version = dwg_api_version_string ();
+   long i0, i1, i2;
+-  char *d0, *d1, *d2;
++  const char *d0, *d1, *d2;
+   const int major = dwg_api_version_major ();
+   const int minor = dwg_api_version_minor ();
+ 

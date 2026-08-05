@@ -10,6 +10,11 @@ a short list of unique LibreDWG bugs to hunt.
 Usage:
     python tools/dwg_bench.py <corpus_dir> [--out report.csv]
                               [--copy-fails <dir>] [--workers N]
+                              [--dwg2dxf <path>]
+
+--dwg2dxf benches a converter other than the bundled one, so the same corpus
+can be run against two LibreDWG builds and the CSVs diffed. That comparison is
+the only honest way to tell an upgrade from a regression.
 
 Categories:
     OK             converted and loaded, modelspace has entities
@@ -119,14 +124,26 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=Path("dwg_bench_report.csv"))
     ap.add_argument("--copy-fails", type=Path, default=None)
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument(
+        "--dwg2dxf", type=Path, default=None,
+        help="converter to bench (default: the bundled vendor/libredwg one). "
+             "Point it at another build to compare LibreDWG versions over the "
+             "same corpus — the only honest way to tell an upgrade from a "
+             "regression.")
     args = ap.parse_args()
 
-    from formats.dwg_bridge import find_dwg2dxf
+    if args.dwg2dxf is not None:
+        dwg2dxf = args.dwg2dxf.expanduser().resolve()
+        if not dwg2dxf.is_file():
+            print(f"dwg2dxf not found: {dwg2dxf}", file=sys.stderr)
+            return 1
+    else:
+        from formats.dwg_bridge import find_dwg2dxf
 
-    dwg2dxf = find_dwg2dxf()
-    if dwg2dxf is None:
-        print("dwg2dxf not found", file=sys.stderr)
-        return 1
+        dwg2dxf = find_dwg2dxf()
+        if dwg2dxf is None:
+            print("dwg2dxf not found", file=sys.stderr)
+            return 1
     print(f"converter: {dwg2dxf}", flush=True)
 
     files = sorted(args.corpus.rglob("*.dwg")) + sorted(args.corpus.rglob("*.DWG"))
