@@ -49,10 +49,24 @@ siguiente tanda de reportes **no necesita ningún plano de cliente**.
 | 1 | `READ ERROR 0x800` | plano propio (1,1 MB) |
 | 1 | `ERROR: Preview overflow 27176 + 119 > 27279` | `test-data/*/Helix.dwg` |
 
-**El objetivo más rentable es el primero**: el round-trip de los *ejemplos que
-upstream distribuye* produce un DXF que ezdxf no puede leer, en las cinco
-versiones de formato. Repro trivial, sin datos ajenos, y `SEQEND` es
-sospechoso de estar detrás también de las 3 de `JUMP or SEQEND`.
+### Diagnóstico de los tres primeros (2026-08-05)
+
+Resultaron ser **tres bugs distintos**, no uno:
+
+1. **`INSERT` con `66 1` sin `ATTRIB` ni `SEQEND`** (5 fallos, los `example_*_new.dwg`).
+   Reportado: [LibreDWG#1351](https://github.com/LibreDWG/libredwg/issues/1351).
+   El DWG sí trae el `ATTRIB` y el `SEQEND`; lo que está roto es la cadena:
+   `has_attribs=1` y `seqend` válido, pero `first_attrib`/`last_attrib` nulos. En
+   `out_dxf.c:2939` (rama r2000) eso provoca un `return` **después** de haber escrito
+   el `INSERT` con su `66 1` y **antes** de emitir el `SEQEND`. La rama de r2004+ no
+   tiene el problema. Ojo: los archivos se llaman `_2018` pero son **AC1015 (r2000)**.
+2. **`66 = 128`** en un `INSERT` pre-R13 — el indicador solo admite 0 o 1. Sin reportar.
+3. **Registros `JUMP` que se cuelan** en la sección `ENTITIES` del DXF (pre-R13);
+   `JUMP` no es una entidad DXF, es un marcador interno de los DWG R11/R12. Rompe la
+   secuencia `POLYLINE VERTEX… SEQEND`. Sin reportar.
+
+Reproducir el nº 1 no necesita ningún archivo: `dwgadd -o x.dwg examples/dwgadd.example`
+y luego `dwg2dxf`.
 
 ## Reproducir
 
