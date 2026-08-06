@@ -137,3 +137,80 @@ vez de depender de planos de clientes, así que corren en cualquier máquina.
 `~/Proyectos/externos/planos-con-fallo/` (fuera del repo, no se trackea) con los
 14 DWG, sus DXF de ODA, un SVG de cada uno, las miniaturas incrustadas y un
 `LEEME.txt` con el diagnóstico plano por plano.
+
+---
+
+# Cierre del día: dos bugs arreglados y `vendor/` recompilado
+
+Los dos que eran abordables sin la especificación del formato se arreglaron, no
+solo se reportaron.
+
+## PR #1358 — `decode.c`, secciones r2004 (cierra el #1294 de otro usuario)
+
+Dos capas:
+
+1. `num_sections * max_decomp_size` es una **estimación** superior del tamaño
+   descomprimido. Cada página trae su propio `StartOffset`, así que lo que el
+   buffer tiene que abarcar es `info->size`. En estos archivos la estimación sale
+   **1-3 páginas corta** y el archivo se rechaza entero. Ahora se reserva el mayor
+   de los dos.
+2. Y la de fondo: la guarda que decide si una página cabe comparaba contra el
+   tamaño **máximo** de página en vez del real. La última página es más corta, así
+   que `dirección + máximo` se pasa del buffer aunque `dirección + real` quepa. Y
+   al fallar en una sección comprimida el flujo cae a un `else` cuyo primer
+   chequeo es `info->compressed == 2` → **156 páginas buenas perdidas por la
+   última**. La expresión correcta ya estaba ocho líneas más abajo en ese mismo
+   `else`.
+
+Eso explica por qué **solo fallan algunos r2018**: con estimación generosa hay
+holgura y la guarda pasa de milagro; con páginas casi llenas no hay ninguna.
+
+De paso **refuta la hipótesis del hilo** (historial de borrados): `cerco
+perimetrico` tiene `HANDSEED` 0x1313 = 4883 para ~2222 entidades, ratio 2,2×
+—normal— y fallaba igual.
+
+## PR #1359 — `dwg.c`, referencias irresolubles (cierra el #1357)
+
+`get_next_owned_block_entity` devolvía `NULL` tanto para «se acabó la lista» como
+para «esta entrada no resuelve», y quien la llama hace `while (obj)`. Una sola
+referencia rota terminaba el layout y todo lo de atrás se perdía en silencio.
+
+**Tres funciones lo tenían**, no una: `get_first_owned_entity` (layout vacío
+desde el arranque), `get_next_owned_entity` (la usan `dwggrep` y `dwg2SVG`) y
+`get_next_owned_block_entity`.
+
+El daño gordo estaba **en los bloques**, invisible mirando solo el modelspace:
+`yanaquihua` 79 311 → 126 500 entidades escritas (decodificadas: 126 503) y
+`cofopri` 9 076 → 78 241 (de 78 244).
+
+## `vendor/libredwg` ya no es stock
+
+Recompilado con los cuatro parches. El stock que sustituye queda en
+`vendor/libredwg.stock-0.14.8556`. Procedimiento del README seguido entero,
+incluido el bench en los dos sentidos antes de cambiar los binarios (190 planos:
+`OK` 160 → 166, **0 regresiones**; el 4º parche no mueve el bench porque su
+ganancia está en `BLOCKS` y tras el saneado de handles, que el bench no cuenta).
+
+## Estado real de los 7 planos, medido con `load_dwg()`
+
+| Plano | ODA | Antes | Ahora |
+|---|---:|---:|---:|
+| `yanaquihua` | 11550 | 11550 | **11550** ✓ |
+| `cofopri` | 5725 | 5725 | **5725** ✓ |
+| `cerco perimetrico` | 2222 | 0 | **2222** ✓ |
+| `Planos Constructivos A` | 26583 | 0 | **26583** ✓ |
+| `Planos Constructivos B` | 26583 | 0 | **26583** ✓ |
+| `sedapar` | 10847 | 93 | **8588** (79%) |
+| `frontal` | 1039 | 0 | **0** |
+
+`sedapar` pierde 2259, que son exactamente las referencias cuyos objetos no se
+decodifican (~2000 errores `Invalid class index`): bug de fondo del decodificador,
+aparte. `frontal` sigue vacío: es el **#1355**, el único de los tres que necesita
+la especificación de la sección, y donde dos intentos propios fallaron.
+
+166 tests de IngeCAD en verde con los binarios nuevos.
+
+**Lección de método que costó un dato mal dado:** medir siempre por la ruta que
+usa el usuario (`load_dwg`, que va a `vendor/`), no por el árbol de compilación.
+Un arreglo que solo existe en `externos/build-libredwg/` no arregla nada para
+quien abre un plano en IngeCAD.

@@ -3,10 +3,35 @@
 IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 (`vendor/libredwg/bin`, gitignored).
 
-## Current state — 2026-08-04: the patch stack is GONE
+## Current state — 2026-08-06: FOUR patches, all submitted upstream
 
-`vendor/libredwg` is now built from the **stock `0.14.8556` release, with no
-patches at all**. Everything that used to live here is upstream.
+> **`vendor/libredwg` is no longer stock.** It is built from `0.14.8556` plus the
+> four fixes below, every one of them open as a PR upstream. Each exists because
+> it recovers real drawings that stock refuses; each goes away the moment
+> upstream merges it and we take a new release.
+>
+> The stock build it replaced is kept at `vendor/libredwg.stock-0.14.8556`.
+
+| Patch | PR | What it recovers |
+|---|---|---|
+| `dwg.spec` — `INSERT.has_attribs` pre-R13 normalized to 0/1 | [#1352](https://github.com/LibreDWG/libredwg/pull/1352) | invalid DXF group 66, no drawing lost |
+| `out_dxf.c` — R11 `JUMP` records not written as entities | [#1353](https://github.com/LibreDWG/libredwg/pull/1353) | 3 upstream test files, unreadable → readable |
+| `decode.c` — r2004 sections whose declared size exceeds the page estimate | [#1358](https://github.com/LibreDWG/libredwg/pull/1358) | `cerco perimetrico` + both `Planos Constructivos`: 0 → 2222 / 26583 / 26583 |
+| `dwg.c` — skip unresolvable owned entities instead of ending the layout | [#1359](https://github.com/LibreDWG/libredwg/pull/1359) | `sedapar` 93 → 8588; `yanaquihua` and `cofopri` +47k and +69k inside blocks |
+
+`#1358` also closes [#1294](https://github.com/LibreDWG/libredwg/issues/1294),
+another user's issue that had been stalled since June for want of a shareable
+reproducer.
+
+Rebuild recipe below. The tree it comes from is
+`~/Proyectos/externos/build-libredwg/libredwg-0.14.8556`, which carries the four
+patches and a `NO-ES-STOCK-LEEME.txt` saying so.
+
+## Before this: 2026-08-04, the first patch stack was dropped
+
+The state that this section replaces: `vendor/libredwg` was built from the
+**stock `0.14.8556` release, with no patches at all**, because everything in the
+first 29-patch stack had landed upstream.
 
 The twelve PRs from the first round (#1311–#1322) all landed: four merged as
 PRs (#1311, #1313, #1315, #1318), the rest reimplemented by Reini Urban from
