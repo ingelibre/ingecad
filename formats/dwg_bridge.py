@@ -70,15 +70,31 @@ def _run(cmd: list[str], out_path: Path) -> str:
     return proc.stderr or ""
 
 
+def _read_dxf_lines(dxf_path: Path) -> list[str]:
+    r"""Split an ASCII DXF into lines on "\n" only.
+
+    Not ``str.splitlines()``: that also breaks on \x0b, \x0c, \x1c-\x1e and
+    \x85, and latin-1 turns byte 0x85 into U+0085. Real drawings do carry that
+    byte (binary chunks, accented text), so splitlines() invents phantom lines
+    and every tag/value pair after the first one is off by one — which silently
+    turns a handle rewrite into a corrupted group code. Latin-1 plus a plain
+    "\n" split keeps the byte stream exact in both directions.
+    """
+    return dxf_path.read_bytes().decode("latin-1").split("\n")
+
+
+def _write_dxf_lines(dxf_path: Path, lines: list[str]) -> None:
+    dxf_path.write_bytes("\n".join(lines).encode("latin-1"))
+
+
 def _strip_null_handles(dxf_path: Path) -> None:
     """Drop (5, 0) tag pairs from an ASCII DXF.
 
     LibreDWG 0.14 emits ENDBLK entities with handle 0 ("Empty ENDBLK"
     warning), which ezdxf rejects even in recover mode; with the pair gone,
-    recover assigns a fresh handle. Latin-1 keeps the bytes lossless in both
-    directions. Track L: minimized, to be reported upstream.
+    recover assigns a fresh handle. Track L: minimized, to be reported upstream.
     """
-    lines = dxf_path.read_bytes().decode("latin-1").splitlines(keepends=True)
+    lines = _read_dxf_lines(dxf_path)
     out: list[str] = []
     dropped = 0
     i = 0
@@ -92,7 +108,7 @@ def _strip_null_handles(dxf_path: Path) -> None:
         i += 2
     out.extend(lines[i:])
     if dropped:
-        dxf_path.write_bytes("".join(out).encode("latin-1"))
+        _write_dxf_lines(dxf_path, out)
 
 
 def dwg_to_dxf(dwg_path: Path) -> Path:

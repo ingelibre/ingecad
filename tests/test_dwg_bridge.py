@@ -5,6 +5,8 @@
 vendor/ build."""
 from __future__ import annotations
 
+import re
+
 import ezdxf
 import pytest
 
@@ -153,3 +155,31 @@ def test_verify_dwg_flags_unreadable_output(tmp_path, monkeypatch):
     monkeypatch.setattr(dwg_bridge, "dwg_to_dxf", _boom)
     warnings = dwg_bridge.verify_dwg(src, tmp_path / "out.dwg", stderr="")
     assert any("could not re-open" in w for w in warnings)
+
+
+def test_dxf_lines_do_not_split_on_byte_0x85(tmp_path):
+    # str.splitlines() breaks on \x0b \x0c \x1c-\x1e \x85 too, and latin-1 maps
+    # byte 0x85 to U+0085. Real drawings carry it, and one phantom line shifts
+    # every tag/value pair after it -> a handle rewrite lands on a group code.
+    dxf = _dxf_with(2, tmp_path / "raw.dxf")
+    # into a free-text *value* line, so the tag structure itself stays intact
+    raw = dxf.read_bytes().replace(b"ANSI_1252", b"ANSI_1252\x85", 1)
+    assert b"\x85" in raw, "the fixture needs a value line to poison"
+    dxf.write_bytes(raw)
+
+    def anchors_off_pairing(lines: list[str]) -> int:
+        """How many '0'/<NAME> records land on an odd index (0 == pairing intact)."""
+        return sum(
+            1
+            for i in range(len(lines) - 1)
+            if lines[i].strip() == "0"
+            and re.fullmatch(r"[A-Z][A-Z0-9_$*]{1,30}", lines[i + 1].strip())
+            and i % 2
+        )
+
+    assert anchors_off_pairing(dwg_bridge._read_dxf_lines(dxf)) == 0
+    # ...whereas splitlines() invents a line at the 0x85 and shifts the rest
+    assert anchors_off_pairing(raw.decode("latin-1").splitlines(keepends=True)) > 0
+    # and the round trip stays byte-exact
+    dwg_bridge._write_dxf_lines(dxf, dwg_bridge._read_dxf_lines(dxf))
+    assert dxf.read_bytes() == raw
