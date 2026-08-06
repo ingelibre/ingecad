@@ -13,7 +13,8 @@ shows facets until a future re-regen at view scale (known trade-off, F1).
 """
 from __future__ import annotations
 
-from typing import Iterable
+import math
+from typing import Iterable, Optional
 
 from ezdxf import bbox
 from ezdxf.addons.drawing import Frontend, RenderContext
@@ -289,6 +290,27 @@ def frontend_config(flatten: float) -> Configuration:
     )
 
 
+def _declared_extents(document) -> Optional[tuple[float, float, float, float]]:
+    """The drawing's own $EXTMIN/$EXTMAX, or None when it is not usable.
+
+    Used by the packer to tell a corrupt coordinate from a far-off detail. On
+    every real file checked here these matched ODA File Converter exactly, even
+    when individual entities carried garbage.
+    """
+    try:
+        lo = document.doc.header["$EXTMIN"]
+        hi = document.doc.header["$EXTMAX"]
+    except Exception:
+        return None
+    try:
+        box = (float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1]))
+    except Exception:
+        return None
+    if not all(math.isfinite(v) for v in box):
+        return None
+    return box
+
+
 def build_scene_for_entities(document: Document, entities, flatten: float) -> Scene:
     """Pack just ``entities`` (freshly drawn ones) into a small overlay scene.
 
@@ -301,7 +323,7 @@ def build_scene_for_entities(document: Document, entities, flatten: float) -> Sc
     context = TolerantRenderContext(document.doc)
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
     frontend.draw_entities(entities)
-    return pack(backend.buckets)
+    return pack(backend.buckets, _declared_extents(document))
 
 
 def build_scene(document: Document, layout_name: str | None = None) -> Scene:
@@ -321,7 +343,7 @@ def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     context = TolerantRenderContext(document.doc)
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
     frontend.draw_layout(layout)
-    scene = pack(backend.buckets)
+    scene = pack(backend.buckets, _declared_extents(document))
     scene.skipped = list(frontend.skipped)
     scene.layout_name = layout_name
     scene.flatten = flatten

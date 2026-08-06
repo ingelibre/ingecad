@@ -330,29 +330,97 @@ def _pack_thick(buckets: list[Bucket], origin: tuple[float, float], extents) -> 
     return Batch(np.concatenate(chunks), ranges, np.vstack(bounds))
 
 
-def _world_extents(buckets: list[Bucket]) -> tuple[float, float, float, float]:
-    min_x = min_y = np.inf
-    max_x = max_y = -np.inf
-    for bucket in buckets:
-        for coords in (bucket.lines, bucket.triangles, bucket.points):
-            if not coords:
-                continue
-            xy = np.asarray(coords, dtype=np.float64).reshape(-1, 2)
-            min_x = min(min_x, xy[:, 0].min())
-            min_y = min(min_y, xy[:, 1].min())
-            max_x = max(max_x, xy[:, 0].max())
-            max_y = max(max_y, xy[:, 1].max())
+#: Coordinates at or beyond this magnitude cannot be geometry: AutoCAD writes
+#: ±1e20 into $EXTMIN/$EXTMAX to mean "no extents recorded", and no physical
+#: drawing reaches 1e15 (the Earth in micrometres is 4e13).
+_COORD_LIMIT = 1e15
+
+#: How far outside the drawing's own declared extents a vertex may still sit,
+#: as a multiple of that box's span. Generous, because $EXTMIN/$EXTMAX can lag
+#: behind the geometry — it only has to be tighter than the corruption.
+_HINT_MARGIN = 1.0
+
+#: Fraction of vertices the declared box must accept before we believe it.
+_HINT_MIN_KEPT = 0.95
+
+
+def _world_extents(
+    buckets: list[Bucket],
+    hint: Optional[tuple[float, float, float, float]] = None,
+) -> tuple[float, float, float, float]:
+    """World bounds, robust against corrupt coordinates.
+
+    One bad vertex used to swallow the drawing. Two real cases:
+    PTL-026-COFOPRI-01-OJAMOQ.dwg arrived with LAYOUT extents at 6.7e301 and
+    polyline vertices at 8.9e21, PLANTA Y PERFIL SEDAPAR.dwg with vertices at
+    7.6e19 and more around 1e9. Raw min/max framed a box astronomically wide,
+    Zoom Extents fitted *that*, and thousands of entities collapsed below one
+    pixel: a blank canvas holding a complete drawing.
+
+    Neither a magnitude cut nor a statistical one is enough on its own. The
+    corruption overlaps plausible values (1e5 in a UTM drawing), and clipping by
+    how far a vertex sits from the bulk throws away legitimate far-off details.
+    So the drawing's own ``$EXTMIN``/``$EXTMAX`` is the reference when it is
+    usable — the CAD application recorded it, and on every real file checked here
+    it matched ODA File Converter exactly. Without it, only the impossible
+    magnitudes go.
+
+    NaN and inf are always dropped; they poison min/max on contact.
+    """
+    lo_hi = None
+    if hint is not None and all(np.isfinite(hint)):
+        hx0, hy0, hx1, hy1 = hint
+        if hx1 > hx0 and hy1 > hy0 and max(abs(hx1 - hx0), abs(hy1 - hy0)) < _COORD_LIMIT:
+            mx = _HINT_MARGIN * (hx1 - hx0)
+            my = _HINT_MARGIN * (hy1 - hy0)
+            lo_hi = (hx0 - mx, hy0 - my, hx1 + mx, hy1 + my)
+
+    for use_hint in (lo_hi is not None, False):
+        min_x = min_y = np.inf
+        max_x = max_y = -np.inf
+        kept = total = 0
+        for bucket in buckets:
+            for coords in (bucket.lines, bucket.triangles, bucket.points):
+                if not coords:
+                    continue
+                xy = np.asarray(coords, dtype=np.float64).reshape(-1, 2)
+                keep = np.isfinite(xy).all(axis=1)
+                if use_hint:
+                    keep &= ((xy[:, 0] >= lo_hi[0]) & (xy[:, 0] <= lo_hi[2])
+                             & (xy[:, 1] >= lo_hi[1]) & (xy[:, 1] <= lo_hi[3]))
+                else:
+                    keep &= (np.abs(xy) < _COORD_LIMIT).all(axis=1)
+                total += len(xy)
+                n = int(keep.sum())
+                if not n:
+                    continue
+                kept += n
+                good = xy[keep]
+                min_x = min(min_x, good[:, 0].min())
+                min_y = min(min_y, good[:, 1].min())
+                max_x = max(max_x, good[:, 0].max())
+                max_y = max(max_y, good[:, 1].max())
+        # A declared box that rejects a real slice of the drawing is stale or
+        # wrong, not a filter: distrust it and fall back to magnitude only.
+        if not use_hint or (total and kept >= _HINT_MIN_KEPT * total):
+            break
+
     if min_x > max_x:  # nothing drawable
         return (0.0, 0.0, 0.0, 0.0)
     return (float(min_x), float(min_y), float(max_x), float(max_y))
 
 
-def pack(buckets: dict[tuple, Bucket]) -> Scene:
-    """Pack backend buckets into a Scene, origin at the drawing's center."""
+def pack(buckets: dict[tuple, Bucket],
+         extents_hint: Optional[tuple[float, float, float, float]] = None) -> Scene:
+    """Pack backend buckets into a Scene, origin at the drawing's center.
+
+    ``extents_hint`` is the drawing's declared ``$EXTMIN``/``$EXTMAX``, used to
+    tell corrupt coordinates from far-off geometry. See :func:`_world_extents`.
+    """
     # Stable order: by layer then color, so ranges group per layer for the
     # future visibility toggle.
     ordered = [buckets[k] for k in sorted(buckets)]
-    extents = _world_extents(ordered)
+    extents = _world_extents(ordered, extents_hint)
     origin = ((extents[0] + extents[2]) / 2.0, (extents[1] + extents[3]) / 2.0)
     hr: dict = {}
     scene = Scene(

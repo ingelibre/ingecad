@@ -177,3 +177,72 @@ def test_document_roundtrip_load(tmp_path):
     assert document.name == "plan.dxf"
     scene = build_scene(document)
     assert not scene.is_empty
+
+
+def test_extents_survive_a_corrupt_coordinate():
+    """One bad vertex must not swallow the drawing.
+
+    Real case (PTL-026-COFOPRI-01-OJAMOQ.dwg): the converter handed us LAYOUT
+    extents at 6.7e301 and polyline vertices at 8.9e21, so raw min/max framed a
+    box 10^301 across, Zoom Extents fitted that, and 5725 entities collapsed
+    below one pixel — a blank canvas holding a complete drawing.
+    """
+    doc = ezdxf.new("R2018", setup=True)
+    msp = doc.modelspace()
+    for i in range(60):                                   # the real drawing
+        msp.add_line((500_000.0 + i, 8_500_000.0), (500_000.0 + i, 8_500_050.0))
+    msp.add_line((6.7e301, 8.9e21), (500_000.0, 8_500_000.0))   # the corrupt one
+
+    min_x, min_y, max_x, max_y = build_scene(Document(doc)).extents
+    assert max_x - min_x < 10_000.0, "the corrupt vertex widened the frame"
+    assert max_y - min_y < 10_000.0
+    assert min_x == pytest.approx(500_000.0, abs=1.0)
+    assert max_y == pytest.approx(8_500_050.0, abs=1.0)
+    # ...and the origin stays on the drawing, so float32 keeps its precision.
+    ox, oy = build_scene(Document(doc)).origin
+    assert abs(ox - 500_030.0) < 200.0 and abs(oy - 8_500_025.0) < 200.0
+
+
+def test_extents_survive_non_finite_coordinates():
+    doc = ezdxf.new("R2018", setup=True)
+    msp = doc.modelspace()
+    for i in range(40):
+        msp.add_line((10.0 + i, 20.0), (10.0 + i, 60.0))
+    msp.add_line((float("nan"), float("inf")), (10.0, 20.0))
+
+    min_x, min_y, max_x, max_y = build_scene(Document(doc)).extents
+    assert all(math.isfinite(v) for v in (min_x, min_y, max_x, max_y))
+    assert max_x - min_x < 1000.0 and max_y - min_y < 1000.0
+
+
+def test_extents_keep_a_legitimate_far_detail():
+    """A real detail well away from the main body must stay inside the frame."""
+    doc = ezdxf.new("R2018", setup=True)
+    msp = doc.modelspace()
+    for i in range(60):
+        msp.add_line((0.0 + i, 0.0), (0.0 + i, 50.0))     # main body ~60 x 50
+    msp.add_circle((3_000.0, 2_000.0), 10.0)               # far, but real
+
+    min_x, min_y, max_x, max_y = build_scene(Document(doc)).extents
+    assert max_x >= 2_900.0, "the far detail was clipped out of the frame"
+    assert max_y >= 1_900.0
+
+
+def test_stale_declared_extents_are_distrusted():
+    """$EXTMIN/$EXTMAX that rejects a real slice of the drawing must not filter.
+
+    The declared box is a good corruption detector only while it still describes
+    the geometry. If it lags badly behind, believing it would push most of the
+    drawing outside Zoom Extents — worse than the problem it solves.
+    """
+    doc = ezdxf.new("R2018", setup=True)
+    msp = doc.modelspace()
+    for i in range(100):
+        msp.add_line((float(i), 0.0), (float(i), 100.0))
+    # Declared box covers only a sliver of it.
+    doc.header["$EXTMIN"] = (0.0, 0.0, 0.0)
+    doc.header["$EXTMAX"] = (2.0, 2.0, 0.0)
+
+    min_x, min_y, max_x, max_y = build_scene(Document(doc)).extents
+    assert max_x == pytest.approx(99.0, abs=1.0), "the stale box was believed"
+    assert max_y == pytest.approx(100.0, abs=1.0)
