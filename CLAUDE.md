@@ -172,10 +172,19 @@ abierto.
 
 ### ✅ Segunda tanda (2026-08-06) — detalle en `docs/bugs-libredwg-2026-08-06.md`
 
-Los 30 fallos del barrido quedaron clasificados: **2 PRs** (#1352, #1353), **3 issues vivos**
-(#1355, #1356, #1357), **1 retirado a propósito** (#1354, correcto pero de bajo valor) y
-**5 planos que no eran bugs** (2 bloqueados por objetos propietarios de Civil 3D —que
-BricsCAD tampoco abre—, 1 archivo dañado, 2 dibujos vacíos de verdad).
+Los 30 fallos del barrido quedaron clasificados y luego **arreglados**: **6 PRs**
+(#1352, #1353, #1358, #1359, #1360, #1362), **2 issues vivos sin parche** (#1356, #1361),
+**1 retirado a propósito** (#1354, correcto pero de bajo valor) y **5 planos que no eran
+bugs** (2 bloqueados por objetos propietarios de Civil 3D —que BricsCAD tampoco abre—,
+1 archivo dañado, 2 dibujos vacíos de verdad). El #1358 cierra además el
+[#1294](https://github.com/LibreDWG/libredwg/issues/1294), issue de otro usuario parado
+desde junio por falta de reproductor compartible.
+
+**De los 9 planos propios que fallaban, 8 abren ahora exactos contra ODA** (`frontal`,
+`cerco perimetrico`, los dos `Planos Constructivos`, `cofopri`, `yanaquihua`,
+`primer piso`, `segundo piso`). Solo queda `sedapar` al 79 %, y lo que le falta está
+identificado: las 2259 referencias cuyos objetos no se decodifican (~2000 errores
+`Invalid class index`).
 
 **El formato no es el problema:** R2018 falla en el 1,2% (7 de 606 planos), R2013 en el 0,2%.
 Los puntos flojos son **R2007 (8,3%) y R2000 (11,3%)**.
@@ -186,15 +195,27 @@ Converter** y contra **BricsCAD** antes de reportar. En este barrido eso descart
 (entidades del modelspace del DXF de cada conversor); mezclar medidas distintas produjo dos
 cifras erróneas que hubo que retractar.
 
-**`vendor/libredwg` sigue siendo stock**: los dos arreglos viven solo como PRs upstream. Lo
-que IngeCAD lleva es un saneado del DXF recibido (`_dedupe_handles`), no un parche al
-conversor — y se irá cuando #1356 aterrice.
+⚠️ **`vendor/libredwg` YA NO es stock.** Se compila de `0.14.8556` **más los 6 parches**,
+todos abiertos como PR upstream; cada uno desaparece en cuanto se fusione y tomemos un
+release nuevo. El árbol de build lleva un `NO-ES-STOCK-LEEME.txt` que lo advierte, y el
+detalle vive en `tools/libredwg-patches/README.md`. IngeCAD lleva además un saneado del DXF
+recibido (`_dedupe_handles`), que se irá cuando #1356 aterrice.
 
-**Siguiente objetivo:** #1355 y #1357 son los que cuestan planos reales. #1355 tiene la causa
-raíz publicada (el mapa de objetos necesita 3103 bytes y la sección declara 2592) pero el
-arreglo correcto exige la especificación de la sección; dos intentos propios fallaron y están
-documentados en el issue. #1357 es pequeño y de gran rendimiento: saltar las referencias
-irresolubles en vez de abandonar el layout recuperaría 8589 de 10847 entidades.
+**Los 6 parches comparten un patrón**: el código ya documentaba la conducta correcta y no la
+ejecutaba (tres líneas hermanas ya normalizaban el flag; el `else` de 8 líneas abajo ya
+calculaba el tamaño bueno; el `bit_read_UMC` fallido ya se detectaba y luego se ignoraba; el
+comentario ya prometía ±1000). Los **dos** arreglos que intenté deducir del formato —los dos
+para el #1355— fallaron. Regla de oro que salió de ahí: **buscar la contradicción interna del
+código antes de inventar semántica del formato.**
+
+**Y una regla de medición, que costó decirle dos veces a Marco que un plano abría cuando no:**
+un arreglo no está terminado hasta que está en `vendor/` y medido con `load_dwg()`. Medir en
+`externos/build-libredwg/` es trabajo en curso, no resultado — son binarios distintos.
+
+**Siguiente objetivo:** el bug de fondo de `sedapar` (los ~2000 `Invalid class index`) y el
+#1361 (`LWPOLYLINE` desincronizado a mitad de lista, sin parche todavía; IngeCAD lo sobrevive
+filtrando contra los `$EXTMIN`/`$EXTMAX` declarados). Pendiente menor propio: que
+`load_dwg()` avise en vez de mostrar lienzo blanco cuando el DXF llega truncado.
 
 ---
 

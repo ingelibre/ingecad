@@ -3,10 +3,10 @@
 IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 (`vendor/libredwg/bin`, gitignored).
 
-## Current state — 2026-08-06: FIVE patches, all submitted upstream
+## Current state — 2026-08-06: SIX patches, all submitted upstream
 
 > **`vendor/libredwg` is no longer stock.** It is built from `0.14.8556` plus the
-> five fixes below, every one of them open as a PR upstream. Each exists because
+> six fixes below, every one of them open as a PR upstream. Each exists because
 > it recovers real drawings that stock refuses; each goes away the moment
 > upstream merges it and we take a new release.
 >
@@ -19,6 +19,7 @@ IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 | `decode.c` — r2004 sections whose declared size exceeds the page estimate | [#1358](https://github.com/LibreDWG/libredwg/pull/1358) | `cerco perimetrico` + both `Planos Constructivos`: 0 → 2222 / 26583 / 26583 |
 | `dwg.c` — skip unresolvable owned entities instead of ending the layout | [#1359](https://github.com/LibreDWG/libredwg/pull/1359) | `sedapar` 93 → 8588; `yanaquihua` and `cofopri` +47k and +69k inside blocks |
 | `decode.c` — resync the object map when a modular char fails to parse | [#1360](https://github.com/LibreDWG/libredwg/pull/1360) | `frontal` 0 → 1039, identical to ODA |
+| `decode.c` — pre-R13 sentinel search widened to the ±1000 it documents | [#1362](https://github.com/LibreDWG/libredwg/pull/1362) | `primer piso` and `segundo piso`: no output at all → 1246 and 1459, identical to ODA |
 
 `#1358` also closes [#1294](https://github.com/LibreDWG/libredwg/issues/1294),
 another user's issue that had been stalled since June for want of a shareable
@@ -33,11 +34,18 @@ filtering against the drawing's declared `$EXTMIN`/`$EXTMAX`; see
 `render/batches.py::_world_extents`.
 
 Verified with `make check` 270 PASS / 0 FAIL, the 146 upstream DWGs re-converted
-identically, and a 190-drawing corpus sweep going `OK` 160 → 167 with zero
-regressions.
+identically, and a 190-drawing corpus sweep going `OK` 160 → 169 and
+`NO_OUTPUT` 3 → 1, with zero regressions.
+
+**All six make the code do what it already said about itself** — three sibling
+lines already normalized the flag (#1352), the `else` eight lines below already
+computed the right size (#1358), the failed `bit_read_UMC` was already detected
+and then ignored (#1360), the recovery path already existed and the comment
+already promised ±1000 (#1362). The two fixes I tried to invent from the format
+instead, both for #1355, both failed and are documented as such in that issue.
 
 Rebuild recipe below. The tree it comes from is
-`~/Proyectos/externos/build-libredwg/libredwg-0.14.8556`, which carries the five
+`~/Proyectos/externos/build-libredwg/libredwg-0.14.8556`, which carries the six
 patches plus `0030`, and a `NO-ES-STOCK-LEEME.txt` saying so. **Read that file
 before copying anything out of that tree.**
 

@@ -315,3 +315,115 @@ distintos: la app usa `vendor/`.
 `load_dwg()`.** Los pasos intermedios son trabajo en curso, no resultados. Y las
 tres veces que la cifra no se cumplía, quien lo cazó fue Marco abriendo el plano
 en la app.
+
+---
+
+# Sexto parche: los dos planos de SketchUp (PR #1362)
+
+Marco probó `11-segundo piso.dwg` en IngeCAD y no abría. Ni siquiera producía un
+DXF: `dwg2dxf` se rendía antes de escribir nada.
+
+```
+ERROR: DWG_SENTINEL_R11_LAYER_BEGIN not found at 67586
+ERROR: Failed to decode file .../segundo-piso.dwg 0x101
+```
+
+## El diagnóstico
+
+El centinela **sí está** en el archivo — 300 bytes antes de donde la dirección
+de tabla del encabezado lo pone. Y no es solo ese: en ese plano **todas** las
+tablas están corridas hacia atrás, cada una en distinta medida.
+
+| centinela | esperado en | está en | corrido |
+|---|---:|---:|---:|
+| `BLOCK_BEGIN` | 67286 | 67254 | −32 |
+| `LAYER_BEGIN` | 67586 | 67286 | **−300** |
+| `STYLE_BEGIN` | 67741 | 67586 | −155 |
+| `VIEW_BEGIN` | 67971 | 67363 | **−608** |
+
+## El arreglo ya estaba escrito
+
+`decode_preR13_sentinel` **ya tenía** la ruta de recuperación: si el centinela no
+está donde toca, lo busca alrededor, se reposiciona y sigue con un aviso. Pero la
+ventana:
+
+```c
+size_t pos = MAX (dat->byte, 200) - 200;
+size_t len = MIN (dat->size - dat->byte, 400);
+// search +- 1000 bytes around
+```
+
+±200 — mientras el comentario de la línea siguiente promete ±1000. Los −300 de
+`LAYER_BEGIN` quedaban fuera por 116 bytes, así que la recuperación nunca se
+disparaba y el archivo entero se perdía. Encima `len` se medía desde `dat->byte`
+aunque la búsqueda arrancaba 200 bytes antes, así que la ventana ni siquiera era
+simétrica.
+
+Ensanchada a los ±1000 que documenta, y `len` calculado desde `pos`. **Cuarto
+arreglo de los seis que consiste en hacer que el código cumpla lo que ya decía de
+sí mismo.**
+
+## Resultado, medido con `load_dwg()` sobre `vendor/`
+
+| Plano | antes | después | ODA |
+|---|---|---:|---:|
+| `10-primer piso.dwg` | ningún archivo | **1246** | 1246 |
+| `11-segundo piso.dwg` | ningún archivo | **1459** | 1459 |
+
+Exactos contra ODA los dos. Y la recuperación avisa de cada corrimiento, así que
+la rareza del archivo no se oculta:
+
+```
+Warning: DWG_SENTINEL_R11_LAYER_BEGIN not found at 67586, but at 67286
+```
+
+No perseguí *por qué* las direcciones están corridas en cantidades distintas: la
+ruta de recuperación existe justamente para no tener que entender eso archivo por
+archivo, y solo fallaba porque miraba en una ventana más chica que la que
+anunciaba. Queda dicho en el PR, por si upstream prefiere arreglar el cálculo de
+direcciones en su lugar.
+
+## Verificación
+
+- `make check`: 270 PASS / 0 FAIL / 0 SKIP, igual que el stock.
+- Los 146 DWG de `test/test-data` y `programs/` reconvertidos antes y después:
+  **146 idénticos, 0 peores**. Los r11 de upstream tienen sus centinelas donde el
+  encabezado dice, así que ninguno pasa por esta ruta.
+- Barrido de 190 planos: `NO_OUTPUT` 3 → 1, `OK` 167 → 169, cero regresiones.
+
+## Estado final de los 9 planos
+
+| Plano | ODA | IngeCAD |
+|---|---:|---:|
+| `frontal` | 1039 | **1039** ✓ |
+| `cerco perimetrico` | 2222 | **2222** ✓ |
+| `Planos Constructivos A` | 26583 | **26583** ✓ |
+| `Planos Constructivos B` | 26583 | **26583** ✓ |
+| `cofopri` | 5725 | **5725** ✓ |
+| `yanaquihua` | 11550 | **11550** ✓ |
+| `primer piso` | 1246 | **1246** ✓ |
+| `segundo piso` | 1459 | **1459** ✓ |
+| `sedapar` | 10847 | 8588 (79 %) |
+
+**Ocho de nueve exactos.** El único pendiente es `sedapar`, y lo que le falta
+está identificado: las 2259 referencias cuyos objetos no se decodifican
+(~2000 errores `Invalid class index`).
+
+## Balance de la tanda: 6 parches, 3 issues
+
+| # | Qué | Estado |
+|---|---|---|
+| [#1352](https://github.com/LibreDWG/libredwg/pull/1352) | `INSERT.has_attribs` pre-R13 sin normalizar | PR |
+| [#1353](https://github.com/LibreDWG/libredwg/pull/1353) | `JUMP` de R11 escrito como entidad | PR |
+| [#1358](https://github.com/LibreDWG/libredwg/pull/1358) | secciones r2004 rechazadas por su tamaño declarado — cierra el [#1294](https://github.com/LibreDWG/libredwg/issues/1294) de otro usuario | PR |
+| [#1359](https://github.com/LibreDWG/libredwg/pull/1359) | una referencia irresoluble abandonaba el layout entero | PR |
+| [#1360](https://github.com/LibreDWG/libredwg/pull/1360) | el mapa de objetos usaba la basura de un `bit_read_UMC` fallido | PR |
+| [#1362](https://github.com/LibreDWG/libredwg/pull/1362) | ventana del centinela pre-R13 de ±200 con comentario de ±1000 | PR |
+| [#1355](https://github.com/LibreDWG/libredwg/issues/1355) | el issue original de `frontal` | causa raíz corregida en público; la arregla el #1360 |
+| [#1356](https://github.com/LibreDWG/libredwg/issues/1356) | handles duplicados en el DXF de salida | abierto |
+| [#1361](https://github.com/LibreDWG/libredwg/issues/1361) | `LWPOLYLINE` desincronizado a mitad de lista | abierto, sin parche |
+
+Los **seis** parches nacieron del mismo patrón: el código ya documentaba la
+conducta correcta y no la ejecutaba. Los **dos** que intenté deducir del formato
+—los dos para el #1355— fallaron, y quedaron escritos en el issue para que nadie
+los repita.
