@@ -3,10 +3,10 @@
 IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 (`vendor/libredwg/bin`, gitignored).
 
-## Current state — 2026-08-06: FOUR patches, all submitted upstream
+## Current state — 2026-08-06: FIVE patches, all submitted upstream
 
 > **`vendor/libredwg` is no longer stock.** It is built from `0.14.8556` plus the
-> four fixes below, every one of them open as a PR upstream. Each exists because
+> five fixes below, every one of them open as a PR upstream. Each exists because
 > it recovers real drawings that stock refuses; each goes away the moment
 > upstream merges it and we take a new release.
 >
@@ -18,14 +18,28 @@ IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 | `out_dxf.c` — R11 `JUMP` records not written as entities | [#1353](https://github.com/LibreDWG/libredwg/pull/1353) | 3 upstream test files, unreadable → readable |
 | `decode.c` — r2004 sections whose declared size exceeds the page estimate | [#1358](https://github.com/LibreDWG/libredwg/pull/1358) | `cerco perimetrico` + both `Planos Constructivos`: 0 → 2222 / 26583 / 26583 |
 | `dwg.c` — skip unresolvable owned entities instead of ending the layout | [#1359](https://github.com/LibreDWG/libredwg/pull/1359) | `sedapar` 93 → 8588; `yanaquihua` and `cofopri` +47k and +69k inside blocks |
+| `decode.c` — resync the object map when a modular char fails to parse | [#1360](https://github.com/LibreDWG/libredwg/pull/1360) | `frontal` 0 → 1039, identical to ODA |
 
 `#1358` also closes [#1294](https://github.com/LibreDWG/libredwg/issues/1294),
 another user's issue that had been stalled since June for want of a shareable
-reproducer.
+reproducer. `#1360` corrects a root cause I had posted wrongly in
+[#1355](https://github.com/LibreDWG/libredwg/issues/1355).
+
+Still open and **not** patched here, because the fix needs more than a filter:
+[#1361](https://github.com/LibreDWG/libredwg/issues/1361) — `LWPOLYLINE` point
+arrays desynchronise mid-list, so 14% of `sedapar`'s vertices arrive near
+`DBL_MAX` (ODA reads all 1 026 048 of them cleanly). IngeCAD survives it by
+filtering against the drawing's declared `$EXTMIN`/`$EXTMAX`; see
+`render/batches.py::_world_extents`.
+
+Verified with `make check` 270 PASS / 0 FAIL, the 146 upstream DWGs re-converted
+identically, and a 190-drawing corpus sweep going `OK` 160 → 167 with zero
+regressions.
 
 Rebuild recipe below. The tree it comes from is
-`~/Proyectos/externos/build-libredwg/libredwg-0.14.8556`, which carries the four
-patches and a `NO-ES-STOCK-LEEME.txt` saying so.
+`~/Proyectos/externos/build-libredwg/libredwg-0.14.8556`, which carries the five
+patches plus `0030`, and a `NO-ES-STOCK-LEEME.txt` saying so. **Read that file
+before copying anything out of that tree.**
 
 ## Before this: 2026-08-04, the first patch stack was dropped
 
@@ -71,29 +85,6 @@ See `docs/bench-libredwg-2026-08-04.md`.
 |---|---|
 | `0030-add_test-const-correct-version-string-scanners.patch` | Ours — submitted as [LibreDWG#1350](https://github.com/LibreDWG/libredwg/pull/1350). `make check` does not COMPILE on gcc 15: `add_test.c` keeps `strchr()` results over `const` strings in plain `char *`, and the test suite builds with `-Werror`. One line. Test-only: it does not affect the shipped binaries, so `vendor/` does not need it. |
 
-## Second round — 2026-08-06
-
-Full write-up in `docs/bugs-libredwg-2026-08-06.md`. Two PRs and four issues out
-of the 1657-drawing sweep; **no patch of ours is carried in `vendor/` — the two
-fixes live only as upstream PRs**, so `vendor/libredwg` stays stock.
-
-| | What | Where |
-|---|---|---|
-| PR #1352 | `INSERT.has_attribs` pre-R13 emitted as `66 128` | `dwg.spec:749`, +1/−1 |
-| PR #1353 | R11 `JUMP` records written as DXF entities | `out_dxf.c`, +8/−0 |
-| #1354 | `REPEAT`/`ENDREP`/`LOAD` as entities | **closed by us**, low value |
-| #1355 | truncated DXF, exit status 0 — root cause posted | `AcDb:Handles` section 511 bytes short |
-| #1356 | duplicate handles make the file unloadable | worked around in `dwg_bridge.py` |
-| #1357 | one unresolvable reference ends the whole layout | `dwg.c:1610-1618` |
-
-Both PRs: `make check` **270 PASS / 0 FAIL**, and 146 DWGs re-converted with
-stock vs patched → 143 identical, 3 fixed, 0 worse.
-
-**If you build from `~/Proyectos/externos/build-libredwg/libredwg-0.14.8556`,
-read the `NO-ES-STOCK-LEEME.txt` inside it first** — that tree carries the two
-PR patches plus `0030`, so copying its binaries into `vendor/` would quietly
-ship them.
-
 ## Rebuilding vendor/libredwg
 
 ```sh
@@ -128,6 +119,10 @@ description and the credit stays in the thank-you. **L4 (the r2013/r2018
 writer) is by definition a big contribution** — decide whether to sign the FSF
 CLA before starting it, or accept that it can only live in the fork.
 
-Four PRs (#1312, #1314, #1319, #1321) are still marked OPEN although their
-content is already applied upstream; worth closing with a pointer to the
-commit that superseded them.
+Four PRs (#1312, #1314, #1319, #1321) that were still marked OPEN although
+already applied upstream were closed on 2026-08-04 pointing at the commit that
+superseded each. Nothing from the first round is left open.
+
+Note for the second round: Reini Urban has not committed since 2026-07-25, while
+Michal Josef Špaček, nameloCmaS and Saddam have. Silence on our threads is his
+absence, not a verdict — eight commits authored by us are already in master.

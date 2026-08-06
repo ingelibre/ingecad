@@ -214,3 +214,104 @@ la especificación de la sección, y donde dos intentos propios fallaron.
 usa el usuario (`load_dwg`, que va a `vendor/`), no por el árbol de compilación.
 Un arreglo que solo existe en `externos/build-libredwg/` no arregla nada para
 quien abre un plano en IngeCAD.
+
+---
+
+# Cierre real: cinco parches, `vendor/` recompilado, seis de siete planos abren
+
+## Los dos arreglos que faltaban
+
+**PR #1359 — `dwg.c`, referencias irresolubles (#1357).** `get_next_owned_block_entity`
+devolvía `NULL` tanto para «se acabó la lista» como para «esta entrada no resuelve»,
+y quien la llama hace `while (obj)`. Una sola referencia rota terminaba el layout.
+**Tres funciones lo tenían**: `get_first_owned_entity` (layout vacío desde el
+arranque), `get_next_owned_entity` (la usan `dwggrep` y `dwg2SVG`) y
+`get_next_owned_block_entity`. El daño gordo estaba **en los bloques**, invisible
+mirando solo el modelspace: `yanaquihua` 79 311 → 126 500 entidades escritas,
+`cofopri` 9 076 → 78 241.
+
+**PR #1360 — `decode.c`, el mapa de objetos (#1355).** Y aquí **mi diagnóstico
+anterior era falso**. Había publicado que el mapa necesitaba 3103 bytes contra
+2592 disponibles y que faltaba una página. Volcando el buffer y recorriendo las
+páginas con el mismo CRC:
+
+```
+pagina 1 @0     2033 bytes  CRC VALIDO   975 entradas, encajan exacto
+pagina 2 @2035   551 bytes  CRC VALIDO   195 entradas
+@2588              tamano 2              TERMINADOR
+```
+
+La sección **no está corta** y **no falta ninguna página**. Lo que hay son **dos
+bytes intrusos** en el byte 2173 que no pertenecen al flujo de pares
+`(handleoff, offset)`. `bit_read_UMC` falla ahí y el código **usa la basura igual**,
+fabricando un objeto de 4 202 513 bytes en un archivo de 61 KB. Resincronizando un
+byte más adelante se leen las 195 entradas y se termina **exacto** en el borde de
+la página — esa exactitud es la autovalidación.
+
+Mi primer intento resincronizaba ante las tres condiciones de «entrada inválida» y
+**rompió `Leader.dwg`** (10 → 0 entidades); dos de ellas son heurísticas que se
+disparan en entradas legibles. Refinado a resincronizar solo cuando `!handleoff`.
+
+La corrección está publicada en el #1355 retractando los números falsos.
+
+## Y un bug que no era de LibreDWG: el render
+
+`cofopri` cargaba sus 5725 entidades y se veía **en blanco**. `_world_extents`
+tomaba el mínimo y máximo crudos, y ese plano trae un `LAYOUT` con extensión en
+`6.7e+301`: `Zoom Extents` encuadraba 10³⁰¹ y todo quedaba bajo un píxel.
+
+Tres intentos, dos malos:
+
+| Intento | Por qué falló |
+|---|---|
+| Umbral fijo 1e20 | la basura de `sedapar` está en 7,6e19, justo debajo |
+| Percentiles 0,5–99,5 | `sedapar` tiene 1,16 % de vértices basura (66 368 de 5,7 M) |
+| Cuartiles + margen 100× | recortaba geometría lejana legítima — **lo cazó un test propio** |
+
+Lo que funciona es no inventar el criterio: usar los `$EXTMIN`/`$EXTMAX` que el
+propio CAD grabó, que **coinciden exactos con los de ODA en los cinco planos**
+aunque entidades individuales traigan basura. Con salvaguarda: si esa caja rechaza
+más del 5 % de los vértices está desactualizada y se desconfía de ella.
+
+**Los siete planos encuadran ahora exactamente lo que reporta ODA.**
+
+## Issue #1361, sin parche
+
+`LWPOLYLINE` se desincroniza a mitad de su lista de puntos: **14,4 % de los
+vértices** del modelspace de `sedapar` salen cerca de `DBL_MAX` (33 188 de
+231 138), mientras ODA lee sus 1 026 048 puntos sin uno malo. Cada polilínea va
+bien hasta un índice arbitrario y luego se rompe:
+
+```
+handle 11D  2541 puntos  correctos hasta 566,  corruptos del 567
+handle 124  8049 puntos  correctos hasta 2521, corruptos del 2522
+```
+
+Reportado con reproductor (ya adjunto en el #1356). IngeCAD lo sobrevive
+filtrando, pero no lo excusa.
+
+## Estado final de los 7 planos, medido con `load_dwg()`
+
+| Plano | ODA | IngeCAD |
+|---|---:|---:|
+| `frontal` | 1039 | **1039** ✓ |
+| `cerco perimetrico` | 2222 | **2222** ✓ |
+| `Planos Constructivos A` | 26583 | **26583** ✓ |
+| `Planos Constructivos B` | 26583 | **26583** ✓ |
+| `cofopri` | 5725 | **5725** ✓ |
+| `yanaquihua` | 11550 | **11550** ✓ |
+| `sedapar` | 10847 | 8588 (79 %) |
+
+A `sedapar` le faltan 2259, que son exactamente las referencias cuyos objetos no
+se decodifican (~2000 errores `Invalid class index`): el bug de fondo pendiente.
+
+## La lección que costó dos datos mal dados
+
+Le dije dos veces que un plano abría cuando no abría, porque medía en
+`externos/build-libredwg/` y lo contaba como si fuera IngeCAD. Son binarios
+distintos: la app usa `vendor/`.
+
+**Un arreglo no está terminado hasta que está en `vendor/` y medido con
+`load_dwg()`.** Los pasos intermedios son trabajo en curso, no resultados. Y las
+tres veces que la cifra no se cumplía, quien lo cazó fue Marco abriendo el plano
+en la app.
