@@ -46,6 +46,29 @@ See `docs/bench-libredwg-2026-08-04.md`.
 |---|---|
 | `0030-add_test-const-correct-version-string-scanners.patch` | Ours — submitted as [LibreDWG#1350](https://github.com/LibreDWG/libredwg/pull/1350). `make check` does not COMPILE on gcc 15: `add_test.c` keeps `strchr()` results over `const` strings in plain `char *`, and the test suite builds with `-Werror`. One line. Test-only: it does not affect the shipped binaries, so `vendor/` does not need it. |
 
+## Second round — 2026-08-06
+
+Full write-up in `docs/bugs-libredwg-2026-08-06.md`. Two PRs and four issues out
+of the 1657-drawing sweep; **no patch of ours is carried in `vendor/` — the two
+fixes live only as upstream PRs**, so `vendor/libredwg` stays stock.
+
+| | What | Where |
+|---|---|---|
+| PR #1352 | `INSERT.has_attribs` pre-R13 emitted as `66 128` | `dwg.spec:749`, +1/−1 |
+| PR #1353 | R11 `JUMP` records written as DXF entities | `out_dxf.c`, +8/−0 |
+| #1354 | `REPEAT`/`ENDREP`/`LOAD` as entities | **closed by us**, low value |
+| #1355 | truncated DXF, exit status 0 — root cause posted | `AcDb:Handles` section 511 bytes short |
+| #1356 | duplicate handles make the file unloadable | worked around in `dwg_bridge.py` |
+| #1357 | one unresolvable reference ends the whole layout | `dwg.c:1610-1618` |
+
+Both PRs: `make check` **270 PASS / 0 FAIL**, and 146 DWGs re-converted with
+stock vs patched → 143 identical, 3 fixed, 0 worse.
+
+**If you build from `~/Proyectos/externos/build-libredwg/libredwg-0.14.8556`,
+read the `NO-ES-STOCK-LEEME.txt` inside it first** — that tree carries the two
+PR patches plus `0030`, so copying its binaries into `vendor/` would quietly
+ship them.
+
 ## Rebuilding vendor/libredwg
 
 ```sh

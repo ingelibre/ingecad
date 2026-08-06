@@ -170,12 +170,31 @@ Los cuatro PRs que seguían abiertos sin motivo (#1312, #1314, #1319, #1321) se 
 el 2026-08-04** apuntando al commit que los reemplaza. De la primera tanda no queda ninguno
 abierto.
 
-**Siguiente objetivo, ya identificado** (`docs/bench-libredwg-2026-08-04.md`): con 0.14.8556
-el corpus da **98,2% utilizable sobre 1657 planos**, y de los 24 fallos que quedan **15 son
-archivos de prueba del propio LibreDWG** — públicos y minúsculos, así que se pueden reportar
-sin exponer ningún plano de cliente. El más rentable: el round-trip de
-`examples/example_{2004,2007,2010,2013,2018}_new.dwg` produce un DXF ilegible
-(`Expected DXF entity LWPOLYLINE or SEQEND`) en las cinco versiones de formato.
+### ✅ Segunda tanda (2026-08-06) — detalle en `docs/bugs-libredwg-2026-08-06.md`
+
+Los 30 fallos del barrido quedaron clasificados: **2 PRs** (#1352, #1353), **3 issues vivos**
+(#1355, #1356, #1357), **1 retirado a propósito** (#1354, correcto pero de bajo valor) y
+**5 planos que no eran bugs** (2 bloqueados por objetos propietarios de Civil 3D —que
+BricsCAD tampoco abre—, 1 archivo dañado, 2 dibujos vacíos de verdad).
+
+**El formato no es el problema:** R2018 falla en el 1,2% (7 de 606 planos), R2013 en el 0,2%.
+Los puntos flojos son **R2007 (8,3%) y R2000 (11,3%)**.
+
+**Lección de método, más valiosa que los bugs:** comparar siempre contra **ODA File
+Converter** y contra **BricsCAD** antes de reportar. En este barrido eso descartó 5 de 14
+«bugs» y evitó dos falsos positivos míos. Y medir con el **mismo criterio en los dos lados**
+(entidades del modelspace del DXF de cada conversor); mezclar medidas distintas produjo dos
+cifras erróneas que hubo que retractar.
+
+**`vendor/libredwg` sigue siendo stock**: los dos arreglos viven solo como PRs upstream. Lo
+que IngeCAD lleva es un saneado del DXF recibido (`_dedupe_handles`), no un parche al
+conversor — y se irá cuando #1356 aterrice.
+
+**Siguiente objetivo:** #1355 y #1357 son los que cuestan planos reales. #1355 tiene la causa
+raíz publicada (el mapa de objetos necesita 3103 bytes y la sección declara 2592) pero el
+arreglo correcto exige la especificación de la sección; dos intentos propios fallaron y están
+documentados en el issue. #1357 es pequeño y de gran rendimiento: saltar las referencias
+irresolubles en vez de abandonar el layout recuperaría 8589 de 10847 entidades.
 
 ---
 
