@@ -3,10 +3,10 @@
 IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 (`vendor/libredwg/bin`, gitignored).
 
-## Current state — 2026-08-06: SIX patches, all submitted upstream
+## Current state — 2026-08-06: SEVEN patches, all submitted upstream
 
 > **`vendor/libredwg` is no longer stock.** It is built from `0.14.8556` plus the
-> six fixes below, every one of them open as a PR upstream. Each exists because
+> seven fixes below, every one of them open as a PR upstream. Each exists because
 > it recovers real drawings that stock refuses; each goes away the moment
 > upstream merges it and we take a new release.
 >
@@ -20,32 +20,44 @@ IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 | `dwg.c` — skip unresolvable owned entities instead of ending the layout | [#1359](https://github.com/LibreDWG/libredwg/pull/1359) | `sedapar` 93 → 8588; `yanaquihua` and `cofopri` +47k and +69k inside blocks |
 | `decode.c` — resync the object map when a modular char fails to parse | [#1360](https://github.com/LibreDWG/libredwg/pull/1360) | `frontal` 0 → 1039, identical to ODA |
 | `decode.c` — pre-R13 sentinel search widened to the ±1000 it documents | [#1362](https://github.com/LibreDWG/libredwg/pull/1362) | `primer piso` and `segundo piso`: no output at all → 1246 and 1459, identical to ODA |
+| `decode_r2007.c` — Reed-Solomon decode uncompressed data pages too | [#1363](https://github.com/LibreDWG/libredwg/pull/1363) | `sedapar` 8588 → 10847 = ODA, and its 33 188 garbage vertices → 0. Closes #1361 |
 
 `#1358` also closes [#1294](https://github.com/LibreDWG/libredwg/issues/1294),
 another user's issue that had been stalled since June for want of a shareable
 reproducer. `#1360` corrects a root cause I had posted wrongly in
 [#1355](https://github.com/LibreDWG/libredwg/issues/1355).
 
-Still open and **not** patched here, because the fix needs more than a filter:
-[#1361](https://github.com/LibreDWG/libredwg/issues/1361) — `LWPOLYLINE` point
-arrays desynchronise mid-list, so 14% of `sedapar`'s vertices arrive near
-`DBL_MAX` (ODA reads all 1 026 048 of them cleanly). IngeCAD survives it by
-filtering against the drawing's declared `$EXTMIN`/`$EXTMAX`; see
-`render/batches.py::_world_extents`.
+`#1363` closes [#1361](https://github.com/LibreDWG/libredwg/issues/1361), which
+I had filed with the wrong diagnosis: I read the `LWPOLYLINE` point arrays as
+"desynchronising mid-list" when they were being read out of Reed-Solomon
+codewords. Corrected publicly in that issue. `render/batches.py::_world_extents`
+still filters against the drawing's declared `$EXTMIN`/`$EXTMAX` — it costs
+nothing and no longer has anything to catch on our corpus, but a viewer should
+not frame 10³⁰¹ because one vertex says so.
+
+Still open and **not** patched here:
+[#1356](https://github.com/LibreDWG/libredwg/issues/1356) — duplicate handles in
+the emitted DXF (1150 of them in `sedapar`, unchanged by #1363). IngeCAD works
+around it with `formats/dwg_bridge.py::_dedupe_handles`.
 
 Verified with `make check` 270 PASS / 0 FAIL, the 146 upstream DWGs re-converted
-identically, and a 190-drawing corpus sweep going `OK` 160 → 169 and
-`NO_OUTPUT` 3 → 1, with zero regressions.
+identically, a 190-drawing corpus sweep going `OK` 160 → 172 and `NO_OUTPUT`
+3 → 1 with zero regressions, and — for #1363, whose blast radius is exactly
+AC1021 because `decode_R2007` is reached only for `R_2007a..R_2007` — an A/B over
+**all 47 AC1021 drawings** in a 1657-file corpus: **+28 714 entities, 6 drawings
+gaining, 0 losing**.
 
-**All six make the code do what it already said about itself** — three sibling
-lines already normalized the flag (#1352), the `else` eight lines below already
-computed the right size (#1358), the failed `bit_read_UMC` was already detected
-and then ignored (#1360), the recovery path already existed and the comment
-already promised ±1000 (#1362). The two fixes I tried to invent from the format
+**Six of the seven make the code do what it already said about itself** — three
+sibling lines already normalized the flag (#1352), the `else` eight lines below
+already computed the right size (#1358), the failed `bit_read_UMC` was already
+detected and then ignored (#1360), the recovery path already existed and the
+comment already promised ±1000 (#1362), and `read_data_page()` already separated
+RS decoding from decompression while its one caller conflated them (#1363 — the
+`TODO` in that very comment asked the right question). The two fixes I tried to invent from the format
 instead, both for #1355, both failed and are documented as such in that issue.
 
 Rebuild recipe below. The tree it comes from is
-`~/Proyectos/externos/build-libredwg/libredwg-0.14.8556`, which carries the six
+`~/Proyectos/externos/build-libredwg/libredwg-0.14.8556`, which carries the seven
 patches plus `0030`, and a `NO-ES-STOCK-LEEME.txt` saying so. **Read that file
 before copying anything out of that tree.**
 

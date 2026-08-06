@@ -427,3 +427,182 @@ Los **seis** parches nacieron del mismo patrón: el código ya documentaba la
 conducta correcta y no la ejecutaba. Los **dos** que intenté deducir del formato
 —los dos para el #1355— fallaron, y quedaron escritos en el issue para que nadie
 los repita.
+
+---
+
+# Séptimo parche: `sedapar` al 100 % (PR #1363)
+
+El plano que faltaba. Estaba al 79 % —8588 de 10 847— y lo que le sobraba eran
+2258 referencias del *Model_Space* que no resolvían a ningún objeto, con ~2000
+errores `Invalid class index` de fondo.
+
+## Cómo se acorraló
+
+Cinco medidas, cada una descartando una explicación:
+
+**1. El mapa de objetos está completo y sano.** Instrumenté el bucle de
+`read_2007_section_handles` con `fprintf` directo (sin nivel de log): 20 páginas,
+los 38 029 bytes consumidos enteros, **los 20 CRC correctos**, y el cierre normal
+con la página terminadora de tamaño 2. **12 845 entradas.**
+
+**2. Pero solo 10 662 objetos sobreviven.** `dwg_decode_add_object` decrementa
+`num_objects` cuando falla. 12 845 − 10 662 = **2183 fallos**, que es casi
+exactamente los 2258 irresolubles.
+
+**3. Las direcciones del mapa son buenas.** Los deltas de handle son 1 en 12 815
+de 12 845 entradas, y los de dirección son positivos y monótonos, del orden de
+100–9000 bytes. No hay desincronización acumulada: dentro de una racha de 136
+fallos consecutivos hay objetos que sí decodifican.
+
+**4. Reimplementé el lector en Python** —MS modular, BS a nivel de bit— sobre la
+sección de objetos descomprimida (volcada a disco desde el propio LibreDWG) y
+reproduje exactamente sus números: en `addr=141275` sale `MSsize=24148,
+type=37521`, igual que su `ERROR: Invalid object type 37521`. Busqué una cabecera
+plausible en ±80 bytes alrededor de cada dirección fallida: **ningún
+desplazamiento común**. Las direcciones no están corridas; los bytes ahí no son
+una cabecera de objeto.
+
+**5. Entropía.** 7,87 bits/byte en las zonas fallidas contra 6,39 en las sanas.
+Eso no es un formato mal leído: es **paridad intercalada con datos.**
+
+## La correlación que lo cerró
+
+Miré los descriptores de página de `AcDb:AcDbObjects` (181 páginas) y separé por
+`comp_size == uncomp_size`:
+
+| páginas | objetos | fallan | |
+|---|---:|---:|---:|
+| comprimidas (45) | 10 586 | 0 | **0,0 %** |
+| **sin comprimir (136)** | 2259 | 2183 | **96,6 %** |
+
+Ni un objeto de página comprimida falló. Casi ninguno de página sin comprimir
+sobrevivió.
+
+## El bug
+
+`read_data_section()` lee «no comprimida» como «no codificada» y la copia cruda:
+
+```c
+      // only if compressed. TODO: Isn't there a compressed flag as with 2004+?
+      if (section_page->comp_size != section_page->uncomp_size)
+        read_data_page (...);
+      else
+        memcpy (&decomp[section_page->offset], &dat->chain[dat->byte],
+                section_page->uncomp_size);
+```
+
+Pero la codificación **Reed-Solomon es independiente de la compresión**, y
+`read_data_page()` ya las trata por separado: deshace el RS primero y solo
+después descomprime, `if (size_comp < size_uncomp)`. Una página sin comprimir
+puede seguir estando RS-codificada, y ese `memcpy` entrega las palabras de
+código: datos intercalados con paridad.
+
+**Séptimo parche, y el sexto que consiste en hacer que el código cumpla lo que ya
+decía de sí mismo** — el `TODO` de ese mismo comentario hacía la pregunta
+correcta.
+
+## Cómo distinguir las dos clases de página
+
+El descriptor no trae bandera de compresión (eso es lo que pregunta el `TODO`),
+así que `page->size` es la única evidencia: una página RS ocupa
+`ceil(comp_size/0xFB) * 0xFF` redondeado a múltiplo de 32, y una guardada tal
+cual solo se redondea a 32, así que sale más chica. Sobre las 192 páginas del
+archivo:
+
+| | páginas | `page->size` == tamaño RS |
+|---|---:|---|
+| comprimidas | 51 | sí, todas |
+| sin comprimir | 137 | sí, todas |
+| sin comprimir | 4 | **no** — `SummaryInfo`, `Preview`, `AppInfo`, `FileDepList` |
+
+Esas cuatro sí están en crudo, y se comprueba: leídas así dan
+`LASTSAVEDBY: "Nestor"`, `appinfo_name: "AppInfoDataList"`, `version: "17.0.54.0"`
+y fechas `TDCREATE`/`TDUPDATE` coherentes. El parche toma la ruta RS solo cuando
+el tamaño calza exacto; cualquier otra cosa conserva la copia cruda de hoy. Las
+comprimidas no cambian de comportamiento.
+
+Mi primer intento fue «RS-decodificar siempre», y rompió `SummaryInfo`
+(`decode_rs src overflow: 251 > 160`). El dato que faltaba era justamente ese: no
+todas las páginas están codificadas.
+
+## Resultado
+
+| | antes | después | ODA |
+|---|---:|---:|---:|
+| entidades del modelspace | 8588 | **10 847** | 10 847 |
+| vértices de `LWPOLYLINE` | 231 138 | **1 026 048** | 1 026 048 |
+| vértices cerca de `DBL_MAX` | 33 188 | **0** | 0 |
+| coordenadas sobre 1e12 | 45 316 | **0** | 40 |
+
+**Y esto cierra el #1361.** Lo había reportado diciendo que las listas de puntos
+de `LWPOLYLINE` «se desincronizaban a mitad de lista». No se desincronizaban: se
+leían de palabras de código Reed-Solomon. Por eso el índice de rotura parecía
+arbitrario — era donde la polilínea cruzaba a una página sin comprimir. Publicado
+como corrección en el issue.
+
+## Verificación
+
+- `make check`: **270 PASS / 0 FAIL / 0 SKIP**, igual que la línea base. Incluye
+  los dos tests unitarios de esta zona, `decompress_r2007` y
+  `read_data_section: rejects out-of-bounds page->offset`; los dos siguen pasando.
+- Los **146** DWG de `test/test-data` y `programs/`: **146 idénticos byte a byte,
+  0 peores**. Ninguno guarda una página de datos sin comprimir, así que ninguno
+  pasa por la ruta nueva.
+- `decode_R2007` solo se alcanza para `R_2007a..R_2007` —R2010+ va por
+  `decode_R2004`— así que el radio de impacto es **exactamente los AC1021**. A/B
+  sobre **los 47 AC1021** de un corpus de 1657 planos, mismo criterio en los dos
+  lados:
+
+  | | antes | después |
+  |---|---:|---:|
+  | entidades totales | 639 053 | **667 767** (+28 714) |
+  | planos que ganan | — | 6 |
+  | planos que pierden | — | **0** |
+  | sin cambio | — | 41 |
+
+  Tres de los seis pasan de `LOAD_FAIL` a `OK` (+11 550, +10 847, +5725); los
+  otros tres ganan entre 182 y 207 entidades.
+
+## Estado final: los 9 planos, medidos con `load_dwg()`
+
+| Plano | ODA | IngeCAD |
+|---|---:|---:|
+| `frontal` | 1039 | **1039** ✓ |
+| `cerco perimetrico` | 2222 | **2222** ✓ |
+| `Planos Constructivos A` | 26 583 | **26 583** ✓ |
+| `Planos Constructivos B` | 26 583 | **26 583** ✓ |
+| `cofopri` | 5725 | **5725** ✓ |
+| `yanaquihua` | 11 550 | **11 550** ✓ |
+| `primer piso` | 1246 | **1246** ✓ |
+| `segundo piso` | 1459 | **1459** ✓ |
+| **`sedapar`** | **10 847** | **10 847** ✓ |
+
+**Nueve de nueve exactos.** No queda ningún plano propio que LibreDWG lea peor
+que ODA.
+
+## Balance de la tanda: 7 parches, 1 issue
+
+| # | Qué | Estado |
+|---|---|---|
+| [#1352](https://github.com/LibreDWG/libredwg/pull/1352) | `INSERT.has_attribs` pre-R13 sin normalizar | PR |
+| [#1353](https://github.com/LibreDWG/libredwg/pull/1353) | `JUMP` de R11 escrito como entidad | PR |
+| [#1358](https://github.com/LibreDWG/libredwg/pull/1358) | secciones r2004 rechazadas por su tamaño declarado — cierra el [#1294](https://github.com/LibreDWG/libredwg/issues/1294) de otro usuario | PR |
+| [#1359](https://github.com/LibreDWG/libredwg/pull/1359) | una referencia irresoluble abandonaba el layout entero | PR |
+| [#1360](https://github.com/LibreDWG/libredwg/pull/1360) | el mapa de objetos usaba la basura de un `bit_read_UMC` fallido | PR |
+| [#1362](https://github.com/LibreDWG/libredwg/pull/1362) | ventana del centinela pre-R13 de ±200 con comentario de ±1000 | PR |
+| [#1363](https://github.com/LibreDWG/libredwg/pull/1363) | páginas r2007 sin comprimir copiadas sin deshacer el Reed-Solomon — cierra el #1361 | PR |
+| [#1356](https://github.com/LibreDWG/libredwg/issues/1356) | handles duplicados en el DXF de salida | **el único que queda abierto** |
+
+## Lo que enseñó este bug
+
+Los cinco anteriores salieron de leer el código buscando su propia contradicción.
+Este no: el código no se contradecía en ninguna línea visible, el `TODO` admitía
+la duda y ya está. Salió de **medir y partir la población**: separar los objetos
+por la clase de página en la que caen y ver 0,0 % contra 96,6 %. Cuando el código
+no delata la causa, la delata la correlación — pero hay que tener la variable
+correcta para cruzar, y esa la dio la entropía (7,87 contra 6,39), que dijo
+«paridad», no «formato mal leído».
+
+Y el primer intento —RS-decodificar todo— falló y fue útil: el error
+`decode_rs src overflow: 251 > 160` señaló las cuatro páginas que de verdad están
+en crudo, que es lo que hizo falta para escribir la condición bien.
