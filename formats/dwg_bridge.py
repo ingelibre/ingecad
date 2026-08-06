@@ -111,6 +111,93 @@ def _strip_null_handles(dxf_path: Path) -> None:
         _write_dxf_lines(dxf_path, out)
 
 
+#: Sections whose objects carry a handle in group 5. HEADER is excluded on
+#: purpose: there group 5 is the *value* of $HANDSEED, not an object handle.
+_HANDLE_SECTIONS = frozenset({"TABLES", "BLOCKS", "ENTITIES", "OBJECTS"})
+
+#: Handles above this are already corrupt (real ones stay far below), so they
+#: must not drag the fresh-handle counter into nonsense.
+_MAX_SANE_HANDLE = 1 << 32
+
+
+def _dedupe_handles(dxf_path: Path) -> int:
+    """Give a fresh handle to objects that reuse one; returns how many.
+
+    LibreDWG emits some objects (LAYOUT, GROUP, ACDBPLACEHOLDER...) with a
+    handle that already belongs to a table record. Handles must be unique, so
+    ezdxf resolves the handle to whichever object it read *last*, and one
+    collision is enough to lose the whole drawing: when handle 2 (the
+    ``*Model_Space`` BLOCK_RECORD) is stolen, ezdxf reports either
+    ``expected BLOCK_RECORD(#2) for layout 'Model'`` or
+    ``Invalid DXF attribute "paperspace" for entity LAYOUT`` and refuses the file.
+
+    The first user of a handle keeps it — table records are written before the
+    OBJECTS section, so the first one is the legitimate owner — and later
+    claimants are renumbered above every handle in the file. Anything that
+    referenced a renumbered object was already ambiguous, so nothing that
+    resolved before stops resolving.
+
+    Reported upstream as LibreDWG#1356.
+    """
+    lines = _read_dxf_lines(dxf_path)
+
+    # Pass 1: locate each object's handle line, and the $HANDSEED value line.
+    spots: list[tuple[int, str]] = []  # (index of the value line, handle)
+    seed_at: Optional[int] = None
+    section: Optional[str] = None
+    expecting = False  # a 0/NAME was just seen, its group 5 is still pending
+    i = 0
+    while i + 1 < len(lines):
+        code, value = lines[i].strip(), lines[i + 1].strip()
+        if code == "0":
+            if value == "ENDSEC":
+                section = None
+            expecting = value not in ("SECTION", "ENDSEC", "EOF")
+        elif code == "2" and section is None:
+            section = value  # the 2/<name> right after 0/SECTION
+        elif code == "9" and value == "$HANDSEED" and i + 3 < len(lines):
+            seed_at = i + 3 if lines[i + 2].strip() == "5" else None
+        elif code == "5" and expecting and section in _HANDLE_SECTIONS:
+            spots.append((i + 1, value))
+            expecting = False
+        i += 2
+
+    def as_int(handle: str) -> Optional[int]:
+        try:
+            return int(handle, 16)
+        except ValueError:
+            return None
+
+    # Pass 2: keep the first claimant, renumber the rest.
+    seen: set[str] = set()
+    collisions: list[int] = []
+    for idx, handle in spots:
+        if handle in seen:
+            collisions.append(idx)
+        else:
+            seen.add(handle)
+    if not collisions:
+        return 0
+
+    used = {h for _, h in spots}
+    sane = [n for n in (as_int(h) for _, h in spots) if n is not None and n < _MAX_SANE_HANDLE]
+    nxt = (max(sane) if sane else 0) + 1
+    for idx in collisions:
+        while format(nxt, "X") in used:
+            nxt += 1
+        fresh = format(nxt, "X")
+        used.add(fresh)
+        lines[idx] = fresh
+        nxt += 1
+
+    # Keep $HANDSEED above everything we handed out, or a later writer collides.
+    if seed_at is not None:
+        lines[seed_at] = format(nxt, "X")
+
+    _write_dxf_lines(dxf_path, lines)
+    return len(collisions)
+
+
 def dwg_to_dxf(dwg_path: Path) -> Path:
     """Convert a DWG to a temporary DXF; returns the DXF path.
 
@@ -126,6 +213,7 @@ def dwg_to_dxf(dwg_path: Path) -> Path:
     out_dxf = out_dir / "converted.dxf"
     _run([str(tool), "-y", "-o", str(out_dxf), str(dwg_path)], out_dxf)
     _strip_null_handles(out_dxf)
+    _dedupe_handles(out_dxf)
     return out_dxf
 
 

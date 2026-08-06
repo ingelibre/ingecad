@@ -157,6 +157,57 @@ def test_verify_dwg_flags_unreadable_output(tmp_path, monkeypatch):
     assert any("could not re-open" in w for w in warnings)
 
 
+def _steal_handle(dxf_path, dxftype: str, victim_handle: str) -> None:
+    """Rewrite the handle of the first ``dxftype`` object to ``victim_handle``.
+
+    Reproduces LibreDWG#1356 without needing a real drawing: two objects end up
+    sharing a handle, so ezdxf resolves it to whichever it read last.
+    """
+    lines = dxf_path.read_bytes().decode("latin-1").split("\n")
+    i = 0
+    while i + 1 < len(lines):
+        if lines[i].strip() == "0" and lines[i + 1].strip() == dxftype:
+            j = i + 2
+            while j + 1 < len(lines) and lines[j].strip() != "0":
+                if lines[j].strip() == "5":
+                    lines[j + 1] = victim_handle
+                    dxf_path.write_bytes("\n".join(lines).encode("latin-1"))
+                    return
+                j += 2
+        i += 2
+    raise AssertionError(f"no {dxftype} found to corrupt")
+
+
+def test_dedupe_handles_recovers_a_stolen_modelspace_handle(tmp_path):
+    # The real killer of LibreDWG#1356: an OBJECTS-section object takes the
+    # handle of the *Model_Space BLOCK_RECORD, and the whole file stops loading.
+    doc = ezdxf.new("R2018")
+    msp = doc.modelspace()
+    for i in range(7):
+        msp.add_line((float(i), 0.0), (float(i), 1.0))
+    doc.groups.new("G1").extend(msp.query("LINE")[:2])
+    ms_handle = doc.block_records.get("*Model_Space").dxf.handle
+
+    dxf = tmp_path / "stolen.dxf"
+    doc.saveas(dxf)
+    _steal_handle(dxf, "GROUP", ms_handle)
+
+    with pytest.raises(ezdxf.DXFError):
+        ezdxf.readfile(dxf)
+
+    assert dwg_bridge._dedupe_handles(dxf) == 1
+    assert len(ezdxf.readfile(dxf).modelspace().query("LINE")) == 7
+    # Idempotent: a repaired file has nothing left to renumber.
+    assert dwg_bridge._dedupe_handles(dxf) == 0
+
+
+def test_dedupe_handles_leaves_a_clean_file_untouched(tmp_path):
+    dxf = _dxf_with(4, tmp_path / "clean.dxf")
+    before = dxf.read_bytes()
+    assert dwg_bridge._dedupe_handles(dxf) == 0
+    assert dxf.read_bytes() == before  # not rewritten at all
+
+
 def test_dxf_lines_do_not_split_on_byte_0x85(tmp_path):
     # str.splitlines() breaks on \x0b \x0c \x1c-\x1e \x85 too, and latin-1 maps
     # byte 0x85 to U+0085. Real drawings carry it, and one phantom line shifts
