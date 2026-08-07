@@ -92,8 +92,7 @@ class PrintDialog(QDialog):
             path, self.paper.currentText(),
             landscape=self.orientation.currentData())
         self._plot_on(printer)
-        self.window.statusBar().showMessage(
-            tr("PDF saved: {p}", p=path), 5000)
+        self.window.command_line.echo(tr("PDF saved: {p}", p=path))
         self.accept()
 
     def _to_printer(self) -> None:

@@ -102,6 +102,13 @@ def main() -> int:
     from views.main_window import MainWindow
 
     window = MainWindow()
+    # Show before opening, not after. A double-clicked drawing can take
+    # seconds, and the window must already be on screen for that wait to be
+    # visible at all. It also keeps the status bar honest: QStatusBar only
+    # hides the coordinate readout for a message if the readout is visible
+    # when the message arrives, so opening first painted the "Opening..."
+    # text underneath the coordinates, both illegible.
+    window.show()
     # A document passed on the command line (the OS file association's
     # double-click hands it as argv[1]) opens right away; otherwise start with
     # a blank drawing, like AutoCAD's Drawing1, so the panels and commands work
@@ -114,7 +121,6 @@ def main() -> int:
             opened = True
     if not opened:
         window.new_document()
-    window.show()
     return app.exec()
 
 

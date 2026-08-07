@@ -504,7 +504,7 @@ class MainWindow(QMainWindow):
                  "ortho": tr("Ortho"), "polar": tr("Polar"),
                  "lwt": tr("Lineweight display")}
         state = tr("on") if value else tr("off")
-        self.statusBar().showMessage(f"{names[which]}: {state}", 2000)
+        self.command_line.echo(f"{names[which]}: {state}")
 
     def _update_mode_buttons(self) -> None:
         for key, b in self._mode_buttons.items():
@@ -882,7 +882,14 @@ class MainWindow(QMainWindow):
         self._layout_tab_bar.setSpacing(1)
         self.statusBar().addWidget(self._layout_tab_host)
 
-        # Coordinate readout — the classic AutoCAD tracker.
+        # Coordinate readout — the classic AutoCAD tracker. It doubles as the
+        # progress line while a drawing opens: see _set_busy. Nothing else may
+        # write here: notices ("Saved x", "Opened x", F8 toggles) go to the
+        # command line, which is where an AutoCAD user reads them and which
+        # keeps them in the history instead of expiring after five seconds.
+        # A QStatusBar temporary message would hide this label, so any use of
+        # showMessage() costs the coordinate readout for as long as it shows.
+        self._busy_text = ""
         self._coords_label = QLabel("0.0000, 0.0000")
         self._coords_label.setMinimumWidth(220)
         self.statusBar().addWidget(self._coords_label)
@@ -936,7 +943,22 @@ class MainWindow(QMainWindow):
                 tr("Viewing layout \"{n}\" — editing in paper space arrives "
                    "in v0.2.", n=name))
 
+    def _set_busy(self, text: str) -> None:
+        """Show (or clear, with "") a long operation on the coordinates line.
+
+        Progress goes where the coordinates go, on purpose: there is one text
+        in that spot at a time and never two competing for the same pixels.
+        A status bar *message* cannot be used for it — QStatusBar paints the
+        message over the whole left area and only hides the widgets underneath
+        when they happen to be visible already, so it collides at startup.
+        And there is nothing to track while the drawing is still loading.
+        """
+        self._busy_text = text
+        self._coords_label.setText(text or "0.0000, 0.0000")
+
     def _on_cursor_moved(self, wx: float, wy: float) -> None:
+        if self._busy_text:
+            return          # the coordinates line is showing progress
         self._coords_label.setText(f"{wx:.4f}, {wy:.4f}")
 
     # -- documents -------------------------------------------------------------
@@ -952,7 +974,7 @@ class MainWindow(QMainWindow):
 
     def _save_as_dialog(self) -> None:
         if self.document is None:
-            self.statusBar().showMessage(tr("Nothing to save yet"), 4000)
+            self.command_line.echo(tr("Nothing to save yet"))
             return
         filename, selected = QFileDialog.getSaveFileName(
             self,
@@ -978,10 +1000,10 @@ class MainWindow(QMainWindow):
         if engine == "libredwg":
             # r2000 opens in every AutoCAD/BricsCAD since 2000. Paperspace
             # layout settings are simplified on the way out (older container).
-            self.statusBar().showMessage(
-                tr("Saved {name} (DWG r2000)", name=path.name), 5000)
+            self.command_line.echo(
+                tr("Saved {name} (DWG r2000)", name=path.name))
         else:
-            self.statusBar().showMessage(tr("Saved {name}", name=path.name), 5000)
+            self.command_line.echo(tr("Saved {name}", name=path.name))
         # Verified save: the file is written either way, but if the DWG did not
         # check out, tell the user up front (non-blocking) and offer DXF, which
         # is always exact. Never leave a possibly-bad DWG shipped silently.
@@ -1010,10 +1032,10 @@ class MainWindow(QMainWindow):
                 )
                 return
         if self._open_thread is not None:
-            self.statusBar().showMessage(tr("Still opening the previous drawing..."), 4000)
+            self.command_line.echo(tr("Still opening the previous drawing..."))
             return
         self._opening_name = path.name
-        self.statusBar().showMessage(tr("Opening {name}...", name=path.name))
+        self._set_busy(tr("Opening {name}...", name=path.name))
         thread = QThread(self)
         worker = _OpenWorker(path)
         worker.moveToThread(thread)
@@ -1029,6 +1051,7 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def _on_open_done(self, document: Document, scene) -> None:
+        self._set_busy("")
         self.document = document
         # the open may have fallen back to a paper layout (empty modelspace)
         self._active_layout = scene.layout_name or "Model"
@@ -1044,22 +1067,18 @@ class MainWindow(QMainWindow):
             self._refresh_props_toolbar()
         self.setWindowTitle(f"IngeCAD — {document.name}")
         if scene.layout_name:
-            self.statusBar().showMessage(
+            self.command_line.echo(
                 tr("Opened {name} — showing layout \"{layout}\" (model space is empty)",
-                   name=document.name, layout=scene.layout_name),
-                10000,
-            )
+                   name=document.name, layout=scene.layout_name))
         elif scene.skipped:
-            self.statusBar().showMessage(
+            self.command_line.echo(
                 tr("Opened {name} — {count} damaged entities could not be drawn",
-                   name=document.name, count=len(scene.skipped)),
-                10000,
-            )
+                   name=document.name, count=len(scene.skipped)))
         else:
-            self.statusBar().showMessage(tr("Opened {name}", name=document.name), 5000)
+            self.command_line.echo(tr("Opened {name}", name=document.name))
 
     def _on_open_failed(self, error: str) -> None:
-        self.statusBar().clearMessage()
+        self._set_busy("")
         QMessageBox.warning(
             self,
             tr("Open Drawing"),
@@ -1067,6 +1086,10 @@ class MainWindow(QMainWindow):
         )
 
     def _on_open_thread_finished(self) -> None:
+        # Only the progress line is ours to clear here; the temporary message
+        # is the "Opened X" confirmation _on_open_done just posted, and this
+        # runs microseconds later -- clearing it wiped it before it was read.
+        self._set_busy("")
         if self._open_thread is not None:
             self._open_thread.deleteLater()
         self._open_thread = None

@@ -326,3 +326,66 @@ def test_polyline_midgrip_moves_segment(qapp):
     assert round(pts[0][1], 1) == -8.0 and round(pts[1][1], 1) == -8.0
     assert (round(pts[2][0]), round(pts[2][1])) == (10, 10)
     win.close()
+
+
+def test_progress_replaces_the_coordinates_instead_of_overlapping(qapp):
+    """The status bar must never hold two texts in the same pixels.
+
+    A drawing opened from the command line (double-clicked .dwg) used to post
+    "Opening X..." as a status bar message before the window was shown.
+    QStatusBar hides the widgets under a message only if they are visible when
+    it arrives, so the readout came back on show() and the two texts were
+    painted on top of each other, both illegible.
+    """
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    qapp.processEvents()
+
+    win._set_busy("Opening sedapar.dwg...")
+    assert win._coords_label.text() == "Opening sedapar.dwg..."
+    # A cursor move must not overwrite the progress line.
+    win.viewport.cursorMoved.emit(1.0, 2.0)
+    qapp.processEvents()
+    assert win._coords_label.text() == "Opening sedapar.dwg..."
+    # No competing status bar message while busy.
+    assert win.statusBar().currentMessage() == ""
+
+    win._set_busy("")
+    win.viewport.cursorMoved.emit(1.0, 2.0)
+    qapp.processEvents()
+    assert win._coords_label.text() == "1.0000, 2.0000"
+
+
+def test_argv_drawing_opens_after_the_window_is_shown():
+    """main() must show the window before opening argv[1], not after.
+
+    The wait for a big drawing has to be visible, and posting a status
+    message before show() is what put two texts in the coordinate slot.
+    """
+    import inspect
+
+    import main as entry
+
+    src = inspect.getsource(entry.main)
+    assert src.index("window.show()") < src.index("window.open_path(doc)")
+
+
+def test_the_coordinate_slot_is_never_taken_by_a_notice():
+    """Notices go to the command line; the status bar keeps the readout.
+
+    QStatusBar hides the coordinate label for as long as a temporary message
+    shows, so a five-second "Saved x" costs five seconds of the readout. The
+    only writer of that slot is _set_busy.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    offenders = []
+    for name in ("views/main_window.py", "views/print_dialog.py"):
+        for n, line in enumerate(
+                (root / name).read_text(encoding="utf-8").splitlines(), 1):
+            if "showMessage" in line and not line.lstrip().startswith("#"):
+                offenders.append(f"{name}:{n}")
+    assert offenders == [], f"use command_line.echo instead: {offenders}"
