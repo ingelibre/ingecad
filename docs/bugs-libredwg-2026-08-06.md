@@ -606,3 +606,109 @@ correcta para cruzar, y esa la dio la entropía (7,87 contra 6,39), que dijo
 Y el primer intento —RS-decodificar todo— falló y fue útil: el error
 `decode_rs src overflow: 251 > 160` señaló las cuatro páginas que de verdad están
 en crudo, que es lo que hizo falta para escribir la condición bien.
+
+---
+
+# Octavo parche: el issue #767 de otro usuario, abierto desde 2023 (PR #1364)
+
+Con los nueve planos propios resueltos, el siguiente frente son los issues de
+otros. El **#767** salta a la vista porque el síntoma es primo del de `segundo
+piso`:
+
+```
+ERROR: DWG_SENTINEL_R11_VIEW_BEGIN not found at 34056
+ERROR: Failed to decode file ... 0x100
+```
+
+Mi PR #1362 **no** lo arregla: ahí los centinelas están corridos 300 bytes, acá
+no están. Pero el reproductor es público y el hilo tiene una pista del
+mantenedor de 2023: *«Maybe check against the natural address for the sentinel,
+when the table.address fails.»*
+
+## Qué le falta al archivo
+
+Busqué las 22 constantes de centinela R11 dentro del archivo, en Python. Faltan
+seis:
+
+| centinela | ¿está? |
+|---|---|
+| `VIEW_BEGIN`, `VIEW_END` | **no** |
+| `UCS_BEGIN`, `UCS_END` | **no** |
+| `VPORT_BEGIN` | **no** |
+| `VPORT_END` | sí, en `0x8518` |
+| `APPID_BEGIN` | **no** |
+| `APPID_END` | sí, en `0x854D` |
+| `BLOCK`, `LAYER`, `STYLE`, `LTYPE`, `DIMSTYLE`, `VX` | sí, los dos |
+
+VIEW, UCS y VPORT son las tres tablas vacías, y el encabezado les da **la misma
+dirección** (`0x8518`). El único centinela escrito para el grupo es `VPORT_END`,
+que termina ocupando los 16 bytes donde iría `APPID_BEGIN`. DIMSTYLE y VX
+también están vacías y **sí** traen sus dos centinelas, así que es el escritor
+que es irregular, no una regla del formato. Los avisos que emite el parche
+listan exactamente esos seis — confirmación cruzada entre mi análisis en Python
+y el decodificador.
+
+## Por qué se puede seguir leyendo
+
+El centinela es un **delimitador, no el localizador**. Los registros salen de
+`tbl->address`, que el encabezado declara aparte, y **cada registro de tabla
+pre-R13 trae su propio CRC, que el decodificador ya verifica**:
+
+```
+crc: B405 [RSx]
+ check_CRC 32146-32335 = 189: B405 == B405
+```
+
+O sea que una dirección mala se caza por sus propios méritos, no hay que
+deducirla del delimitador. Así que: avisar, leer la tabla desde su dirección y
+seguir. `DWG_ERR_INVALIDDWG` queda fatal a propósito: eso significa que no se
+pudieron leer ni los 16 bytes, o sea que la posición misma es basura.
+
+Y el mensaje `not found` de `decode_preR13_sentinel` pasa de `LOG_ERROR` a
+`LOG_WARN`, porque la fatalidad la decide el llamador y el que sí se rinde ya
+avisa con `Failed to decode file`. Sin eso, un archivo que ahora convierte
+perfecto seguía imprimiendo seis líneas `ERROR` — que cualquier CI o banco que
+filtre por «ERROR» lee como fallo. El mío incluido.
+
+## Resultado
+
+| | entidades |
+|---|---|
+| stock | **ningún archivo** |
+| con el parche | **553** |
+| ODA 25.6 | 553 |
+
+Las 553 son `LINE`. Y renderizando los dos DXF con el backend SVG de ezdxf, la
+salida es **idéntica byte a byte**, 29 433 bytes cada una — así que no coincide
+solo la cuenta. Es un auto en planta.
+
+Los otros dos archivos del hilo (el `F.DWG` regenerado de michal-josef-spacek y
+el `qq.zip` reparado de leshasoft) ya convertían antes y el parche no los toca,
+como corresponde: sus centinelas están todos.
+
+## Verificación
+
+- `make check`: **270 PASS / 0 FAIL / 0 SKIP**, igual que la línea base.
+- Los **148** DWG de `test/test-data` y `programs/`: **148 idénticos byte a
+  byte, 0 peores**. A ninguno le falta un centinela, así que ninguno pasa por la
+  ruta nueva.
+- Los **18 planos pre-R13** del corpus de 1657 (4 AC1003, 1 AC1004, 3 AC1006,
+  8 AC1009, 2 AC1012): **4115 entidades antes y después, 0 cambios**.
+- Compilado sobre un `e405fcff` **limpio** con este parche solo, para no
+  apoyarme en los otros siete abiertos. Compone con el #1362 sin solaparse: ese
+  ensancha la búsqueda de un centinela que **está** pero corrido; este sobrevive
+  a uno que **no está**.
+
+## Balance: 8 parches, 1 issue, y dos de otros usuarios
+
+| # | Qué | De quién |
+|---|---|---|
+| [#1352](https://github.com/LibreDWG/libredwg/pull/1352) | `INSERT.has_attribs` pre-R13 sin normalizar | mío |
+| [#1353](https://github.com/LibreDWG/libredwg/pull/1353) | `JUMP` de R11 escrito como entidad | mío |
+| [#1358](https://github.com/LibreDWG/libredwg/pull/1358) | secciones r2004 rechazadas por su tamaño declarado | **cierra el [#1294](https://github.com/LibreDWG/libredwg/issues/1294) de SimonSAMPERE** |
+| [#1359](https://github.com/LibreDWG/libredwg/pull/1359) | una referencia irresoluble abandonaba el layout | mío |
+| [#1360](https://github.com/LibreDWG/libredwg/pull/1360) | el mapa de objetos usaba la basura de un `bit_read_UMC` fallido | mío |
+| [#1362](https://github.com/LibreDWG/libredwg/pull/1362) | ventana del centinela de ±200 con comentario de ±1000 | mío |
+| [#1363](https://github.com/LibreDWG/libredwg/pull/1363) | páginas r2007 sin comprimir sin deshacer el Reed-Solomon | mío, cierra el #1361 |
+| [#1364](https://github.com/LibreDWG/libredwg/pull/1364) | un centinela de tabla ausente rechazaba el dibujo | **cierra el [#767](https://github.com/LibreDWG/libredwg/issues/767) de weikenxq, de 2023** |
+| [#1356](https://github.com/LibreDWG/libredwg/issues/1356) | handles duplicados en el DXF de salida | el único issue mío que queda abierto |

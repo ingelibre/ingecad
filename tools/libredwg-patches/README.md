@@ -3,10 +3,10 @@
 IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 (`vendor/libredwg/bin`, gitignored).
 
-## Current state — 2026-08-06: SEVEN patches, all submitted upstream
+## Current state — 2026-08-06: EIGHT patches, all submitted upstream
 
 > **`vendor/libredwg` is no longer stock.** It is built from `0.14.8556` plus the
-> seven fixes below, every one of them open as a PR upstream. Each exists because
+> eight fixes below, every one of them open as a PR upstream. Each exists because
 > it recovers real drawings that stock refuses; each goes away the moment
 > upstream merges it and we take a new release.
 >
@@ -21,10 +21,13 @@ IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 | `decode.c` — resync the object map when a modular char fails to parse | [#1360](https://github.com/LibreDWG/libredwg/pull/1360) | `frontal` 0 → 1039, identical to ODA |
 | `decode.c` — pre-R13 sentinel search widened to the ±1000 it documents | [#1362](https://github.com/LibreDWG/libredwg/pull/1362) | `primer piso` and `segundo piso`: no output at all → 1246 and 1459, identical to ODA |
 | `decode_r2007.c` — Reed-Solomon decode uncompressed data pages too | [#1363](https://github.com/LibreDWG/libredwg/pull/1363) | `sedapar` 8588 → 10847 = ODA, and its 33 188 garbage vertices → 0. Closes #1361 |
+| `decode_r11.c` — a missing table sentinel no longer rejects the drawing | [#1364](https://github.com/LibreDWG/libredwg/pull/1364) | **another user's [#767](https://github.com/LibreDWG/libredwg/issues/767), open since 2023-06**: 0 → 553 entities, identical to ODA |
 
-`#1358` also closes [#1294](https://github.com/LibreDWG/libredwg/issues/1294),
-another user's issue that had been stalled since June for want of a shareable
-reproducer. `#1360` corrects a root cause I had posted wrongly in
+Two of the eight fix **other users' issues**: `#1358` closes
+[#1294](https://github.com/LibreDWG/libredwg/issues/1294) (stalled since June
+2026 for want of a shareable reproducer), and `#1364` closes
+[#767](https://github.com/LibreDWG/libredwg/issues/767) (open since June 2023 —
+Reini Urban had sketched the direction there and nobody had taken it up). `#1360` corrects a root cause I had posted wrongly in
 [#1355](https://github.com/LibreDWG/libredwg/issues/1355).
 
 `#1363` closes [#1361](https://github.com/LibreDWG/libredwg/issues/1361), which
@@ -42,7 +45,8 @@ around it with `formats/dwg_bridge.py::_dedupe_handles`.
 
 Verified with `make check` 270 PASS / 0 FAIL, the 146 upstream DWGs re-converted
 identically, a 190-drawing corpus sweep going `OK` 160 → 172 and `NO_OUTPUT`
-3 → 1 with zero regressions, and — for #1363, whose blast radius is exactly
+3 → 1 with zero regressions, an A/B over all 18 pre-R13 drawings for #1364
+(4115 entities before and after, nothing changed), and — for #1363, whose blast radius is exactly
 AC1021 because `decode_R2007` is reached only for `R_2007a..R_2007` — an A/B over
 **all 47 AC1021 drawings** in a 1657-file corpus: **+28 714 entities, 6 drawings
 gaining, 0 losing**.
