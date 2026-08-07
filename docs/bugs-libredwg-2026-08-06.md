@@ -1061,3 +1061,107 @@ Casi reporté 15 nombres «corruptos» que estaban bien. La lección: **cuando e
 criterio depende de cómo yo decodifico los bytes, el criterio es sospechoso.**
 `iconv -f UTF-8` no opina; o el archivo es UTF-8 válido o no lo es. Igual que con
 el #523, donde la medida indirecta decía «mejora» y el render decía «empeora».
+
+---
+
+# Duodécimo parche: el espacio papel pre-R13 no tenía dónde vivir (PR #1368)
+
+El **#1337** (julio 2026) es de michal-josef-spacek, y tenía rumbo acordado con
+Reini Urban **hace dos días**, sin tomar:
+
+> *«I think we need to create pspace object and assign entities with HAS_PSPACE
+> to it.»* — *«Of course»*
+
+## La mitad ya estaba hecha
+
+Antes de escribir nada, medí qué falta de verdad. El **lado de la entidad está
+correcto**: `common_entity_data.spec` pone `entmode = 1` para
+`FLAG_R11_HAS_PSPACE` y el escritor DXF emite el grupo 67 desde ahí. Sobre el
+`AC1009.dwg` del reporte, las 8 entidades **ya salían con el mismo 67 que escribe
+AutoCAD** — tres de modelo, cinco de papel. Así que «asignar las entidades» solo
+necesitaba el ruteo, no la detección.
+
+Lo que faltaba era **el contenedor**:
+
+```c
+  if (version >= R_13b1)
+    {
+      // BLOCK_RECORD_PSPACE: (5.1.20)
+      pspace = dwg_add_BLOCK_HEADER (dwg, "*PAPER_SPACE");
+```
+
+`dwg_add_Document` crea el `BLOCK_HEADER` del papel **solo para R13+**. Un dibujo
+pre-R13 nunca lo tiene, así que `dwg_paper_space_object()` no devuelve nada, todas
+las entidades caen en el modelo, y el DXF sale sin el bloque `$PAPER_SPACE`.
+
+Pero R11 y R12 **sí** tienen espacio papel — para eso existe el propio flag
+`FLAG_R11_HAS_PSPACE`, y AutoCAD escribe el bloque.
+
+## Tres cambios
+
+- `dwg_api.c` — crear el `*PAPER_SPACE` desde `R_11`, con el mismo arreglo de tipo
+  (`DWG_TYPE_UNUSED_r11`, «no lo codifiques») que ya reciben su BLOCK y ENDBLK del
+  modelo unas líneas más abajo.
+- `decode.c` — `decode_preR13_entities` rutea la entidad con `entmode == 1` a ese
+  header; el código anterior tomaba `hdr_index` sin condición.
+- `out_dxf.c` — `dxf_cvt_blockname` decidía la grafía `$MODEL_SPACE`/`$PAPER_SPACE`
+  según `version != from_version`, así que un **r11 → r11** escribía
+  `*MODEL_SPACE`. El nombre depende del DXF que se escribe, no de dónde vino el
+  dibujo.
+
+## Resultado
+
+Contra el `AC1009.dxf` que AutoCAD escribió del mismo dibujo:
+
+| | BLOCKS | modelo / papel |
+|---|---|---|
+| antes | `[*MODEL_SPACE]` | 8 / — (sin header) |
+| **después** | **`[$MODEL_SPACE, $PAPER_SPACE]`** | **3 / 5** |
+| AutoCAD | `[$MODEL_SPACE, $PAPER_SPACE]` | 3 / 5 |
+
+## Una diferencia que dejé a propósito
+
+AutoCAD marca el **registro** `$PAPER_SPACE` con grupo 67 y este parche no,
+porque haría falta meter mano en los flags r11 de la entidad BLOCK sintetizada.
+Comprobé que ezdxf lee `Model: 3, Layout1: 5` de los dos DXF, o sea que nada
+depende de eso — lo dije en el PR y ofrecí añadirlo.
+
+## Verificación
+
+- `make check`: **270 PASS / 0 FAIL / 0 SKIP**.
+- Los **156** DWG de upstream: **152 idénticos byte a byte, 4 cambiados, 0 que
+  dejaran de producir salida**. Los cuatro son exactamente los AC1009
+  (`programs/ACEB10_r11`, `r11/ACEB10`, `r11/entities-2d`, `r11/entities-3d`),
+  cada uno 60–78 bytes más grande, que es el bloque añadido. **Conteos de
+  entidades sin cambio en los cuatro** (873/2163, 120/654, 13/36, 14/38).
+- Los **18 planos pre-R13** del corpus: **4115 entidades antes y después**.
+- Compilado sobre un `e405fcff` limpio con este parche solo.
+
+## Y tres issues más que verifiqué y estaban ya resueltos
+
+- **[#973](https://github.com/LibreDWG/libredwg/issues/973)** (achurados que
+  pierden datos en r2018): comparé **cada campo** del HATCH contra ODA —patrón,
+  asociatividad, escala, ángulo, estilo, elevación, semillas, cada línea de
+  definición con sus guiones, y todos los caminos con sus tipos de arista— en los
+  dos archivos del reporte: **idéntico en todo**. El síntoma «el nombre solo
+  muestra la primera letra» era de 0.13.3; ahora sale `ANSI31` completo.
+- **[#663](https://github.com/LibreDWG/libredwg/issues/663)** (flechas de cota):
+  el JSON en blanco con flecha oblicua está arreglado (89 objetos, 0 errores en
+  los cinco archivos). Y `DIMBLK1`/`DIMBLK2` **sí** están vacíos en el DIMSTYLE,
+  pero **ODA también los lee vacíos**: la flecha es un *override por cota* en el
+  XDATA (`1070 343` + `1005 <handle del bloque>`), y LibreDWG lo escribe igual que
+  ODA, campo por campo.
+- **[#327](https://github.com/LibreDWG/libredwg/issues/327)** (cotas invisibles):
+  cero diferencias contra ODA en todo el documento.
+
+En los tres comenté con los números y propuse cerrar. Vale tanto como arreglar:
+un issue viejo que ya no reproduce le cuesta tiempo a todo el que lo lea.
+
+## Y un «defecto» que medí y NO era
+
+En el #663 vi que el DIMSTYLE emite `341/0 342/0 343/0 344/0` —referencias de
+handle con valor 0, que parecen colgantes— donde ODA omite los grupos. Antes de
+reportarlo lo conté: **ODA escribe 38 handles nulos donde LibreDWG escribe 23** en
+el mismo archivo, y 505 contra 528 en un plano grande. Es práctica normal, no un
+defecto. Tercera vez en la sesión que medir antes de reportar evita un reporte
+falso.

@@ -3,10 +3,10 @@
 IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 (`vendor/libredwg/bin`, gitignored).
 
-## Current state — 2026-08-06: ELEVEN patches, all submitted upstream
+## Current state — 2026-08-06: TWELVE patches, all submitted upstream
 
 > **`vendor/libredwg` is no longer stock.** It is built from `0.14.8556` plus the
-> eleven fixes below, every one of them open as a PR upstream. Each exists because
+> twelve fixes below, every one of them open as a PR upstream. Each exists because
 > it recovers real drawings that stock refuses; each goes away the moment
 > upstream merges it and we take a new release.
 >
@@ -25,8 +25,9 @@ IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 | `dwg2SVG.c` — blank output, four independent causes | [#1365](https://github.com/LibreDWG/libredwg/pull/1365) | **[#523](https://github.com/LibreDWG/libredwg/issues/523) (4 reporters, open since 2022-11) and [#1012](https://github.com/LibreDWG/libredwg/issues/1012)**: on 95 real drawings, 1 → 68 render a drawing. Not used by IngeCAD |
 | `dwg.c` — the `'\0'` was written over the appended `'\n'` | [#1366](https://github.com/LibreDWG/libredwg/pull/1366) | any DXF whose last byte is not a newline was rejected outright, reported as "Out of memory". Partly [#474](https://github.com/LibreDWG/libredwg/issues/474) |
 | `bits.c` — UTF-16 surrogates encoded into the UTF-8 output | [#1367](https://github.com/LibreDWG/libredwg/pull/1367) | one damaged APPID name made AutoCAD refuse a whole DXF. Partly [#1021](https://github.com/LibreDWG/libredwg/issues/1021) |
+| `dwg_api.c` + `decode.c` + `out_dxf.c` — pre-R13 paper space had no BLOCK_HEADER | [#1368](https://github.com/LibreDWG/libredwg/pull/1368) | **[#1337](https://github.com/LibreDWG/libredwg/issues/1337)**, the direction michal-josef-spacek and rurban agreed: an AC1009 goes from 8/0 to 3/5 entities per space, matching AutoCAD |
 
-Six of the eleven touch **other users' issues**: `#1358` closes
+Seven of the twelve touch **other users' issues**: `#1358` closes
 [#1294](https://github.com/LibreDWG/libredwg/issues/1294) (stalled since June
 2026 for want of a shareable reproducer), and `#1364` closes
 [#767](https://github.com/LibreDWG/libredwg/issues/767) (open since June 2023 —
