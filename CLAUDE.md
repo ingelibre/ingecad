@@ -172,9 +172,9 @@ abierto.
 
 ### ✅ Segunda tanda (2026-08-06) — detalle en `docs/bugs-libredwg-2026-08-06.md`
 
-Los 30 fallos del barrido quedaron clasificados y luego **arreglados**: **9 PRs**
-(#1352, #1353, #1358, #1359, #1360, #1362, #1363, #1364, #1365), **1 issue vivo sin
-parche** (#1356),
+Los 30 fallos del barrido quedaron clasificados y luego **arreglados**: **10 PRs**
+(#1352, #1353, #1358, #1359, #1360, #1362, #1363, #1364, #1365, #1366), **1 issue vivo
+sin parche** (#1356),
 **1 retirado a propósito** (#1354, correcto pero de bajo valor) y **5 planos que no eran
 bugs** (2 bloqueados por objetos propietarios de Civil 3D —que BricsCAD tampoco abre—,
 1 archivo dañado, 2 dibujos vacíos de verdad). El #1358 cierra además el
@@ -198,7 +198,7 @@ Converter** y contra **BricsCAD** antes de reportar. En este barrido eso descart
 (entidades del modelspace del DXF de cada conversor); mezclar medidas distintas produjo dos
 cifras erróneas que hubo que retractar.
 
-⚠️ **`vendor/libredwg` YA NO es stock.** Se compila de `0.14.8556` **más los 9 parches**,
+⚠️ **`vendor/libredwg` YA NO es stock.** Se compila de `0.14.8556` **más los 10 parches**,
 todos abiertos como PR upstream; cada uno desaparece en cuanto se fusione y tomemos un
 release nuevo. El árbol de build lleva un `NO-ES-STOCK-LEEME.txt` que lo advierte, y el
 detalle vive en `tools/libredwg-patches/README.md`. IngeCAD lleva además un saneado del DXF
@@ -223,7 +223,7 @@ variable correcta para cruzar.
 un arreglo no está terminado hasta que está en `vendor/` y medido con `load_dwg()`. Medir en
 `externos/build-libredwg/` es trabajo en curso, no resultado — son binarios distintos.
 
-**El frente ahora son los issues de otros**, y ahí van **4 de los 9 parches**: el #1294
+**El frente ahora son los issues de otros**, y ahí van **5 de los 10 parches**: el #1294
 (jun 2026), el #767 (jun **2023**), y el #523 + #1012 con el PR #1365. El #523 llevaba
 **cuatro años** abierto con cuatro personas reportándolo, y el reproductor era el propio
 archivo de prueba de LibreDWG. Método que funcionó: buscar issues cuyo síntoma sea primo de

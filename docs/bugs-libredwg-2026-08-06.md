@@ -840,3 +840,110 @@ puntuado por píxeles con tinta:
 
 Y los otros cinco (#1352, #1353, #1359, #1360, #1362) más el #1363, que cierra
 mi propio #1361.
+
+---
+
+# Décimo parche: cualquier DXF sin salto de línea final se rechazaba (PR #1366)
+
+Buscando otro issue de otros, el **#474** (2022) decía que `dxf2dwg` producía un
+DWG que AutoCAD TrueView rechazaba. Al probarlo hoy, **está peor**: no produce
+DWG en absoluto.
+
+```
+ERROR: Out of memory
+ERROR: Failed to decode DXF file: my-drawing.dxf
+READ ERROR 0x1000
+```
+
+Sobre un archivo de **18 KB**. Eso no es falta de memoria. Marqué los 27 sitios
+que emiten ese mensaje en `in_dxf.c` con `__LINE__` y salió el de la línea 886:
+`dxf_read_string` devolvió NULL para un grupo `0`, y el llamador lo reporta como
+OOM y aborta el archivo entero.
+
+## La causa
+
+```c
+  // properly end the buffer for strtol()/... readers
+  if (dat.chain[size - 1] != '\n')
+    {
+      dat.chain[size] = '\n';
+      dat.size++;
+    }
+  dat.chain[size] = '\0';
+```
+
+El salto de línea se añade en `chain[size]` y **acto seguido lo sobreescribe el
+`'\0'`, en el mismo índice**. `dat.size` ya se incrementó, así que el buffer
+termina en `...\n0\0` con el NUL exactamente donde debía estar el salto.
+
+Y `dxf_read_string` se rinde si no encuentra un `'\n'` en lo que queda:
+
+```c
+      if (dat->byte >= dat->size
+          || !memchr (&dat->chain[dat->byte], '\n', dat->size - dat->byte))
+        return;
+```
+
+El `calloc` reserva `dat.size + 2` justo para este caso, así que el arreglo es
+poner el NUL **después** del salto: `dat.chain[size++] = '\n';`.
+
+**Décimo parche, y el séptimo que consiste en hacer que el código cumpla lo que
+ya decía de sí mismo** — el comentario dice literalmente *«properly end the
+buffer»* y la línea siguiente lo desarma.
+
+## La clase entera de archivos
+
+No es específico del archivo del #474. **Cualquier DXF cuyo último byte no sea un
+salto de línea** se rechaza, sea lo que contenga, porque la pérdida siempre cae
+en el par final `0`/`EOF`.
+
+El mismo DXF, diferenciándose solo en ese byte:
+
+| | resultado de `dxf2dwg` |
+|---|---|
+| termina con salto de línea | DWG de 5139 bytes |
+| termina sin él | **falla, ningún archivo** |
+
+Con el parche los dos producen **los mismos 5139 bytes, byte a byte**. Y el
+`my-drawing.dxf` del #474 (generado por Maker.js, terminado en `0\nEOF`) pasa a
+convertir a un DWG AC1015 de 12 696 bytes.
+
+## Lo que NO arregla, y lo dije en el issue
+
+El DWG que ahora produce **sigue sin abrir**. ODA lo rechaza con
+`Null object Id: <object> (0)`, que es exactamente el diagnóstico que dio Reini
+Urban en 2022: un DXF mínimo no trae handles, y los handles se usan internamente
+para encontrar las entradas de tabla, así que hay que asignarlos. Eso es otro
+arreglo. El #474 queda abierto por esa parte.
+
+Lo separé a propósito: «Out of memory» sobre un archivo de 18 KB manda a
+cualquiera a buscar en el lugar equivocado, y el bug del salto de línea afecta a
+archivos que no tienen nada más de malo.
+
+## Verificación
+
+- `make check`: **270 PASS / 0 FAIL / 0 SKIP**, sin cambio.
+- Ocho DXF reales (de 26 KB a 47 MB) por `dxf2dwg` antes y después: **todos los
+  DWG idénticos byte a byte**. Dos no producen salida en ninguno de los dos lados
+  (ajeno a esto); los otros seis coinciden exacto.
+- Compilado y probado sobre un `e405fcff` **limpio** con este parche solo.
+
+## Y dos issues que verifiqué y resultaron ya resueltos
+
+- **[#327](https://github.com/LibreDWG/libredwg/issues/327)** (2021, «ciertos
+  textos y las cotas no se ven al convertir»): con su propio reproductor,
+  `dwg2dxf` y ODA dan **cero diferencias** en todo el documento — 1224
+  LWPOLYLINE, 1117 LINE, 774 INSERT, 483 HATCH, 222 DIMENSION, 111 MTEXT, 82
+  ATTDEF, idénticos —, las 111 cotas con su bloque `*D` y sus 561 entidades
+  dentro. Renderizados, 411 440 contra 411 444 bytes de SVG. Comentado con los
+  números y propuesto cerrar.
+- **[#426](https://github.com/LibreDWG/libredwg/issues/426)** (SPLINE sin puntos
+  de control): el DWG guarda `scenario: 1`, o sea **solo los puntos de ajuste** —
+  LibreDWG lo lee completo y bien; AutoCAD y ODA *calculan* los 5 puntos de
+  control y los 9 nudos por interpolación. Verifiqué la parametrización: los
+  nudos de ODA `[0,0,0,0, 12.2776, 26.0835×4]` son exactamente las longitudes de
+  cuerda acumuladas de los 3 puntos de ajuste. O sea que es una brecha de
+  fidelidad real, no una pérdida al decodificar; implementarla es interpolación
+  cúbica global con condiciones de borde que habría que adivinar. **Y no cuesta
+  el dibujo**: ezdxf renderiza el DXF de LibreDWG y el de ODA *idénticos byte a
+  byte*, porque interpola desde los puntos de ajuste. Lo dejé.
