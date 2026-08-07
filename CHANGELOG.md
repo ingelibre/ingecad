@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.1.2 — 2026-08-07
+
+The drawings colleagues send now open. Every one of the nine that used to fail
+reads exactly what ODA File Converter reads from it, and `vendor/libredwg`
+carries thirteen fixes — all of them submitted upstream.
+
+### Fixed
+- **Duplicate handles no longer cost the whole drawing.** LibreDWG emits some
+  objects (LAYOUT, GROUP, ACDBPLACEHOLDER…) with a handle that already belongs
+  to a table record. One collision on handle `2` (the `*Model_Space`
+  BLOCK_RECORD) was enough for ezdxf to refuse the file outright.
+  `formats/dwg_bridge.py::_dedupe_handles` gives the later claimant a fresh
+  handle; the first user keeps its own. Reported upstream as LibreDWG#1356.
+- **A single corrupt coordinate no longer swallows the drawing.** `cofopri`
+  loaded its 5725 entities and showed a blank canvas, because one `LAYOUT`
+  reached 6.7e+301 and `Zoom Extents` framed 10³⁰¹. `render/batches.py::
+  _world_extents` now frames using the drawing's own `$EXTMIN`/`$EXTMAX`, with a
+  safeguard that distrusts a stale box (if it would reject more than 5% of the
+  vertices, it is ignored).
+- **A DXF byte `0x85` no longer corrupts the file we rewrite.**
+  `str.splitlines()` also breaks on `\x0b \x0c \x1c-\x1e \x85`, and latin-1
+  maps `0x85` to U+0085, so real drawings gained phantom lines and every
+  tag/value pair after the first one went off by one. `_read_dxf_lines` /
+  `_write_dxf_lines` split on `"\n"` alone.
+- **The status bar no longer paints two texts in the same pixels.** `main()`
+  opened the drawing from `argv[1]` *before* showing the window, and QStatusBar
+  only hides the coordinate readout for a message when the readout is already
+  visible — so "Opening x…" was rendered on top of the coordinates, both
+  illegible. The window is shown first, the coordinate slot has exactly one
+  writer, and every notice ("Opened x", "Saved x", the F7/F8/F9 toggles, "PDF
+  saved") moved to the command line, where an AutoCAD user reads them and where
+  the history keeps them.
+- **Every opened `.dwg` used to leak its converted DXF.** 189 orphaned
+  `/tmp/ingecad-dwg-*` directories, 2.4 GB — and `/tmp` is a tmpfs on most
+  desktops, so that was RAM. The temp directory is removed once ezdxf has the
+  document in memory.
+
+### Changed
+- **`vendor/libredwg` is no longer stock.** It is built from `0.14.8556` plus
+  **thirteen fixes**, every one open as a pull request upstream and every one
+  verified on a clean tree with that patch alone. Measured over 190 real
+  drawings, stock against the thirteen: **12 drawings improve, 0 get worse,
+  +87 314 entities (+5.9%)**. The DWG that `dxf2dwg` writes is byte-identical
+  either way, so saving is untouched. `vendor/libredwg.stock-0.14.8556` is kept
+  alongside, so one `cp -a` reverts.
+- Of the nine drawings that used to fail, **all nine now match ODA File
+  Converter entity for entity** — `frontal` 0 → 1039, `cerco perimetrico`
+  0 → 2222, both `Planos Constructivos` 0 → 26583, `sedapar` 93 → 10847,
+  `primer piso` and `segundo piso` from no output at all to 1246 and 1459.
+- Four of the thirteen fix **other people's issues**, three of them long open:
+  LibreDWG#1294 (2026), #767 (2023), #523 (2022, four reporters) and #1012.
+
+### Notes
+- The thirteen patches are catalogued in `tools/libredwg-patches/README.md`, and
+  the session that produced them, with the measurements and the two dead ends,
+  in `docs/bugs-libredwg-2026-08-06.md`.
+- Still open upstream and worked around here: LibreDWG#1356, the duplicate
+  handles. `_dedupe_handles` goes away when it lands.
+
 ## v0.1.1 — 2026-07-20
 
 Desktop-integration polish: a refreshed application icon and branded file

@@ -278,6 +278,16 @@ es la **escritura** (L4: r2013/r2018) — y eso exige decidir el CLA.
 
 ---
 
+## 🗓 Sesión 2026-08-06/07 — v0.1.2 (los planos del colega abren)
+
+Release `v0.1.2`. Los **nueve** planos que fallaban abren ahora leyendo exactamente lo que lee
+ODA (eran 2 de 9), y `vendor/libredwg` va con **13 parches**, todos enviados upstream y cada
+uno verificado en un árbol limpio con el parche solo. Sobre 190 planos reales, stock contra
+los 13: **12 mejoran, 0 empeoran, +87 314 entidades**. El DWG que escribe `dxf2dwg` es byte a
+byte idéntico en ambos casos, así que guardar no se toca. Detalle en `CHANGELOG.md`, el
+catálogo en `tools/libredwg-patches/README.md` y la sesión completa —con las mediciones y los
+dos callejones sin salida— en `docs/bugs-libredwg-2026-08-06.md`.
+
 ## 🗓 Sesión 2026-07-20 — v0.1.1 (integración con el escritorio)
 
 Release `v0.1.1` (tag + release en `ingelibre/ingecad`; sin binarios Windows aún — solo `tests.yml`). Instalado y verificado en la PC del usuario. Lo hecho (detalle en commits `503d85c`/`22b176a`):
