@@ -217,6 +217,20 @@ def dwg_to_dxf(dwg_path: Path) -> Path:
     return out_dxf
 
 
+def _discard_temp_dxf(dxf_path: Path) -> None:
+    """Remove a directory ``dwg_to_dxf`` made, once its DXF has been read.
+
+    ``ezdxf.readfile`` loads the whole document into memory, so the DXF is
+    disposable the moment it returns — and on most desktops ``/tmp`` is a
+    tmpfs, which makes a leaked 50 MB DXF per opened drawing 50 MB of RAM that
+    never comes back. Recognised by prefix and no other way: tests monkeypatch
+    ``dwg_to_dxf`` to hand back fixture paths that must survive.
+    """
+    parent = dxf_path.parent
+    if parent.name.startswith("ingecad-dwg-"):
+        shutil.rmtree(parent, ignore_errors=True)
+
+
 def load_dwg(dwg_path: Path):
     """Open a DWG as a Document via LibreDWG.
 
@@ -229,7 +243,11 @@ def load_dwg(dwg_path: Path):
     from core.document import Document
 
     dwg_path = Path(dwg_path)
-    document = Document.load(dwg_to_dxf(dwg_path))
+    dxf_path = dwg_to_dxf(dwg_path)
+    try:
+        document = Document.load(dxf_path)
+    finally:
+        _discard_temp_dxf(dxf_path)
     document.path = dwg_path
     if len(document.modelspace()) > 0:
         return document
@@ -300,7 +318,11 @@ def verify_dwg(source_dxf: Path, dwg_path: Path, stderr: str = "") -> list[str]:
             "the DWG writer reported internal errors while packing the file")
     try:
         n_src = _modelspace_count(source_dxf)
-        n_back = _modelspace_count(dwg_to_dxf(dwg_path))
+        back_dxf = dwg_to_dxf(dwg_path)
+        try:
+            n_back = _modelspace_count(back_dxf)
+        finally:
+            _discard_temp_dxf(back_dxf)
         # A drop means geometry was lost. Allow tiny bookkeeping deltas.
         if n_src and n_back < n_src:
             warnings.append(

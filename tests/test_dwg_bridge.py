@@ -234,3 +234,42 @@ def test_dxf_lines_do_not_split_on_byte_0x85(tmp_path):
     # and the round trip stays byte-exact
     dwg_bridge._write_dxf_lines(dxf, dwg_bridge._read_dxf_lines(dxf))
     assert dxf.read_bytes() == raw
+
+
+def test_load_dwg_does_not_leak_its_temp_dxf(tmp_path):
+    """Every opened .dwg used to leave its converted DXF in /tmp forever.
+
+    /tmp is a tmpfs on most desktops, so 189 leftover directories measured on
+    the author's machine were 2.4 GB of RAM. ezdxf reads the whole document in
+    memory, so the DXF is disposable as soon as load returns.
+    """
+    if find_dwg2dxf() is None:
+        pytest.skip("LibreDWG not available")
+    import glob
+
+    dxf = tmp_path / "plan.dxf"
+    _sample_doc().saveas(dxf)
+    dwg = tmp_path / "plan.dwg"
+    dxf_to_dwg(dxf, dwg)
+
+    before = set(glob.glob("/tmp/ingecad-dwg-*"))
+    document = load_dwg(dwg)
+    assert len(document.modelspace()) > 0     # it really did load
+    assert set(glob.glob("/tmp/ingecad-dwg-*")) == before
+
+
+def test_discard_temp_dxf_only_touches_our_own_directories(tmp_path):
+    """A monkeypatched dwg_to_dxf hands back fixture paths; never delete those."""
+    from formats.dwg_bridge import _discard_temp_dxf
+
+    keep = tmp_path / "precious.dxf"
+    keep.write_text("0\nEOF\n")
+    _discard_temp_dxf(keep)
+    assert keep.exists() and tmp_path.exists()
+
+    ours = tmp_path / "ingecad-dwg-xyz"
+    ours.mkdir()
+    inside = ours / "converted.dxf"
+    inside.write_text("0\nEOF\n")
+    _discard_temp_dxf(inside)
+    assert not ours.exists()
