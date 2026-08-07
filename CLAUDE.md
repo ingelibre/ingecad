@@ -172,9 +172,9 @@ abierto.
 
 ### ✅ Segunda tanda (2026-08-06) — detalle en `docs/bugs-libredwg-2026-08-06.md`
 
-Los 30 fallos del barrido quedaron clasificados y luego **arreglados**: **12 PRs**
-(#1352, #1353, #1358, #1359, #1360, #1362, #1363, #1364, #1365, #1366, #1367, #1368),
-**1 issue vivo sin parche** (#1356),
+Los 30 fallos del barrido quedaron clasificados y luego **arreglados**: **13 PRs**
+(#1352, #1353, #1358, #1359, #1360, #1362, #1363, #1364, #1365, #1366, #1367, #1368,
+#1369), **1 issue vivo sin parche** (#1356),
 **1 retirado a propósito** (#1354, correcto pero de bajo valor) y **5 planos que no eran
 bugs** (2 bloqueados por objetos propietarios de Civil 3D —que BricsCAD tampoco abre—,
 1 archivo dañado, 2 dibujos vacíos de verdad). El #1358 cierra además el
@@ -198,7 +198,7 @@ Converter** y contra **BricsCAD** antes de reportar. En este barrido eso descart
 (entidades del modelspace del DXF de cada conversor); mezclar medidas distintas produjo dos
 cifras erróneas que hubo que retractar.
 
-⚠️ **`vendor/libredwg` YA NO es stock.** Se compila de `0.14.8556` **más los 12 parches**,
+⚠️ **`vendor/libredwg` YA NO es stock.** Se compila de `0.14.8556` **más los 13 parches**,
 todos abiertos como PR upstream; cada uno desaparece en cuanto se fusione y tomemos un
 release nuevo. El árbol de build lleva un `NO-ES-STOCK-LEEME.txt` que lo advierte, y el
 detalle vive en `tools/libredwg-patches/README.md`. IngeCAD lleva además un saneado del DXF
@@ -223,7 +223,7 @@ variable correcta para cruzar.
 un arreglo no está terminado hasta que está en `vendor/` y medido con `load_dwg()`. Medir en
 `externos/build-libredwg/` es trabajo en curso, no resultado — son binarios distintos.
 
-**El frente ahora son los issues de otros**, y ahí van **7 de los 12 parches**: el #1294
+**El frente ahora son los issues de otros**, y ahí van **8 de los 13 parches**: el #1294
 (jun 2026), el #767 (jun **2023**), y el #523 + #1012 con el PR #1365. El #523 llevaba
 **cuatro años** abierto con cuatro personas reportándolo, y el reproductor era el propio
 archivo de prueba de LibreDWG. Método que funcionó: buscar issues cuyo síntoma sea primo de
@@ -244,6 +244,12 @@ ya resueltos (#327, #426, #663, #973); comentar con números y proponer cerrar l
 tiempo a todo el que los lea después. En los cuatro medí **campo por campo contra ODA**, no
 solo los conteos — y en el #663 eso evitó que reportara como defecto los handles nulos del
 DIMSTYLE, porque ODA escribe más que LibreDWG.
+
+**Y el criterio de regresión hay que elegirlo según el parche.** Para el #1369 (marcas de
+tiempo) comparar los DXF byte a byte no sirve: cambian los 151 planos que tienen fecha. El
+criterio bueno fue «¿alguna línea NO numérica cambia?» (ninguna) más «¿cuántas líneas cambia
+como máximo un archivo?» (12 = 6 variables × 2 lados) y «¿todas van precedidas de un `$TD`?»
+(sí). Un «146 idénticos» no siempre es la prueba correcta.
 
 **Siguiente objetivo:** ya no hay bug de lectura propio pendiente. Queda el #1356 (handles
 duplicados en el DXF emitido, 1150 en `sedapar`), que IngeCAD sortea con `_dedupe_handles`, y

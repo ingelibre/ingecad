@@ -1165,3 +1165,86 @@ reportarlo lo conté: **ODA escribe 38 handles nulos donde LibreDWG escribe 23**
 el mismo archivo, y 505 contra 528 en un plano grande. Es práctica normal, no un
 defecto. Tercera vez en la sesión que medir antes de reportar evita un reporte
 falso.
+
+---
+
+# Decimotercer parche: la fracción de día del TIMEBLL, escrita de tres formas incompatibles (PR #1369)
+
+El **#1309** es de michal-josef-spacek, de julio, sin un solo comentario:
+
+> *«I think that calculation of HH:MM:SS is bad. I see value in miliseconds, not
+> 1_000_000 fraction of day.»*
+
+Tenía razón, y el mismo error está en **siete sitios más**.
+
+## El error
+
+Un `TIMEBLL`/`TIMERLL` es día juliano + **milisegundos transcurridos en ese
+día**, así que la fracción de día que representa es `ms / 86400000`. El código lo
+escribía de tres maneras que no pueden ser todas ciertas:
+
+| dónde | qué calcula |
+|---|---|
+| `bits.c` ×2, `header_variables.spec` ×2, `header_variables_r11.spec` ×2, `dwg_api.c` | `value = days + ms * 1e-8` |
+| `common.c`, `cvt_TIMEBLL` | `t = 0.864 * ms / 1000` |
+| `in_json.c`, `json_TIMEBLL` | `value = days + 86400.0 * ms` |
+
+`1e-8` es **0,864** de `1/86400000` — de ahí sale el 0.864 de `cvt_TIMEBLL`, que
+alguien puso para compensar y dejó el error donde estaba. Las dos primeras están
+0,864× cortas: **hasta 3,3 horas de error** en las marcas de tiempo. La de JSON
+está mal por doce órdenes de magnitud en un sentido y 1000× en el otro.
+
+## Cómo se decidió cuál es la buena, sin especificación
+
+Dos cosas del propio árbol:
+
+1. **`dwg_add_Document` llena el campo él mismo** con
+   `BITCODE_RLL ms = 1000 * (now % 86400L)` —milisegundos, explícito— y **tres
+   líneas después** calcula `days + (ms * 1e-8)`. Se contradice a tres líneas de
+   distancia.
+2. En un plano de acá, `TIMEBLL` es `[2454831, 77383890]`. Como milisegundos son
+   **21:29:43** del día, que cabe. Como millonésimas de día serían **77 días**,
+   que no.
+
+Y ODA coincide **a todos los dígitos que imprime**:
+
+| | antes | después | ODA 25.6 |
+|---|---|---|---|
+| `$TDCREATE` | 2454831.593838900 | **2454831.687313542** | 2454831.687313542 |
+| `$TDUCREATE` | 2454831.773838900 | **2454831.895646875** | 2454831.895646875 |
+| `$TDINDWG` | 1.367709720 | **1.425589954** | 1.4255899537 |
+
+La forma legible acompaña: `TDUCREATE` se registraba como `18:34:19` y es
+`21:29:43`, con `TDCREATE` cinco horas antes — la zona en que se hizo el plano.
+
+`$TDUPDATE` y `$TDUUPDATE` siguen difiriendo de ODA, y **no** por esto: ODA
+estampa la hora de la *conversión* ahí (su valor es el día juliano de hoy),
+mientras LibreDWG reporta lo que trae el DWG. Ahí LibreDWG es el más fiel de los
+dos, y lo dije en el PR.
+
+## Un desliz de copia arreglado de paso
+
+`header_variables_r11.spec` calculaba `TDUUPDATE.value` desde
+`TDUPDATE.days/ms`, así que el valor no concordaba con los `days/ms` que acababa
+de fijar dos líneas antes, perdiendo el ajuste de zona. El bloque de `TDUCREATE`
+justo arriba sí usa sus propios campos.
+
+## Por qué no puede mover un round-trip de DWG
+
+`bit_write_TIMEBLL` y `bit_write_TIMERLL` dicen literalmente *«Ignores the double
+value»* y escriben `days`/`ms`. El campo `value` solo se lee para mostrar, para
+el grupo 40 del DXF y para JSON.
+
+## Verificación, con el criterio adecuado
+
+El DXF cambia en **todos** los planos que tengan marcas de tiempo, así que
+comparar byte a byte no sirve. El criterio que sí:
+
+- `make check`: **270 PASS / 0 FAIL / 0 SKIP**, incluidos los round-trips de JSON
+  que ejercitan `json_TIMEBLL`.
+- Los **156** DWG de upstream: **5 idénticos** (los que no tienen marcas de
+  tiempo), **151 que difieren solo en líneas numéricas, 0 con cambio
+  estructural**. Muestreando 25, **el máximo que cambia un archivo son 12
+  líneas** —las seis variables `$TD`, los dos lados del diff— y **todas las
+  primeras diferencias van precedidas de un nombre `$TD`**.
+- Compilado sobre un `e405fcff` limpio con este parche solo.
