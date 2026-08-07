@@ -278,6 +278,27 @@ es la **escritura** (L4: r2013/r2018) — y eso exige decidir el CLA.
 
 ---
 
+## 🌐 Sitio web — ingecad.org (2026-08-07)
+
+**Publicado**: https://ingecad.org (y `www`), Cloudflare Worker con assets estáticos.
+Repo **aparte**: `~/Proyectos/ingecad/web` → github.com/ingelibre/ingecad-web (público), y
+`web/` está en el `.gitignore` de este repo — la misma separación que usan
+`ingelibre/ingetrazo-web` y `ingelibre/ingepresupuestos-web`: un cambio de copy no dispara el
+CI del producto ni al revés. **El `git push` NO publica**: publica `npx wrangler deploy`.
+
+Las convenciones (paleta, capturas, qué se promete) viven en `web/CLAUDE.md`. Tres cosas que
+conviene no re-descubrir:
+
+- **Acento del producto: Lime `#479B1B`**, el eje Y del propio icono. Azul = IngeTrazo,
+  naranja = IngePresupuestos, y esos dos solo aparecen en la sección puente.
+- **Cómo se capturan las pantallas**: bajo Wayland `QScreen.grabWindow()` devuelve **negro**
+  (un cliente X11 no puede leer la pantalla) y el `import` de ImageMagick tampoco sirve. Lo
+  que funciona es `win.grab()` con `DISPLAY=:0 QT_QPA_PLATFORM=xcb`, que trae el árbol de
+  widgets **con el FBO del visor dentro**, a 2×. Para escribir comandos en la captura hay que
+  apuntar a `win.command_line.input`, no al contenedor.
+- **El sitio solo afirma lo que la app hace hoy**, y la sección «Status» del `README.md` es la
+  fuente de verdad del copy. Hay un FAQ que dice explícitamente que la topografía es v0.2.
+
 ## 🗓 Sesión 2026-08-06/07 — v0.1.2 (los planos del colega abren)
 
 Release `v0.1.2`, **con AppImage** — el primer binario descargable del proyecto. Los **nueve**
