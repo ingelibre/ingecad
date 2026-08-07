@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **New application icon.** The pencil is gone: the scene is now a model-space
+  viewport with the UCS icon (X red, Y green) and the **crosshair cursor** — pick
+  box, centre dot and arms reaching the axes — filling the first quadrant. Those
+  are the two things a CAD user recognises without reading a label; the pencil
+  said "drawing app", the crosshair says "CAD".
+  `resources/ingecad.svg` is the single source of truth and
+  `scripts/gen_app_icons.py` (new) rasterizes the eight PNG sizes and the `.ico`
+  from it, so the committed rasters are no longer produced by hand. Run it before
+  `scripts/gen_doc_icons.py`, which composites `ingecad_256.png` as the badge on
+  the .dwg/.dxf document icons.
+- **Spanish UI is neutral, without voseo** — «Escribe un comando», «Arrastra una
+  ventana», «Presiona Esc», «Elige una línea distinta». Six strings in
+  `i18n/es.json`; the same correction already applied to the website.
+
 ## v0.1.2 — 2026-08-07
 
 The drawings colleagues send now open. Every one of the nine that used to fail
