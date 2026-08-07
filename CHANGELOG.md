@@ -4,7 +4,27 @@
 
 The drawings colleagues send now open. Every one of the nine that used to fail
 reads exactly what ODA File Converter reads from it, and `vendor/libredwg`
-carries thirteen fixes — all of them submitted upstream.
+carries thirteen fixes — all of them submitted upstream. And there is finally
+something to download: a self-contained AppImage.
+
+### Added
+- **A Linux AppImage** (`IngeCAD-<version>-x86_64.AppImage`, 112 MB). Python, Qt
+  and both DWG converters travel inside it; download, `chmod +x`, run. Built by
+  `.github/workflows/release.yml` on Ubuntu 22.04 — an AppImage links against
+  the glibc of the machine that made it, so building on a current distro would
+  produce a file that only starts on current distros.
+- **`main.py --check`**, a self-diagnosis. It reports where the app found its
+  shaders, translations, app icon and converters, whether the converters are the
+  bundled ones, and exits non-zero if anything is missing. CI asserts on it after
+  building the AppImage; run it when an install misbehaves.
+- **`tools/libredwg-patches/build-vendor.sh`** rebuilds `vendor/libredwg` from a
+  pristine LibreDWG release plus the thirteen patches, verifying the tarball
+  against the project's own `dist.sha256`. `vendor/` is gitignored, so before
+  this a fresh clone had no converters at all — and no way to get the patched
+  ones. Verified reproducible: a from-scratch rebuild gives a `dwg2dxf` differing
+  in 20 bytes, all inside `.note.gnu.build-id`.
+- **`packaging/`** — the PyInstaller spec and the AppImage build script, so the
+  packaging can be reproduced and reviewed rather than living in CI only.
 
 ### Fixed
 - **Duplicate handles no longer cost the whole drawing.** LibreDWG emits some

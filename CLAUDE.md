@@ -280,9 +280,21 @@ es la **escritura** (L4: r2013/r2018) — y eso exige decidir el CLA.
 
 ## 🗓 Sesión 2026-08-06/07 — v0.1.2 (los planos del colega abren)
 
-Release `v0.1.2`. Los **nueve** planos que fallaban abren ahora leyendo exactamente lo que lee
-ODA (eran 2 de 9), y `vendor/libredwg` va con **13 parches**, todos enviados upstream y cada
-uno verificado en un árbol limpio con el parche solo. Sobre 190 planos reales, stock contra
+Release `v0.1.2`, **con AppImage** — el primer binario descargable del proyecto. Los **nueve**
+planos que fallaban abren ahora leyendo exactamente lo que lee ODA (eran 2 de 9), y
+`vendor/libredwg` va con **13 parches**, todos enviados upstream y cada uno verificado en un
+árbol limpio con el parche solo.
+
+**Empaquetado (`packaging/` + `.github/workflows/release.yml`):** PyInstaller *onedir* dentro
+de un AppImage, 112 MB. Se compila en **ubuntu-22.04 a propósito**: un AppImage se enlaza
+contra la glibc de la máquina que lo hizo, así que hacerlo en la más nueva daría un archivo que
+solo arranca en las más nuevas. Dos piezas que lo hacen posible y hay que conservar:
+`core/paths.py` (un `app_root()` que lee `sys._MEIPASS`, porque un bundle sintetiza `__file__` y
+los cuatro sitios que derivaban rutas de él apuntaban a la nada) y
+`tools/libredwg-patches/build-vendor.sh` (reconstruye `vendor/` desde el tarball limpio + el
+parche combinado; `vendor/` está en `.gitignore`, así que sin esto un clon no tiene
+conversores). **`main.py --check`** es el autodiagnóstico que el CI verifica: cazó dos
+directorios ausentes en el primer intento. Sobre 190 planos reales, stock contra
 los 13: **12 mejoran, 0 empeoran, +87 314 entidades**. El DWG que escribe `dxf2dwg` es byte a
 byte idéntico en ambos casos, así que guardar no se toca. Detalle en `CHANGELOG.md`, el
 catálogo en `tools/libredwg-patches/README.md` y la sesión completa —con las mediciones y los
