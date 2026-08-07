@@ -26,3 +26,7 @@ capturas/
 *.dwg
 *.dxf
 !tests/data/*.dxf
+
+# El sitio web vive en su propio repo (ingelibre/ingecad-web), como en los
+# hermanos: un cambio de copy no debe disparar el CI del producto.
+/web/
