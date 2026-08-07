@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased
+## v0.1.3 — 2026-08-07
+
+Erasing now erases on screen too. Marco reported that cutting a big selection
+left the original behind and that deleting one looked partial; the entities were
+in fact gone from the document, but most of their pixels stayed until a full
+regen caught up seconds later.
+
+### Fixed
+- **Erase, cut and move now clear the screen completely.** The viewport removes
+  edited geometry without a regen by zeroing the alpha of the entity's vertex
+  runs, looked up in a handle → runs map. Two holes in that map meant the lookup
+  silently found nothing and the geometry stayed drawn:
+  - **Everything inside a block was unowned.** The drawing frontend expands an
+    `INSERT` into *virtual* copies whose `handle` is `None`, so no vertex in any
+    block could be attributed — and the only handle that could ever hide them is
+    the `INSERT`'s, because that is what the selection and the pick index hold.
+    Block content is now attributed to the outermost entity that has a handle.
+  - **`exit_entity` cleared the drawing context instead of restoring it**, so
+    whatever an enclosing entity drew *after* a nested child came out unowned as
+    well (and untyped, which also mis-keyed its bucket for text culling).
+  - **The thick-line batch never recorded owners at all** — `_pack_thick` was
+    the one packer called without the map, so every entity with a lineweight
+    above 0.25 mm was unhideable regardless of blocks.
+
+  Measured by erasing every modelspace entity and counting vertices still drawn:
+  `casa.dwg` left **75.9 %** of the drawing on screen, the roof-truss sheet
+  26.7 %, the Yanaquihua structural sheet 13.2 %, `sedapar` 1.9 %. All four are
+  now **0 %**. Scene build time is unchanged. A new invariant test asserts that
+  every vertex of every batch is attributable, on a drawing that reaches all
+  four batches — the old coverage test used a document with no blocks and no
+  thick lines, which is why the hole survived.
 
 ### Changed
 - **New application icon.** The pencil is gone: the scene is now a model-space

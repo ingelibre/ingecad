@@ -65,17 +65,36 @@ class VertexBackend(Backend):
         self._flatten = flatten_distance
         self._kind = ""
         self._handle = None
+        # (kind, owner) per open entity. The frontend NESTS these calls: an
+        # INSERT is entered, then each of its sub-entities, up to three deep in
+        # real drawings.
+        self._open: list[tuple[str, str | None]] = []
         self.background: str | None = None
 
     def enter_entity(self, entity, properties) -> None:
         super().enter_entity(entity, properties)
-        self._kind = "T" if entity.dxftype() in _TEXT_TYPES else ""
-        self._handle = getattr(entity.dxf, "handle", None)
+        kind = "T" if entity.dxftype() in _TEXT_TYPES else ""
+        handle = getattr(entity.dxf, "handle", None)
+        # Attribute the primitives to the OUTERMOST entity that has a handle.
+        # Block content is drawn from virtual copies whose handle is None, and
+        # even when it is not, a block-definition handle is useless here: the
+        # selection and the pick index only ever hold the modelspace entity.
+        # Without this, every vertex inside a block was unowned, so
+        # Viewport.hide_handles could not hide it and an erased block stayed on
+        # screen until the next full regen.
+        if self._open and self._open[-1][1] is not None:
+            handle = self._open[-1][1]
+        self._open.append((kind, handle))
+        self._kind, self._handle = kind, handle
 
     def exit_entity(self, entity) -> None:
         super().exit_entity(entity)
-        self._kind = ""
-        self._handle = None
+        if self._open:
+            self._open.pop()
+        # Restore the enclosing entity's context rather than clearing it: a
+        # parent keeps emitting primitives after a child exits, and those used
+        # to come out unowned (and untyped, which also mis-keyed their bucket).
+        self._kind, self._handle = self._open[-1] if self._open else ("", None)
 
     def _bucket(self, properties: BackendProperties) -> Bucket:
         key = (properties.layer, properties.color, properties.lineweight,

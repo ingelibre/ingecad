@@ -299,6 +299,48 @@ conviene no re-descubrir:
 - **El sitio solo afirma lo que la app hace hoy**, y la sección «Status» del `README.md` es la
   fuente de verdad del copy. Hay un FAQ que dice explícitamente que la topografía es v0.2.
 
+## 🗓 Sesión 2026-08-07 — v0.1.3 (borrar borra también en pantalla)
+
+Icono nuevo (el lápiz fuera, cursor de mira) y **un bug propio que Marco cazó
+dogfoodeando**: cortar una selección grande dejaba el original, y borrarla se veía
+parcial. El documento sí quedaba correcto — era **display**.
+
+El visor quita geometría editada sin regenerar, poniendo a cero el alfa de los
+tramos de vértices de la entidad, que busca en un mapa `handle → tramos`
+(`scene.handle_ranges`). **`hide_handles` hace `continue` en silencio cuando un
+handle no está en el mapa**, y el mapa tenía tres huecos:
+
+1. **Todo el contenido de bloque quedaba sin dueño.** El frontend de dibujo expande
+   un `INSERT` en copias **virtuales** cuyo `handle` es `None`. Y aunque tuvieran
+   uno, el handle de una entidad de definición de bloque no sirve acá: la selección
+   y el índice de picado solo manejan la entidad del modelspace. Ahora se atribuye
+   a **la entidad más externa que tenga handle**.
+2. **`exit_entity` borraba el contexto en vez de restaurarlo**, así que lo que el
+   padre dibujaba *después* de un hijo anidado también salía sin dueño (y sin
+   `kind`, lo que además mal-clasificaba su bucket para el culling de texto).
+3. **El lote de líneas gruesas nunca registró dueños**: `_pack_thick` era el único
+   empaquetador llamado sin el mapa, así que toda entidad con grosor > 0,25 mm era
+   inocultable, con bloques o sin ellos.
+
+Medido borrando todas las entidades del modelspace y contando vértices que siguen
+dibujados: `casa.dwg` dejaba el **75,9 %** del plano en pantalla, el tijeral 26,7 %,
+la iglesia de Yanaquihua 13,2 %, `sedapar` 1,9 %. Los cuatro dan **0 %** ahora, y el
+tiempo de construcción de escena no cambia.
+
+⚠️ **La lección de método, que es la de siempre en otra forma:** el test de cobertura
+que ya existía corría sobre un documento sintético **sin bloques y sin líneas
+gruesas**, o sea sobre el único caso que no fallaba. Por eso el hueco sobrevivió a
+la suite. El invariante nuevo (`test_handle_ranges_cover_every_vertex_of_every_batch`)
+exige primero que el dibujo **llegue a los cuatro lotes** y después que no quede ni
+un vértice sin dueño; y se verificó al revés, revirtiendo el arreglo para confirmar
+que los cinco tests fallan sin él. Un test que pasa no prueba nada si también pasaría
+con el código roto.
+
+Y el bug se disfrazaba porque **se curaba solo**: el `_merge_timer` regenera a los
+2,5 s de la última edición. En un plano chico eso es un parpadeo; en `sedapar`, donde
+la regeneración tarda ~10 s y cada edición reinicia la cuenta, se ve permanente. Un
+fallo que se autocorrige tarde es más difícil de creer que uno que no se corrige.
+
 ## 🗓 Sesión 2026-08-06/07 — v0.1.2 (los planos del colega abren)
 
 Release `v0.1.2`, **con AppImage** — el primer binario descargable del proyecto. Los **nueve**

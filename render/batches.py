@@ -274,12 +274,20 @@ def _pack_standard(
     )
 
 
-def _pack_thick(buckets: list[Bucket], origin: tuple[float, float], extents) -> Batch:
+def _pack_thick(
+    buckets: list[Bucket], origin: tuple[float, float], extents,
+    batch_name: str = "", handle_ranges: Optional[dict] = None,
+) -> Batch:
     """Thick line segments -> quads (2 triangles, 6 vertices) per segment.
 
     Each vertex stores the segment point plus a unit perpendicular; the
     shader expands it by the half lineweight in world units, so thickness
     stays constant in pixels at any zoom (AutoCAD LWT display).
+
+    Records owner runs like :func:`_pack_standard` does. Skipping that was a
+    real bug: this batch holds every entity whose lineweight is above
+    ``THIN_MAX_MM``, and ``Viewport.hide_handles`` silently ignores a handle it
+    cannot find, so erasing left thick strokes on screen until the next regen.
     """
     ox, oy = origin
     chunks: list[np.ndarray] = []
@@ -293,12 +301,19 @@ def _pack_thick(buckets: list[Bucket], origin: tuple[float, float], extents) -> 
         d = seg[:, 1] - seg[:, 0]
         length = np.hypot(d[:, 0], d[:, 1])
         ok = length > 0.0
+        # Owners are per segment, so they take the same two steps the geometry
+        # takes: drop the zero-length ones, then the grid permutation.
+        owners = bucket.lines_owner
+        owner_arr = (np.asarray(owners, dtype=object)[ok]
+                     if owners and handle_ranges is not None else None)
         seg, d, length = seg[ok], d[ok], length[ok]
         if len(seg) == 0:
             continue
         cells = _grid_cells(seg.reshape(-1, 2), extents, 2)
         order = np.argsort(cells, kind="stable")
         seg, d, length, cells = seg[order], d[order], length[order], cells[order]
+        if owner_arr is not None:
+            owner_arr = owner_arr[order]
 
         normal = np.column_stack((-d[:, 1], d[:, 0])) / length[:, None]
         p0 = seg[:, 0] - (ox, oy)
@@ -312,6 +327,19 @@ def _pack_thick(buckets: list[Bucket], origin: tuple[float, float], extents) -> 
             verts["normal"][:, i] = normal * sign
         verts["rgba"] = _color_u8(bucket.color)
         chunks.append(verts.reshape(-1))
+
+        # Six vertices per segment, so a run of k segments is 6k vertices.
+        if owner_arr is not None:
+            i = 0
+            while i < n_seg:
+                h = owner_arr[i]
+                j = i
+                while j < n_seg and owner_arr[j] == h:
+                    j += 1
+                if h is not None:
+                    handle_ranges.setdefault(h, []).append(
+                        (batch_name, first + i * 6, (j - i) * 6))
+                i = j
 
         cell_breaks = np.nonzero(cells[1:] != cells[:-1])[0] + 1
         starts = np.concatenate(([0], cell_breaks))
@@ -427,7 +455,7 @@ def pack(buckets: dict[tuple, Bucket],
         origin=origin,
         extents=extents,
         lines=_pack_standard(ordered, "lines", 2, origin, extents, "lines", hr),
-        thick=_pack_thick(ordered, origin, extents),
+        thick=_pack_thick(ordered, origin, extents, "thick", hr),
         triangles=_pack_standard(ordered, "triangles", 3, origin, extents,
                                  "triangles", hr),
         points=_pack_standard(ordered, "points", 1, origin, extents, "points", hr),
