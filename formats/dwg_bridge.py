@@ -20,7 +20,9 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-_VENDOR_BIN = Path(__file__).resolve().parent.parent / "vendor" / "libredwg" / "bin"
+from core.paths import app_root
+
+_VENDOR_BIN = app_root() / "vendor" / "libredwg" / "bin"
 _TIMEOUT = 300  # seconds; big real-world DWGs convert in well under this
 
 

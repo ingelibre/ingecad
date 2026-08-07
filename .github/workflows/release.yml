@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Build the Linux AppImage on a tag and attach it to the release.
+#
+# Runs on ubuntu-22.04 on purpose: an AppImage links against the glibc of the
+# machine that built it, so building on the newest runner would produce a file
+# that only starts on the newest distros. 22.04 covers 22.04, 24.04 and 26.04.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:        # so the pipeline can be exercised without a tag
+
+permissions:
+  contents: write           # to upload the asset to the release
+
+jobs:
+  appimage:
+    name: AppImage (x86_64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"     # the oldest we support; the AppImage carries it
+
+      - name: System packages
+        run: |
+          sudo apt-get update -qq
+          # libegl/libgl for Qt, fuse for appimagetool, xvfb for the smoke test
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl file libegl1 libgl1 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
+            libfuse2 xvfb
+
+      - name: Python dependencies
+        run: |
+          python -m venv venv
+          ./venv/bin/python -m pip install --quiet --upgrade pip
+          ./venv/bin/python -m pip install --quiet -r requirements.txt pyinstaller
+
+      # vendor/libredwg is gitignored, so a fresh clone has no converters.
+      # This rebuilds them from the pristine release plus the shipped patches.
+      - name: Build vendor/libredwg
+        run: tools/libredwg-patches/build-vendor.sh
+
+      - name: Tests
+        run: ./venv/bin/python -m pytest -q
+
+      - name: Build the AppImage
+        run: packaging/build-appimage.sh dist
+
+      # build-appimage.sh already ran --check on the bundle and on the
+      # AppImage. This is the harder question: does it start a real GUI and
+      # open a drawing? xvfb gives it a display; ezdxf writes the test DXF.
+      - name: Smoke test with a display
+        run: |
+          ./venv/bin/python - <<'PY'
+          import ezdxf
+          doc = ezdxf.new("R2000")
+          ms = doc.modelspace()
+          ms.add_line((0, 0), (100, 50))
+          ms.add_circle((50, 25), 12.5)
+          doc.saveas("smoke.dxf")
+          PY
+          APP=$(ls dist/IngeCAD-*-x86_64.AppImage)
+          # It has no --exit-after, so give it a few seconds and require that it
+          # was still alive: a crash on startup exits well before the timeout.
+          set +e
+          xvfb-run -a timeout 25 "$APP" smoke.dxf > smoke.log 2>&1
+          rc=$?
+          set -e
+          cat smoke.log
+          if [ "$rc" != "124" ]; then
+            echo "!! the AppImage exited with $rc instead of surviving to the timeout"
+            exit 1
+          fi
+          echo "OK — started, opened smoke.dxf and stayed up"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IngeCAD-AppImage-x86_64
+          path: dist/IngeCAD-*-x86_64.AppImage
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/IngeCAD-*-x86_64.AppImage --clobber

@@ -37,6 +37,7 @@ from PySide6.QtOpenGL import (
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QRubberBand
 
+from core.paths import app_root
 from render.batches import THICK_DTYPE, VERTEX_DTYPE, Batch, Scene
 from render.view import ViewTransform2D
 
@@ -55,7 +56,7 @@ GL_BLEND = 0x0BE2
 GL_SRC_ALPHA = 0x0302
 GL_ONE_MINUS_SRC_ALPHA = 0x0303
 
-SHADER_DIR = Path(__file__).resolve().parents[1] / "resources" / "shaders"
+SHADER_DIR = app_root() / "resources" / "shaders"
 
 # Classic dark model space (near-black, slightly blue like AutoCAD's default).
 BACKGROUND = (0.129, 0.149, 0.169)

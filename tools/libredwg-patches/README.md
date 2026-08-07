@@ -119,6 +119,30 @@ See `docs/bench-libredwg-2026-08-04.md`.
 
 ## Rebuilding vendor/libredwg
 
+**One command**, and it is what the release workflow runs on a clean checkout:
+
+```sh
+tools/libredwg-patches/build-vendor.sh
+```
+
+It fetches the `0.14.8556` tarball, verifies it against the project's own
+`dist.sha256`, applies `current/ingecad-vendor-0.14.8556.patch` (the thirteen
+patches above, combined), builds with `--disable-shared` so the converters end
+up statically linked, and installs **only** `dwg2dxf` and `dxf2dwg` into
+`vendor/libredwg/bin` — the other ten programs add ~118 MB and IngeCAD never
+invokes them.
+
+Verified reproducible: rebuilding from scratch gives a `dwg2dxf` that differs
+from the shipped one in **20 bytes**, all inside `.note.gnu.build-id`, and reads
+the same nine drawings to the same entity counts.
+
+The combined patch is generated from the `vendor-0.1.2` branch of the fork
+(`git diff origin/master..vendor-0.1.2`), which holds the same file contents this
+tree is built from. It exists because `vendor/libredwg` is gitignored, so
+without it a fresh clone has no converters; it shrinks as the PRs land.
+
+## Rebuilding by hand
+
 ```sh
 cd ~/Proyectos/externos/build-libredwg
 V=0.14.8556

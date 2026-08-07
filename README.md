@@ -55,6 +55,22 @@ Planned next (v0.2): survey-point import with elevations, coordinate
 tables, elevation profiles, paper-space editing. See `CLAUDE.md` for the
 roadmap.
 
+## Install (Linux, x86_64)
+
+Download the AppImage from the
+[latest release](https://github.com/ingelibre/ingecad/releases/latest), make it
+executable, run it. Nothing else to install — Python, Qt and the DWG converters
+are inside:
+
+```bash
+chmod +x IngeCAD-*-x86_64.AppImage
+./IngeCAD-*-x86_64.AppImage            # or double-click it
+./IngeCAD-*-x86_64.AppImage --check    # if something misbehaves
+```
+
+`--check` prints where the app found its shaders, translations and converters,
+and exits non-zero if any of them is missing.
+
 ## Running from source
 
 ```bash
@@ -65,10 +81,31 @@ venv/bin/pip install -r requirements.txt
 venv/bin/python main.py
 ```
 
-**DWG support** needs the LibreDWG converters (`dwg2dxf` / `dxf2dwg`) on
-your `PATH` (most distros package `libredwg-tools`), or their binaries
-placed in `vendor/libredwg/bin/`. DXF works out of the box. Installing the
-freeware ODA File Converter additionally enables DWG r2018 export.
+**DWG support** needs the LibreDWG converters (`dwg2dxf` / `dxf2dwg`). The
+release AppImage carries them already; from a source checkout, either put them
+on your `PATH` (most distros package `libredwg-tools`) or build the patched ones
+IngeCAD ships:
+
+```bash
+tools/libredwg-patches/build-vendor.sh    # downloads, patches, builds into vendor/
+```
+
+That build is not stock: it is LibreDWG 0.14.8556 plus thirteen fixes, all of
+them open as pull requests upstream, without which several real-world drawings
+do not open at all. See `tools/libredwg-patches/README.md`. DXF works out of the
+box either way, and installing the freeware ODA File Converter additionally
+enables DWG r2018 export.
+
+## Building the AppImage yourself
+
+```bash
+tools/libredwg-patches/build-vendor.sh   # once, for the converters
+packaging/build-appimage.sh              # -> dist/IngeCAD-<version>-x86_64.AppImage
+```
+
+An AppImage links against the glibc of the machine that built it, so one built
+on a current distro will not start on an older one. The release workflow
+(`.github/workflows/release.yml`) builds on Ubuntu 22.04 for that reason.
 
 To get the launcher entry, app icon and `.dwg`/`.dxf` double-click
 association on Linux:

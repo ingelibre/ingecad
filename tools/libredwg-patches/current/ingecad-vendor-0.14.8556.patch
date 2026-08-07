@@ -1,0 +1,963 @@
+diff --git a/programs/dwg2SVG.c b/programs/dwg2SVG.c
+index 1344bacb..2305da79 100644
+--- a/programs/dwg2SVG.c
++++ b/programs/dwg2SVG.c
+@@ -47,6 +47,7 @@
+ #endif
+ #include "my_getopt.h"
+ #include <math.h>
++#include <float.h>
+ #ifdef HAVE_VALGRIND_VALGRIND_H
+ #  include <valgrind/valgrind.h>
+ #endif
+@@ -105,6 +106,55 @@ help (void)
+   return 0;
+ }
+ 
++/* Every geometry printf goes through this. The measuring pass below has to
++   walk the same code without emitting, and it cannot simply skip the call:
++   the arguments are where transform_X and transform_Y live, so not evaluating
++   them measures nothing. So it writes to the null device instead.
++   fprintf (stderr, ...) is untouched. */
++#ifdef _WIN32
++#  define NULL_DEVICE "NUL"
++#else
++#  define NULL_DEVICE "/dev/null"
++#endif
++static FILE *measure_sink = NULL;
++
++#define printf(...) fprintf (measuring ? measure_sink : stdout, __VA_ARGS__)
++
++/* The viewBox has to be the box of what actually gets drawn, and that is not
++   $EXTMIN/$EXTMAX: this program renders "some 2D elements", so the header box
++   also covers entities it skips, and real drawings carry entities outside
++   their recorded extents too. Framing by the header box left the geometry off
++   screen or smaller than a pixel -- the empty SVGs of GH #523.
++
++   So the drawn space is walked twice: once with output suppressed to collect
++   the box, then again to emit. Coordinates are recorded before the transform,
++   since the transform itself needs the box.
++
++   Inside a <defs> symbol the coordinates are block-local -- the <use> that
++   instantiates it already carries the placement -- so translating them there
++   as well displaced every block by the model origin a second time. They are
++   left alone on the way out, and kept out of the box: what belongs in it is
++   the insertion point, which the <use> does pass through transform_X. */
++static bool measuring = false;
++static bool in_block_definition = false;
++static double drawn_xmin, drawn_ymin, drawn_xmax, drawn_ymax;
++
++/* Counts coordinates put on the page, so output_BLOCK_HEADER can tell which
++   of its entities actually drew something. */
++static unsigned long coords_drawn = 0;
++
++static void
++record_XY (double v, double *lo, double *hi)
++{
++  if (!isfinite (v) || in_block_definition)
++    return;
++  coords_drawn++;
++  if (v < *lo)
++    *lo = v;
++  if (v > *hi)
++    *hi = v;
++}
++
+ static double
+ transform_ANGLE (double angle)
+ {
+@@ -114,13 +164,15 @@ transform_ANGLE (double angle)
+ static double
+ transform_X (double x)
+ {
+-  return x - model_xmin;
++  record_XY (x, &drawn_xmin, &drawn_xmax);
++  return in_block_definition ? x : x - model_xmin;
+ }
+ 
+ static double
+ transform_Y (double y)
+ {
+-  return page_height - (y - model_ymin);
++  record_XY (y, &drawn_ymin, &drawn_ymax);
++  return in_block_definition ? -y : page_height - (y - model_ymin);
+ }
+ 
+ static bool
+@@ -164,9 +216,15 @@ static double
+ entity_lweight (Dwg_Object_Entity *ent)
+ {
+   // TODO: resolve BYLAYER 256, see above.
+-  // stroke-width:%0.1fpx. 100th of a mm
++  /* dxf_cvt_lweight gives 100ths of a mm, so mm is lw/100 -- it was lw/1000,
++     and printed with %.1f, which turned every ordinary lineweight into
++     stroke-width:0.0 and drew nothing. 0 is a legitimate value meaning
++     "thinnest line", so it also needs a width it can be seen at. The stroke
++     is emitted with vector-effect:non-scaling-stroke, so these are device
++     widths and stay visible whatever the viewBox spans. */
+   int lw = dxf_cvt_lweight (ent->linewt);
+-  return lw < 0 ? 0.1 : (double)(lw * 0.001);
++  double mm = lw > 0 ? (double)lw * 0.01 : 0.0;
++  return mm < 0.05 ? 0.05 : mm;
+ }
+ 
+ static char *
+@@ -218,7 +276,8 @@ common_entity (Dwg_Object_Entity *ent)
+   char *color;
+   lweight = entity_lweight (ent);
+   color = entity_color (ent);
+-  printf ("      style=\"fill:none;stroke:%s;stroke-width:%.1fpx\" />\n",
++  printf ("      style=\"fill:none;stroke:%s;stroke-width:%.2fmm;"
++          "vector-effect:non-scaling-stroke\" />\n",
+           color, lweight);
+   if (*color == '#')
+     free (color);
+@@ -820,7 +879,18 @@ output_BLOCK_HEADER (Dwg_Object_Ref *ref)
+   obj = get_first_owned_entity (ref->obj);
+   while (obj)
+     {
+-      num += output_object (obj);
++      /* Count what was drawn, not what was handled. The caller reads this as
++         "how many paper-space entities we did print" and falls back to model
++         space when it is zero -- but output_object returns 1 for every type it
++         recognises, including VIEWPORT and SEQEND, which draw nothing, and
++         entities it skips as invisible. Every paper space holds a VIEWPORT, so
++         the count was never zero, model space was never drawn, and its
++         geometry only ever appeared inside <defs>, which no renderer draws.
++         That is the empty SVG of GH #523. */
++      unsigned long before = coords_drawn;
++      output_object (obj);
++      if (coords_drawn > before)
++        num++;
+       obj = get_next_owned_entity (ref->obj, obj);
+     }
+ 
+@@ -855,6 +925,62 @@ output_SVG (Dwg_Data *dwg)
+     dy = 100.0;
+   page_width = dx;
+   page_height = dy;
++
++  /* First pass: walk what we are about to draw, emitting nothing, so the
++     viewBox can be the box of the geometry instead of the header's. */
++  drawn_xmin = drawn_ymin = DBL_MAX;
++  drawn_xmax = drawn_ymax = -DBL_MAX;
++  measure_sink = fopen (NULL_DEVICE, "w");
++  measuring = measure_sink != NULL;
++  if (!mspace && (ref = dwg_paper_space_ref (dwg)))
++    num = output_BLOCK_HEADER (ref);
++  if (!num && (ref = dwg_model_space_ref (dwg)))
++    output_BLOCK_HEADER (ref);
++  for (i = 0; i < dwg->block_control.num_entries; i++)
++    {
++      if (dwg->block_control.entries && (ref = dwg->block_control.entries[i]))
++        {
++          in_block_definition = true;
++          output_BLOCK_HEADER (ref);
++          in_block_definition = false;
++        }
++    }
++  measuring = false;
++  if (measure_sink)
++    {
++      fclose (measure_sink);
++      measure_sink = NULL;
++    }
++  num = 0;
++
++  if (drawn_xmin <= drawn_xmax && drawn_ymin <= drawn_ymax)
++    {
++      /* A margin, so that a stroke on the outermost line, and the geometry of
++         an inserted symbol reaching past its insertion point, are not clipped
++         at the edge. Proportional on purpose: padding by the largest block
++         extent instead would let one unused block whose definition sits at
++         absolute coordinates blow the box back up to millions of units. */
++      const double margin = 0.02 * MAX (drawn_xmax - drawn_xmin,
++                                        drawn_ymax - drawn_ymin);
++      model_xmin = drawn_xmin - margin;
++      model_ymin = drawn_ymin - margin;
++      dx = (drawn_xmax + margin) - model_xmin;
++      dy = (drawn_ymax + margin) - model_ymin;
++      if (dx > 0.0 && dy > 0.0 && isfinite (dx) && isfinite (dy))
++        {
++          /* model_xmax/model_ymax are the clip box output_XLINE reads, so keep
++             the four of them describing the same rectangle. */
++          model_xmax = model_xmin + dx;
++          model_ymax = model_ymin + dy;
++          page_width = dx;
++          page_height = dy;
++        }
++      else
++        {
++          model_xmin = dwg_model_x_min (dwg);
++          model_ymin = dwg_model_y_min (dwg);
++        }
++    }
+   // scale *= (scale_x > scale_y ? scale_x : scale_y);
+ 
+   // optional, for xmllint
+@@ -869,8 +995,8 @@ output_SVG (Dwg_Data *dwg)
+           "   xmlns:xlink=\"http://www.w3.org/1999/xlink\"\n"
+           "   version=\"1.1\" baseProfile=\"basic\"\n"
+           "   width=\"100%%\" height=\"100%%\"\n"
+-          "   viewBox=\"%f %f %f %f\">\n",
+-          model_xmin, model_ymin, page_width, page_height);
++          "   viewBox=\"0 0 %f %f\">\n",
++          page_width, page_height);
+ 
+   if (!mspace && (ref = dwg_paper_space_ref (dwg)))
+     num = output_BLOCK_HEADER (
+@@ -878,11 +1004,13 @@ output_SVG (Dwg_Data *dwg)
+   if (!num && (ref = dwg_model_space_ref (dwg)))
+     output_BLOCK_HEADER (ref);
+   printf ("\t<defs>\n");
++  in_block_definition = true;
+   for (i = 0; i < dwg->block_control.num_entries; i++)
+     {
+       if (dwg->block_control.entries && (ref = dwg->block_control.entries[i]))
+         output_BLOCK_HEADER (ref);
+     }
++  in_block_definition = false;
+   printf ("\t</defs>\n");
+   printf ("</svg>\n");
+   fflush (stdout);
+diff --git a/src/bits.c b/src/bits.c
+index 1b11bdd0..e47b7657 100644
+--- a/src/bits.c
++++ b/src/bits.c
+@@ -2925,6 +2925,28 @@ bit_read_T (Bit_Chain *restrict dat)
+     return (BITCODE_T)bit_read_TV (dat);
+ }
+ 
++/* U+D800..U+DFFF are UTF-16 surrogate halves. They stand for a code point only
++   in pairs, and RFC 3629 forbids encoding them in UTF-8 at all -- which is why
++   bit_utf8_to_TU above already refuses them on the way in ("reject overlong
++   encodings and UTF-16 surrogates"). Writing them out regardless, as the
++   "windows ucs-2 has no D800-DC00 surrogate pairs, go straight up" comments
++   below assumed was safe, produces a DXF that no UTF-8 decoder accepts: iconv
++   and Python reject the file, and AutoCAD refuses the whole drawing over a
++   single such name (GH #1021, an APPID whose name in the DWG is damaged). One
++   surrogate makes 106000 good lines unreadable.
++
++   U+FFFD is the standard substitute and takes the same three bytes, so nothing
++   else about these loops changes. Combining a genuine pair into the
++   supplementary code point it denotes would recover more, and is the natural
++   next step; this only guarantees the output is well-formed. */
++#define NO_LONE_SURROGATE(c)                                                  \
++  do                                                                          \
++    {                                                                         \
++      if ((c) >= 0xD800 && (c) <= 0xDFFF)                                     \
++        (c) = 0xFFFD;                                                         \
++    }                                                                         \
++  while (0)
++
+ /* converts UCS-2LE to UTF-8.
+    first pass to get the dest len. single malloc.
+  */
+@@ -3001,6 +3023,7 @@ bit_convert_TU (const BITCODE_TU restrict wstr)
+             }
+           else /* if (c < 0x10000) */
+             {
++              NO_LONE_SURROGATE (c);
+               str[i++] = (c >> 12) | 0xE0;
+               str[i++] = ((c >> 6) & 0x3F) | 0x80;
+               str[i++] = (c & 0x3F) | 0x80;
+@@ -3030,6 +3053,7 @@ bit_convert_TU (const BITCODE_TU restrict wstr)
+               str = realloc(str, i+3);
+               len = i+2;
+             }*/
++            NO_LONE_SURROGATE (c);
+             str[i++] = (c >> 12) | 0xE0;
+             str[i++] = ((c >> 6) & 0x3F) | 0x80;
+             str[i++] = (c & 0x3F) | 0x80;
+@@ -3123,6 +3147,7 @@ bit_convert_TU_len (const BITCODE_TU restrict wstr, const size_t max_wchars)
+             }
+           else
+             {
++              NO_LONE_SURROGATE (c);
+               str[i++] = (c >> 12) | 0xE0;
+               str[i++] = ((c >> 6) & 0x3F) | 0x80;
+               str[i++] = (c & 0x3F) | 0x80;
+@@ -3144,6 +3169,7 @@ bit_convert_TU_len (const BITCODE_TU restrict wstr, const size_t max_wchars)
+           }
+         else
+           {
++            NO_LONE_SURROGATE (c);
+             str[i++] = (c >> 12) | 0xE0;
+             str[i++] = ((c >> 6) & 0x3F) | 0x80;
+             str[i++] = (c & 0x3F) | 0x80;
+@@ -3211,6 +3237,7 @@ bit_TU_to_utf8_len (const BITCODE_TU restrict wstr, const int len)
+           else /* if (c < 0x10000) */
+             {
+               EXTEND_SIZE (str, i + 2, len);
++              NO_LONE_SURROGATE (c);
+               str[i++] = (c >> 12) | 0xE0;
+               str[i++] = ((c >> 6) & 0x3F) | 0x80;
+               str[i++] = (c & 0x3F) | 0x80;
+@@ -3242,6 +3269,7 @@ bit_TU_to_utf8_len (const BITCODE_TU restrict wstr, const int len)
+               len = i+2;
+             }*/
+             EXTEND_SIZE (str, i + 2, len);
++            NO_LONE_SURROGATE (c);
+             str[i++] = (c >> 12) | 0xE0;
+             str[i++] = ((c >> 6) & 0x3F) | 0x80;
+             str[i++] = (c & 0x3F) | 0x80;
+@@ -3909,7 +3937,7 @@ bit_read_TIMEBLL (Bit_Chain *dat)
+       date.days = bit_read_BL (dat);
+       date.ms = bit_read_BL (dat);
+     }
+-  date.value = date.days + (date.ms * 1e-8);
++  date.value = date.days + (date.ms / TIMEBLL_MS_PER_DAY);
+   return date;
+ }
+ 
+@@ -3938,7 +3966,7 @@ bit_read_TIMERLL (Bit_Chain *dat)
+   date.days = bit_read_RL (dat);
+   date.ms = bit_read_RL (dat);
+   // just for display, not calculations
+-  date.value = date.days + (date.ms * 1e-8);
++  date.value = date.days + (date.ms / TIMEBLL_MS_PER_DAY);
+   return date;
+ }
+ 
+diff --git a/src/common.c b/src/common.c
+index 722e1957..e5e6852f 100644
+--- a/src/common.c
++++ b/src/common.c
+@@ -534,7 +534,7 @@ cvt_TIMEBLL (struct tm *tm, BITCODE_TIMEBLL date)
+ 
+ #define TRUNC(n) (long)floor (n)
+ 
+-  t = 0.864 * date.ms / 1000.0; /*t=1000000 = 1 day, means 86400 in seconds */
++  t = date.ms / 1000.0; /* ms elapsed in the day -> seconds */
+   if (date.days > 2299161)
+     {
+       jalpha = TRUNC (((date.days - 1867216) - 0.25) / 36524.25);
+diff --git a/src/common.h b/src/common.h
+index 8001e0da..2ec7f957 100644
+--- a/src/common.h
++++ b/src/common.h
+@@ -33,6 +33,16 @@
+ #include <inttypes.h>
+ #include <stdbool.h>
+ #include <math.h>
++
++/* A TIMEBLL/TIMERLL is a julian day number plus the milliseconds elapsed in
++   that day, so the fraction of a day it stands for is ms/86400000. The code
++   used to spell that as "ms * 1e-8" in seven places, "0.864 * ms / 1000" in
++   cvt_TIMEBLL and "86400.0 * ms" in json_TIMEBLL -- three mutually
++   incompatible conventions for one field, all of them wrong by 0.864 or worse.
++   dwg_add_Document fills the field itself with 1000 * (now % 86400), i.e.
++   milliseconds, three lines above computing the value as ms * 1e-8. GH #1309. */
++#define TIMEBLL_MS_PER_DAY 86400000.0
++
+ #include <time.h>
+ #include "dwg.h"
+ 
+diff --git a/src/decode.c b/src/decode.c
+index 10059aa1..7d04ce64 100644
+--- a/src/decode.c
++++ b/src/decode.c
+@@ -2061,6 +2061,22 @@ read_2004_compressed_section (Bit_Chain *dat, Dwg_Data *restrict dwg,
+   {
+     uint64_t max_decomp_size64
+         = (uint64_t)info->num_sections * (uint64_t)info->max_decomp_size;
++    /* num_sections * max_decomp_size is only an upper-bound *estimate* of the
++       decompressed section. Each page carries its own StartOffset into the
++       buffer, so what the buffer really has to span is info->size, the declared
++       decompressed total. On some r2018 files the estimate comes out 1-3 pages
++       short of info->size; rejecting those loses the whole drawing
++       (num_objects: 0) even though every page is fine. Allocate whichever is
++       larger and keep the sanity cap. */
++    if (info->size > 0 && (uint64_t)info->size > max_decomp_size64)
++      {
++        LOG_TRACE ("Section %s: declared size %" PRId64 " exceeds the %"
++                   PRIu64 " estimate (" FORMAT_RL " * " FORMAT_RL
++                   "), allocating the declared size\n",
++                   info->name, info->size, max_decomp_size64,
++                   info->num_sections, info->max_decomp_size);
++        max_decomp_size64 = (uint64_t)info->size;
++      }
+     if (max_decomp_size64 == 0 || max_decomp_size64 > 0x2f000000) // 790Mb
+       {
+         LOG_ERROR ("Invalid section %s count or max decompression size. "
+@@ -2070,12 +2086,9 @@ read_2004_compressed_section (Bit_Chain *dat, Dwg_Data *restrict dwg,
+       }
+     max_decomp_size = (uint32_t)max_decomp_size64;
+   }
+-  if (info->size > (int64_t)info->num_sections * (int64_t)info->max_decomp_size
+-      || info->size < 0)
++  if (info->size < 0)
+     {
+-      LOG_ERROR ("Invalid section %s size %" PRId64 " > %u * " FORMAT_RL,
+-                 info->name, info->size, info->num_sections,
+-                 info->max_decomp_size);
++      LOG_ERROR ("Invalid section %s size %" PRId64, info->name, info->size);
+       return DWG_ERR_VALUEOUTOFBOUNDS;
+     }
+   LOG_HANDLE ("Alloc section %s size %" PRIu32 "\n", info->name,
+@@ -2164,9 +2177,19 @@ read_2004_compressed_section (Bit_Chain *dat, Dwg_Data *restrict dwg,
+       LOG_INSANE ("bytes_left:               %ld\n", bytes_left);
+ 
+       // check if compressed at all
++      /* Bound the page by what it actually decompresses to, not by the
++         section-wide maximum: the last page is normally shorter, so
++         address + max_decomp_size overshoots the buffer while
++         address + page_size fits. When that happens for a *compressed*
++         section, control falls into the else branch below, which rejects it
++         outright on `info->compressed == 2` and loses the whole section. The
++         else branch already computes the real size this way. */
+       if (info->compressed == 2 && bytes_left > 0
+           && es.fields.address <= max_decomp_size
+-          && es.fields.address + info->max_decomp_size <= max_decomp_size)
++          && es.fields.address
++                     + MIN ((BITCODE_RL)(info->size - es.fields.address),
++                            es.fields.page_size)
++                 <= max_decomp_size)
+         {
+           size_t orig_size = dat->size;
+           dec.byte = es.fields.address;
+@@ -2592,11 +2615,25 @@ read_2004_section_handles (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
+                               " looks wrong, should be prevsize " FORMAT_MC
+                               " + 4",
+                               offset, prevsize - 4);
+-                  // handleoff = 1;
+-                  // offset = prevsize;
+-                  // LOG_WARN ("Recover invalid handleoff to %" PRIuSIZE " and
+-                  // offset to %ld",
+-                  //           handleoff, offset);
++                }
++              /* Resynchronise only when the modular char itself failed to parse
++                 (bit_read_UMC returns 0 on error). Trusting those bytes
++                 fabricates an object at an impossible address and derails every
++                 entry after it; retrying one byte later recovers the rest of the
++                 page. The other two conditions above are heuristics that also
++                 fire on entries which parsed fine, and those are better used
++                 than skipped -- resyncing on them loses good entries.
++
++                 Verified on an r2018 file whose second object-map page holds two
++                 bytes that are not part of the (UMC, MC) stream: strict parsing
++                 stops after 65 of 195 entries, resynchronising decodes all 195
++                 and ends exactly on the page boundary. The page CRC is valid
++                 either way, so the bytes are genuine content. */
++              if (!handleoff && oldpos + 1 < startpos + (size_t)section_size)
++                {
++                  hdl_dat.byte = oldpos + 1;
++                  hdl_dat.bit = 0;
++                  continue;
+                 }
+             }
+           last_offset += offset;
+@@ -6772,14 +6809,23 @@ decode_preR13_sentinel (const Dwg_Sentinel sentinel,
+   LOG_TRACE_TF (r11_sentinel, 16);
+   if (memcmp (r11_sentinel, wanted, 16))
+     {
+-      size_t pos = MAX (dat->byte, 200) - 200;
+-      size_t len = MIN (dat->size - dat->byte, 400);
+-      // search +- 1000 bytes around
++      /* Search +- 1000 bytes around, as documented. It used to be +-200
++         (pos = byte - 200, len = 400), which misses real files: a r11 drawing
++         here has the LAYER sentinel 300 bytes before where the header's table
++         address puts it, so the recovery below never fired and the whole file
++         was rejected with SECTIONNOTFOUND. */
++      const size_t window = 1000;
++      size_t pos = dat->byte > window ? dat->byte - window : 0;
++      size_t len = MIN (dat->size - pos, 2 * window);
+       char *found = (char *)memmem (&dat->chain[pos], len, wanted, 16);
+       if (!found)
+         {
+-          LOG_ERROR ("%s not found at %" PRIuSIZE, sentinel_name,
+-                     dat->byte - 16);
++          /* A warning, not an error: whether a missing sentinel is fatal is
++             the caller's call -- the table reader in decode_r11.c carries on
++             from the header's own table address -- and a caller that does
++             give up still reports it through "Failed to decode file". */
++          LOG_WARN ("%s not found at %" PRIuSIZE, sentinel_name,
++                    dat->byte - 16);
+           error = DWG_ERR_SECTIONNOTFOUND;
+         }
+       else
+@@ -6947,12 +6993,14 @@ decode_preR13_entities (BITCODE_RL start, BITCODE_RL end,
+   BITCODE_BL num = dwg->num_objects;
+   BITCODE_RL real_start = start;
+   size_t oldpos;
+-  BITCODE_RLL hdr_handle = 0;
++  BITCODE_RLL hdr_handle = 0, phdr_handle = 0;
++  Dwg_Object *phdr = NULL;
++  Dwg_Object_BLOCK_HEADER *_phdr = NULL;
+   const char *entities_section[]
+       = { "entities", "blocks entities", "extras entities" };
+   Dwg_Object *hdr = NULL;
+   Dwg_Object_BLOCK_HEADER *_hdr = NULL;
+-  BITCODE_BL block_idx = 0, hdr_index = 0;
++  BITCODE_BL block_idx = 0, hdr_index = 0, phdr_index = 0;
+ 
+   LOG_TRACE ("\n%s: (" FORMAT_RLx "-" FORMAT_RLx " (%u), size " FORMAT_RL
+              ")\n",
+@@ -6990,6 +7038,22 @@ decode_preR13_entities (BITCODE_RL start, BITCODE_RL end,
+           LOG_TRACE ("owned by BLOCK %s (" FORMAT_HV ")\n", _hdr->name,
+                      hdr_handle);
+         }
++      /* The r11 entities section holds both spaces, told apart by the
++         FLAG_R11_HAS_PSPACE flag which the decoder turns into entmode 1. Each
++         has to land in its own BLOCK_HEADER, or a reader walking the layouts
++         finds an empty paper space and a model space holding both (GH #1337). */
++      phdr = dwg_paper_space_object (dwg);
++      if (phdr && phdr->fixedtype == DWG_TYPE_BLOCK_HEADER)
++        {
++          phdr_index = phdr->index;
++          _phdr = phdr->tio.object->tio.BLOCK_HEADER;
++          _phdr->block_offset_r11 = (BITCODE_RL)-1;
++          if (!phdr->handle.value)
++            phdr->handle.value = dwg_next_handle (dwg);
++          phdr_handle = phdr->handle.value;
++          LOG_TRACE ("paper space is BLOCK %s (" FORMAT_HV ")\n", _phdr->name,
++                     phdr_handle);
++        }
+     }
+   // TODO search current offset in block_offset_r11 in BLOCK_HEADER's
+ 
+@@ -7530,17 +7594,21 @@ decode_preR13_entities (BITCODE_RL start, BITCODE_RL end,
+               && obj->fixedtype != DWG_TYPE_SEQEND)
+             {
+               BITCODE_H ref;
++              /* paper space, if this drawing has one and the entity says so */
++              const bool to_pspace = _phdr && phdr_handle
++                                     && obj->tio.entity->entmode == 1;
++              Dwg_Object_BLOCK_HEADER *_owner = to_pspace ? _phdr : _hdr;
+               if (!obj->handle.value)
+                 obj->handle.value = dwg_next_handle (dwg);
+-              hdr = &dwg->object[hdr_index];
++              hdr = &dwg->object[to_pspace ? phdr_index : hdr_index];
+               ref = dwg_add_handleref (dwg, 3, obj->handle.value, hdr);
+               // if (dwg->dirty_refs)
+               // find _hdr again from hdr_handle
+-              LOG_TRACE ("BLOCK_HEADER \"%s\".", _hdr->name);
++              LOG_TRACE ("BLOCK_HEADER \"%s\".", _owner->name);
+               if (obj->fixedtype != DWG_TYPE_BLOCK)
+-                PUSH_HV (_hdr, num_owned, entities, ref);
+-              obj->tio.entity->ownerhandle
+-                  = dwg_add_handleref (dwg, 4, hdr_handle, obj);
++                PUSH_HV (_owner, num_owned, entities, ref);
++              obj->tio.entity->ownerhandle = dwg_add_handleref (
++                  dwg, 4, to_pspace ? phdr_handle : hdr_handle, obj);
+               obj->tio.entity->ownerhandle->r11_idx = block_idx;
+               LOG_TRACE ("ownerhandle: " FORMAT_HREF11 "\n",
+                          ARGS_HREF11 (obj->tio.entity->ownerhandle));
+diff --git a/src/decode_r11.c b/src/decode_r11.c
+index 9d08e3ed..b441f931 100644
+--- a/src/decode_r11.c
++++ b/src/decode_r11.c
+@@ -273,10 +273,30 @@ decode_preR13_section (Dwg_Section_Type_r11 id, Bit_Chain *restrict dat,
+ 
+   SINCE (R_11)
+   {
++/* A missing table delimiter is not worth the drawing. The records are found
++   through tbl->address, which the header states independently of the
++   sentinel, and every pre-R13 table record carries its own CRC, checked
++   below -- so a wrong address is caught on its own merits rather than
++   guessed at from the delimiter. Rejecting the file instead threw away the
++   ENTITIES section that had already decoded: r11 writers exist that omit the
++   sentinels of the empty VIEW/UCS/VPORT tables (all three sharing one
++   address) and of the table that follows them (GH #767).
++   DWG_ERR_INVALIDDWG is left fatal on purpose: that one means the 16 bytes
++   could not even be read, so the position itself is nonsense. */
+ #define DECODE_PRER13_SENTINEL(ID)                                            \
+-  error |= decode_preR13_sentinel (ID, #ID, dat, dwg);                        \
+-  if (error >= DWG_ERR_SECTIONNOTFOUND)                                       \
+-  return error
++  {                                                                           \
++    int _sentinel_err = decode_preR13_sentinel (ID, #ID, dat, dwg);           \
++    if (_sentinel_err == DWG_ERR_SECTIONNOTFOUND)                             \
++      {                                                                       \
++        LOG_WARN ("%s missing, reading table %s at its header address "        \
++                  "0x%zx anyway",                                             \
++                  #ID, tbl->name, (size_t)tbl->address);                      \
++        _sentinel_err = DWG_ERR_WRONGCRC;                                     \
++      }                                                                       \
++    else if (_sentinel_err >= DWG_ERR_SECTIONNOTFOUND)                        \
++      return error | _sentinel_err;                                           \
++    error |= _sentinel_err;                                                   \
++  }
+ 
+     switch (id)
+       {
+diff --git a/src/decode_r2007.c b/src/decode_r2007.c
+index b4d88e04..193a9025 100644
+--- a/src/decode_r2007.c
++++ b/src/decode_r2007.c
+@@ -682,6 +682,20 @@ read_system_page (Bit_Chain *out, Bit_Chain *dat, int64_t size_comp,
+   return true;
+ }
+ 
++/* Size on disk of a Reed-Solomon coded data page holding size_comp payload
++   bytes: RS works on 0xFB-byte blocks expanded to 0xFF, and the page is then
++   padded to a multiple of 32.  A page whose size matches this exactly is RS
++   coded; a page stored verbatim is only padded to 32 and comes out smaller.
++   The section page record has no flag for it (unlike r2004+), so the size is
++   the only thing to go by.  */
++static int64_t
++page_size_if_rs_coded (const int64_t size_comp)
++{
++  const int64_t pesize = (size_comp + 7) & ~7;
++  const int64_t block_count = (pesize + 0xFB - 1) / 0xFB;
++  return (block_count * 0xFF + 31) & ~31;
++}
++
+ static int
+ read_data_page (Bit_Chain *restrict dat, BITCODE_RC *restrict decomp,
+                 int64_t page_size, int64_t size_comp, int64_t size_uncomp,
+@@ -830,9 +844,16 @@ read_data_section (Bit_Chain *sec_dat, Bit_Chain *dat,
+           return DWG_ERR_VALUEOUTOFBOUNDS;
+         }
+       dat->byte = page->offset;
+-      // only if compressed. TODO: Isn't there a compressed flag as with 2004+?
+-      // theoretically the sizes could still be the same.
+-      if (section_page->comp_size != section_page->uncomp_size)
++      /* Reed-Solomon coding is independent of compression: read_data_page()
++         undoes the RS coding first and only then decompresses, when
++         comp_size < uncomp_size.  An uncompressed page can therefore still be
++         RS coded, and copying it straight out of dat->chain hands the caller
++         the RS codewords -- payload interleaved with parity.  Take the RS path
++         whenever the page on disk is exactly as large as the RS coded form of
++         its payload; page->size is the only evidence available. */
++      if (section_page->comp_size != section_page->uncomp_size
++          || (int64_t)page->size
++                 == page_size_if_rs_coded (section_page->comp_size))
+         {
+           error = read_data_page (dat, &decomp[section_page->offset],
+                                   page->size, section_page->comp_size,
+@@ -840,7 +861,7 @@ read_data_section (Bit_Chain *sec_dat, Bit_Chain *dat,
+           if (error)
+             {
+               free (decomp);
+-              LOG_ERROR ("Failed to read compressed page");
++              LOG_ERROR ("Failed to read page");
+               return error;
+             }
+         }
+diff --git a/src/dwg.c b/src/dwg.c
+index 1ea92f7f..e14d7eca 100644
+--- a/src/dwg.c
++++ b/src/dwg.c
+@@ -421,10 +421,15 @@ ENDSEC
+       dat.size = 0;
+       return DWG_ERR_IOERROR;
+     }
+-  // properly end the buffer for strtol()/... readers
++  /* properly end the buffer for strtol()/... readers. The NUL has to go after
++     the newline we just appended, not on top of it: the chain is calloc'd with
++     two spare bytes for exactly this. Overwriting it left the buffer ending in
++     "...\n0\0" for a DXF without a trailing newline, and dxf_read_string
++     bails out when it finds no '\n' in what is left -- so the file's last
++     group pair was lost and the whole import failed. */
+   if (dat.chain[size - 1] != '\n')
+     {
+-      dat.chain[size] = '\n';
++      dat.chain[size++] = '\n';
+       dat.size++;
+     }
+   dat.chain[size] = '\0';
+@@ -1228,18 +1233,25 @@ get_first_owned_entity (const Dwg_Object *hdr)
+     }
+   else if (version >= R_2004 || version < R_13b1)
+     {
+-      _hdr->__iterator = 0;
+-      if (_hdr->entities && _hdr->num_owned && _hdr->entities[0])
++      /* Skip entries that do not resolve rather than reporting the layout as
++         empty: NULL is the caller's end-of-list signal, so one dangling
++         reference at the head would hide every entity behind it. */
++      Dwg_Data *dwg = hdr->parent;
++      for (_hdr->__iterator = 0;
++           _hdr->entities && _hdr->__iterator < _hdr->num_owned;
++           _hdr->__iterator++)
+         {
+-          Dwg_Data *dwg = hdr->parent;
+-          Dwg_Object *obj = dwg_ref_object (dwg, _hdr->entities[0]);
++          Dwg_Object_Ref *ref = _hdr->entities[_hdr->__iterator];
++          Dwg_Object *obj = ref ? dwg_ref_object (dwg, ref) : NULL;
+           if (version < R_13b1 && obj && obj->fixedtype == DWG_TYPE_JUMP)
+-            return dwg_resolve_jump (obj);
+-          else
++            obj = dwg_resolve_jump (obj);
++          if (obj)
+             return obj;
++          LOG_WARN ("Skip unresolvable entity " FORMAT_BL " of " FORMAT_BL
++                    " in BLOCK_HEADER " FORMAT_HV,
++                    _hdr->__iterator, _hdr->num_owned, hdr->handle.value);
+         }
+-      else
+-        return NULL;
++      return NULL;
+     }
+ 
+   // TODO: preR13 block table
+@@ -1347,15 +1359,24 @@ get_next_owned_entity (const Dwg_Object *restrict hdr,
+     {
+       Dwg_Object *obj;
+       Dwg_Object_Ref *ref;
+-      _hdr->__iterator++;
+-      if (_hdr->__iterator == _hdr->num_owned)
+-        return NULL;
+-      ref = _hdr->entities ? _hdr->entities[_hdr->__iterator] : NULL;
+-      obj = ref ? dwg_ref_object (dwg, ref) : NULL;
+-      if (version < R_13b1 && obj && obj->fixedtype == DWG_TYPE_JUMP)
+-        return dwg_resolve_jump (obj);
+-      else
+-        return obj;
++      /* See get_next_owned_block_entity: NULL is the caller's end-of-list
++         signal, so a dangling reference must be skipped, not reported as the
++         end. dwggrep and dwg2SVG walk this one. */
++      while (1)
++        {
++          _hdr->__iterator++;
++          if (_hdr->__iterator >= _hdr->num_owned)
++            return NULL;
++          ref = _hdr->entities ? _hdr->entities[_hdr->__iterator] : NULL;
++          obj = ref ? dwg_ref_object (dwg, ref) : NULL;
++          if (version < R_13b1 && obj && obj->fixedtype == DWG_TYPE_JUMP)
++            obj = dwg_resolve_jump (obj);
++          if (obj)
++            return obj;
++          LOG_WARN ("Skip unresolvable entity " FORMAT_BL " of " FORMAT_BL
++                    " in BLOCK_HEADER " FORMAT_HV,
++                    _hdr->__iterator, _hdr->num_owned, hdr->handle.value);
++        }
+     }
+ 
+   LOG_ERROR ("Unsupported version %s\n", dwg_version_type (version));
+@@ -1607,15 +1628,27 @@ get_next_owned_block_entity (const Dwg_Object *restrict hdr,
+     {
+       Dwg_Object *obj;
+       Dwg_Object_Ref *ref;
+-      _hdr->__iterator++;
+-      if (_hdr->__iterator == _hdr->num_owned)
+-        return NULL;
+-      ref = _hdr->entities ? _hdr->entities[_hdr->__iterator] : NULL;
+-      obj = ref ? dwg_ref_object (dwg, ref) : NULL;
+-      if (version < R_13b1 && obj && obj->fixedtype == DWG_TYPE_JUMP)
+-        return dwg_resolve_jump (obj);
+-      else
+-        return obj;
++      /* Keep advancing over entries that do not resolve. NULL is the caller's
++         end-of-list signal (out_dxf.c and out_dxfb.c walk this with
++         `while (obj)`), so returning it for a dangling reference abandons every
++         entity after it: one bad reference at index 93 of 10847 cost a whole
++         drawing. Skipping loses one entity, stopping loses all the rest. `>=`
++         rather than `==` so a bumped iterator cannot walk off the end. */
++      while (1)
++        {
++          _hdr->__iterator++;
++          if (_hdr->__iterator >= _hdr->num_owned)
++            return NULL;
++          ref = _hdr->entities ? _hdr->entities[_hdr->__iterator] : NULL;
++          obj = ref ? dwg_ref_object (dwg, ref) : NULL;
++          if (version < R_13b1 && obj && obj->fixedtype == DWG_TYPE_JUMP)
++            obj = dwg_resolve_jump (obj);
++          if (obj)
++            return obj;
++          LOG_WARN ("Skip unresolvable entity " FORMAT_BL " of " FORMAT_BL
++                    " in BLOCK_HEADER " FORMAT_HV,
++                    _hdr->__iterator, _hdr->num_owned, hdr->handle.value);
++        }
+     }
+ 
+   LOG_ERROR ("Unsupported version %s\n", dwg_version_type (version));
+diff --git a/src/dwg.spec b/src/dwg.spec
+index 3581ee23..25cd9087 100644
+--- a/src/dwg.spec
++++ b/src/dwg.spec
+@@ -746,7 +746,7 @@ DWG_ENTITY (INSERT)
+     FIELD_RD (rotation, 50);
+   }
+   VERSIONS (R_2_0b, R_11) {
+-    DECODER { FIELD_VALUE (has_attribs) = R11FLAG (FLAG_R11_HAS_ATTRIBS); }
++    DECODER { FIELD_VALUE (has_attribs) = R11FLAG (FLAG_R11_HAS_ATTRIBS) ? 1 : 0; }
+     FIELD_HANDLE (block_header, 2, 2);
+     FIELD_2RD (ins_pt, 10)
+ #ifndef IS_JSON
+diff --git a/src/dwg_api.c b/src/dwg_api.c
+index 763d5148..d04ebc7a 100644
+--- a/src/dwg_api.c
++++ b/src/dwg_api.c
+@@ -25015,7 +25015,7 @@ dwg_add_Document (Dwg_Data *restrict dwg, const int imperial)
+     days += 2440588L;
+     dwg->header_vars.TDUCREATE
+         = (BITCODE_TIMEBLL){ (BITCODE_BL)days, (BITCODE_BL)ms,
+-                             days + (ms * 1e-8) };
++                             days + (ms / TIMEBLL_MS_PER_DAY) };
+   }
+   dwg->header_vars.TDUUPDATE = dwg->header_vars.TDUCREATE;
+   // CECOLOR.index: 256 [CMC.BS 62]
+@@ -25324,7 +25324,12 @@ dwg_add_Document (Dwg_Data *restrict dwg, const int imperial)
+   dwg->header_vars.BLOCK_RECORD_MSPACE->obj = mspaceobj;
+   block_control->model_space
+       = dwg_add_handleref (dwg, 3, mspaceobj->handle.value, NULL);
+-  if (version >= R_13b1)
++  /* r11 and r12 have a paper space too -- that is what the entity flag
++     FLAG_R11_HAS_PSPACE marks, and AutoCAD writes a $PAPER_SPACE block for it.
++     Without the BLOCK_HEADER, dwg_paper_space_object() finds nothing, the
++     paper-space entities end up owned by model space, and the DXF loses the
++     block record entirely (GH #1337). */
++  if (version >= R_11)
+     {
+       // BLOCK_RECORD_PSPACE: (5.1.20)
+       dwg_set_next_hdl (dwg, UINT64_C (0x20));
+@@ -25344,10 +25349,26 @@ dwg_add_Document (Dwg_Data *restrict dwg, const int imperial)
+       dwg->block_control = *block_control;
+       // BLOCK: (5.1.21)
+       dwg_set_next_hdl (dwg, UINT64_C (0x21));
+-      dwg_add_BLOCK (pspace, "*PAPER_SPACE");
++      {
++        Dwg_Entity_BLOCK *pblock = dwg_add_BLOCK (pspace, "*PAPER_SPACE");
++        if (dwg->header.version <= R_12) // fixup the type, as for mspace below
++          {
++            obj = dwg_obj_generic_to_object (pblock, &error);
++            if (obj)
++              obj->type = DWG_TYPE_UNUSED_r11; // don't encode it
++          }
++      }
+       // ENDBLK: (5.1.22)
+       dwg_set_next_hdl (dwg, UINT64_C (0x22));
+-      dwg_add_ENDBLK (pspace);
++      {
++        Dwg_Entity_ENDBLK *pendblk = dwg_add_ENDBLK (pspace);
++        if (dwg->header.version <= R_12) // fixup the type
++          {
++            obj = dwg_obj_generic_to_object (pendblk, &error);
++            if (obj)
++              obj->type = DWG_TYPE_UNUSED_r11; // don't encode it
++          }
++      }
+     }
+   // LAYOUT (0.1.23)
+   // dwg_set_next_hdl (dwg, UINT64_C (0x23));
+diff --git a/src/header_variables.spec b/src/header_variables.spec
+index cfe9beab..08441e9a 100644
+--- a/src/header_variables.spec
++++ b/src/header_variables.spec
+@@ -276,13 +276,13 @@
+       _obj->TDCREATE.days  = _obj->TDUCREATE.days;
+       // adjust for timezone offset
+       _obj->TDCREATE.ms    = _obj->TDUCREATE.ms + off;
+-      _obj->TDCREATE.value = _obj->TDCREATE.days + (_obj->TDCREATE.ms * 1e-8);
++      _obj->TDCREATE.value = _obj->TDCREATE.days + (_obj->TDCREATE.ms / TIMEBLL_MS_PER_DAY);
+       strftime (_buf, 60, STRFTIME_DATE, cvt_TIMEBLL (&tm, _obj->TDCREATE));
+       LOG_TRACE ("=> TDCREATE: [" FORMAT_BL ", " FORMAT_BL "] %s [TIMEBLL 40]\n",
+                    _obj->TDCREATE.days, _obj->TDCREATE.ms, _buf);
+       _obj->TDUPDATE.days  = _obj->TDUUPDATE.days;
+       _obj->TDUPDATE.ms    = _obj->TDUUPDATE.ms + off;
+-      _obj->TDUPDATE.value = _obj->TDUPDATE.days + (_obj->TDUPDATE.ms * 1e-8);
++      _obj->TDUPDATE.value = _obj->TDUPDATE.days + (_obj->TDUPDATE.ms / TIMEBLL_MS_PER_DAY);
+       strftime (_buf, 60, STRFTIME_DATE, cvt_TIMEBLL (&tm, _obj->TDUPDATE));
+       LOG_TRACE ("=> TDUPDATE: [" FORMAT_BL ", " FORMAT_BL "] %s [TIMEBLL 40]\n",
+                    _obj->TDUPDATE.days, _obj->TDUPDATE.ms, _buf);
+diff --git a/src/header_variables_r11.spec b/src/header_variables_r11.spec
+index d6cc86e8..9221a119 100644
+--- a/src/header_variables_r11.spec
++++ b/src/header_variables_r11.spec
+@@ -202,12 +202,15 @@
+       _obj->TDUCREATE.days  = _obj->TDCREATE.days;
+       // adjust for timezone offset
+       _obj->TDUCREATE.ms    = _obj->TDUCREATE.ms - off;
+-      _obj->TDUCREATE.value = _obj->TDUCREATE.days + (_obj->TDUCREATE.ms * 1e-8);
++      _obj->TDUCREATE.value = _obj->TDUCREATE.days + (_obj->TDUCREATE.ms / TIMEBLL_MS_PER_DAY);
+       LOG_TRACE ("=> TDUCREATE: [" FORMAT_BL ", " FORMAT_BL "] %f [TIMEBLL 40]\n",
+                    _obj->TDUCREATE.days, _obj->TDUCREATE.ms, _obj->TDUCREATE.value);
+       _obj->TDUUPDATE.days  = _obj->TDUPDATE.days;
+       _obj->TDUUPDATE.ms    = _obj->TDUPDATE.ms - off;
+-      _obj->TDUUPDATE.value = _obj->TDUPDATE.days + (_obj->TDUPDATE.ms * 1e-8);
++      /* from TDUUPDATE, which is what the two lines above just set: the
++         value has to agree with the days/ms it belongs to, timezone
++         adjustment included. */
++      _obj->TDUUPDATE.value = _obj->TDUUPDATE.days + (_obj->TDUUPDATE.ms / TIMEBLL_MS_PER_DAY);
+       LOG_TRACE ("=> TDUUPDATE: [" FORMAT_BL ", " FORMAT_BL "] %f [TIMEBLL 40]\n",
+                    _obj->TDUUPDATE.days, _obj->TDUUPDATE.ms, _obj->TDUUPDATE.value);
+     }
+diff --git a/src/in_json.c b/src/in_json.c
+index fa61d838..6ec13a9d 100644
+--- a/src/in_json.c
++++ b/src/in_json.c
+@@ -909,9 +909,7 @@ json_TIMEBLL (Bit_Chain *restrict dat, jsmntokens_t *restrict tokens,
+       JSON_TOKENS_CHECK_OVERFLOW_VOID
+       date->ms = json_long (dat, tokens);
+       JSON_TOKENS_CHECK_OVERFLOW_VOID
+-      date->value
+-          = date->days
+-            + (86400.0 * date->ms); // just for display, not calculations
++      date->value = date->days + (date->ms / TIMEBLL_MS_PER_DAY);
+     }
+   else
+     {
+@@ -920,7 +918,7 @@ json_TIMEBLL (Bit_Chain *restrict dat, jsmntokens_t *restrict tokens,
+       JSON_TOKENS_CHECK_OVERFLOW_VOID
+       date->value = num;
+       date->days = (BITCODE_BL)trunc (num);
+-      date->ms = (BITCODE_BL)(86400.0 * (date->value - date->days));
++      date->ms = (BITCODE_BL)((date->value - date->days) * TIMEBLL_MS_PER_DAY);
+     }
+   LOG_TRACE ("%s: %.08f (%u, %u) [TIMEBLL]\n", name, date->value, date->days,
+              date->ms);
+diff --git a/src/out_dxf.c b/src/out_dxf.c
+index c9a73984..dec39a29 100644
+--- a/src/out_dxf.c
++++ b/src/out_dxf.c
+@@ -1874,20 +1874,25 @@ dxf_cvt_blockname (Bit_Chain *restrict dat, char *restrict name, const int dxf)
+         free (name);
+       return;
+     }
+-  if (dat->version == dat->from_version) // no conversion
++  /* The name depends on the DXF being written, not on where the drawing came
++     from: a pre-R13 DXF spells the two spaces $MODEL_SPACE and $PAPER_SPACE,
++     whatever they are called internally. Keying this off
++     "version != from_version" left an r11 -> r11 conversion writing
++     *MODEL_SPACE, which is not what AutoCAD writes (GH #1337). */
++  if (dat->version == dat->from_version && dat->version >= R_13b1)
+     {
+       fprintf (dat->fh, "%3i\r\n%s\r\n", dxf, name);
+     }
+-  else if (dat->version < R_13b1 && dat->from_version >= R_13b1) // to older
++  else if (dat->version < R_13b1) // to pre-R13
+     {
+-      if (strlen (name) < 10)
+-        fprintf (dat->fh, "%3i\r\n%s\r\n", dxf, name);
+-      else if (strEQc (name, "*Model_Space"))
++      if (strEQc (name, "*Model_Space") || strEQc (name, "*MODEL_SPACE"))
+         fprintf (dat->fh, "%3i\r\n$MODEL_SPACE\r\n", dxf);
+-      else if (strEQc (name, "*Paper_Space"))
++      else if (strEQc (name, "*Paper_Space") || strEQc (name, "*PAPER_SPACE"))
+         fprintf (dat->fh, "%3i\r\n$PAPER_SPACE\r\n", dxf);
+       else if (strlen (name) >= 12 && !memcmp (name, "*Paper_Space", 12))
+         fprintf (dat->fh, "%3i\r\n$PAPER_SPACE%s\r\n", dxf, &name[12]);
++      else if (strlen (name) >= 12 && !memcmp (name, "*PAPER_SPACE", 12))
++        fprintf (dat->fh, "%3i\r\n$PAPER_SPACE%s\r\n", dxf, &name[12]);
+       else
+         fprintf (dat->fh, "%3i\r\n%s\r\n", dxf, name);
+     }
+@@ -4056,6 +4061,14 @@ dxf_entities_write (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
+           if (o->fixedtype == DWG_TYPE_BLOCK
+               || o->fixedtype == DWG_TYPE_ENDBLK)
+             continue;
++          // JUMP is not an entity but a "resume reading at this offset" marker
++          // of the R11 entity sections, and it carries no drawing data. DXF has
++          // no such record, and JUMP has no ownerhandle, so the branch below
++          // would emit it into mspace and break the POLYLINE-VERTEX-SEQEND
++          // sequence for conformant readers. decode.c already keeps JUMP out
++          // of the block header entity list for the same reason.
++          if (o->fixedtype == DWG_TYPE_JUMP)
++            continue;
+           ohdl = o->tio.entity->ownerhandle;
+           if (!ohdl || !ohdl->absolute_ref)
+             {
+diff --git a/test/unit-testing/add_test.c b/test/unit-testing/add_test.c
+index 76a6bd1c..7f5cbd8a 100644
+--- a/test/unit-testing/add_test.c
++++ b/test/unit-testing/add_test.c
+@@ -1284,7 +1284,7 @@ test_api_version (void)
+ {
+   const char *version = dwg_api_version_string ();
+   long i0, i1, i2;
+-  char *d0, *d1, *d2;
++  const char *d0, *d1, *d2;
+   const int major = dwg_api_version_major ();
+   const int minor = dwg_api_version_minor ();
+ 

@@ -389,3 +389,40 @@ def test_the_coordinate_slot_is_never_taken_by_a_notice():
             if "showMessage" in line and not line.lstrip().startswith("#"):
                 offenders.append(f"{name}:{n}")
     assert offenders == [], f"use command_line.echo instead: {offenders}"
+
+
+def test_app_root_follows_the_bundle(monkeypatch):
+    """Frozen builds read their data from sys._MEIPASS, not from __file__.
+
+    A PyInstaller bundle synthesises __file__ for modules inside the archive, so
+    every path derived from it points at somewhere that does not exist — the
+    shaders, the translations and the DWG converters all silently go missing,
+    and the app starts anyway and fails on the first drawing.
+    """
+    from pathlib import Path
+
+    from core import paths
+
+    repo = paths.app_root()
+    assert (repo / "resources" / "shaders" / "line.vert").is_file()
+    assert paths.is_frozen() is False
+
+    monkeypatch.setattr(paths.sys, "_MEIPASS", "/nowhere/bundle", raising=False)
+    assert paths.app_root() == Path("/nowhere/bundle")
+
+
+def test_self_check_passes_on_this_checkout():
+    """main.py --check is what CI asserts on after building the AppImage."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [sys.executable, str(root / "main.py"), "--check"],
+        capture_output=True, text=True, cwd=root, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OK" in proc.stdout
+    # The converters must be the ones IngeCAD ships, not whatever is on PATH.
+    assert "(bundled)" in proc.stdout, proc.stdout

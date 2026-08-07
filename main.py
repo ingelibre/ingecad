@@ -16,6 +16,7 @@ from PySide6.QtGui import QColor, QPalette, QSurfaceFormat
 from PySide6.QtWidgets import QApplication
 
 from core import i18n
+from core.version import __version__
 
 
 def _configure_surface_format() -> None:
@@ -79,11 +80,74 @@ def _init_language() -> None:
     i18n.set_language(str(QSettings().value("language", "en")))
 
 
+def _self_check() -> int:
+    """Report whether this install can find everything it needs; --check.
+
+    A packaged build can be missing a shader, a translation or a converter and
+    still start, then fail the first time the user opens a drawing. This is what
+    CI asserts on after building the AppImage, and what to run when an install
+    misbehaves.
+    """
+    from core.paths import app_root, is_frozen
+    from formats.dwg_bridge import find_dwg2dxf, find_dxf2dwg
+
+    root = app_root()
+    print(f"IngeCAD {__version__}")
+    print(f"  packaged   : {'yes' if is_frozen() else 'no (running from the repo)'}")
+    print(f"  app root   : {root}")
+
+    problems: list[str] = []
+    # Only files something actually reads. resources/linetypes and
+    # resources/hatch are empty placeholders from the Phase 0 layout: the
+    # standard linetypes come from ezdxf (core/document.py loads them) and the
+    # hatch patterns from ezdxf.addons.drawing, so there is nothing to ship.
+    for label, path in (
+        ("vertex shader", root / "resources" / "shaders" / "line.vert"),
+        ("fragment shader", root / "resources" / "shaders" / "line.frag"),
+        ("thick shader", root / "resources" / "shaders" / "thick.vert"),
+        ("app icon", root / "resources" / "ingecad.svg"),
+        ("translations", root / "i18n" / "es.json"),
+    ):
+        ok = path.is_file()
+        print(f"  {label:<14}: {'found' if ok else 'MISSING'}  {path}")
+        if not ok:
+            problems.append(label)
+
+    # The drawing frontend resolves hatch patterns and text through these; a
+    # missing hidden import shows up here rather than on the first HATCH.
+    for label, module in (
+        ("ezdxf render", "ezdxf.addons.drawing.frontend"),
+        ("ezdxf hatch", "ezdxf.render.hatching"),
+        ("ezdxf text", "ezdxf.addons.drawing.text_renderer"),
+    ):
+        try:
+            __import__(module)
+            print(f"  {label:<14}: import ok  ({module})")
+        except Exception as exc:  # noqa: BLE001 - report whatever it is
+            print(f"  {label:<14}: MISSING  {module}: {exc}")
+            problems.append(label)
+
+    for label, finder in (("dwg2dxf", find_dwg2dxf), ("dxf2dwg", find_dxf2dwg)):
+        tool = finder()
+        where = "bundled" if tool and str(tool).startswith(str(root)) else "system PATH"
+        print(f"  {label:<14}: {f'{tool} ({where})' if tool else 'MISSING'}")
+        if tool is None:
+            problems.append(label)
+
+    if problems:
+        print(f"\nNOT OK — missing: {', '.join(problems)}")
+        return 1
+    print("\nOK")
+    return 0
+
+
 def main() -> int:
     # Background regens are pure-Python tessellation: with CPython's default
     # 5 ms GIL switch interval the UI thread starves in 5 ms chunks and the
     # crosshair stutters while a big drawing rebuilds. 1 ms keeps input smooth
     # for a barely measurable regen slowdown.
+    if "--check" in sys.argv[1:]:
+        return _self_check()
     sys.setswitchinterval(0.001)
     _configure_surface_format()
     app = QApplication(sys.argv)
@@ -93,7 +157,9 @@ def main() -> int:
     app.setDesktopFileName("ingecad")
     from PySide6.QtGui import QIcon
 
-    icon_path = Path(__file__).parent / "resources" / "ingecad.svg"
+    from core.paths import app_root
+
+    icon_path = app_root() / "resources" / "ingecad.svg"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     _apply_dark_theme(app)
