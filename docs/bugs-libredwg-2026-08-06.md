@@ -712,3 +712,131 @@ como corresponde: sus centinelas están todos.
 | [#1363](https://github.com/LibreDWG/libredwg/pull/1363) | páginas r2007 sin comprimir sin deshacer el Reed-Solomon | mío, cierra el #1361 |
 | [#1364](https://github.com/LibreDWG/libredwg/pull/1364) | un centinela de tabla ausente rechazaba el dibujo | **cierra el [#767](https://github.com/LibreDWG/libredwg/issues/767) de weikenxq, de 2023** |
 | [#1356](https://github.com/LibreDWG/libredwg/issues/1356) | handles duplicados en el DXF de salida | el único issue mío que queda abierto |
+
+---
+
+# Noveno parche: `dwg2SVG` salía en blanco desde 2022 (PR #1365)
+
+El **#523** llevaba abierto desde noviembre de 2022 con **cuatro personas
+reportándolo**, y con los archivos de prueba de LibreDWG mismo:
+`dwg2SVG example_r14.dwg` producía un SVG que no muestra nada. El mantenedor
+había diagnosticado el síntoma en 2022 (*«viewBox is way too large, and you
+cannot see anything there»*) y lo dejó por «otras prioridades».
+
+Eran **cuatro causas independientes**. Cada una sola alcanza para dejar la
+página vacía.
+
+## 1. El espacio modelo no se dibujaba
+
+`output_BLOCK_HEADER` devuelve «cuántas entidades del espacio papel imprimimos»
+y `output_SVG` recurre al espacio modelo cuando eso es cero. Pero
+`output_object` arranca en `int num = 1` y solo la rama `default` lo baja — así
+que devuelve 1 para **todo** tipo que reconoce, incluidos `VIEWPORT` y `SEQEND`,
+que no dibujan nada. Todo espacio papel tiene un `VIEWPORT`, así que la cuenta
+nunca fue cero y el respaldo nunca se activó.
+
+La geometría del modelo **sí** llegaba al archivo — pero solo dentro de
+`<defs>`, porque `*Model_Space` también es una entrada de `block_control`. Y
+**ningún renderizador dibuja el contenido de `<defs>`**. De ahí que pareciera
+vacío estando lleno de `<path>`, y de ahí que otro usuario del hilo descubriera
+que borrando las etiquetas `<defs>` aparecía el dibujo: su parche a mano
+promovía el espacio modelo fuera del bloque de definiciones.
+
+## 2. Todos los trazos tenían ancho cero
+
+```c
+  int lw = dxf_cvt_lweight (ent->linewt);
+  return lw < 0 ? 0.1 : (double)(lw * 0.001);
+  ...
+  printf ("...stroke-width:%.1fpx...", lweight);
+```
+
+`dxf_cvt_lweight` da **centésimas de mm**, así que los mm son `lw/100`, no
+`lw/1000`. Con el factor de diez de más, una línea de 0,25 mm sale 0,025, que
+`%.1f` imprime como **`stroke-width:0.0`**. Y `lw == 0` es legítimo —significa
+«la línea más fina»— así que también necesita un ancho visible.
+
+## 3. El `viewBox` era la caja del encabezado, no la del dibujo
+
+`$EXTMIN`/`$EXTMAX` cubren todo el dibujo, incluidos los tipos que este
+programa se salta, y los planos reales traen entidades fuera de sus extents
+registrados. En `example_r14` la caja del encabezado es **3 540 706 × 2 726 367**
+mientras que lo que se emite de verdad mide unos **14 871 × 9702**: todo
+colapsaba muy por debajo de un píxel.
+
+## 4. El origen del `viewBox` contradecía las coordenadas
+
+`transform_X` devuelve `x - model_xmin`, así que las coordenadas emitidas viven
+en `[0, page_width]`. El `viewBox` arrancaba en `model_xmin`. Invisible en un
+plano cuyo `$EXTMIN` es `(0,0)`; fatal en los planos UTM.
+
+## Y de paso el #1012
+
+Ese issue decía que las referencias de los objetos de un bloque deberían ser al
+punto de definición, no al de inserción. Tenía razón: `transform_X/Y`
+trasladaban **también** las coordenadas dentro de `<defs>`, mientras
+`output_INSERT` ya coloca el símbolo con
+`translate(transform_X(ins_pt), ...)`. Cada bloque quedaba desplazado por el
+origen del modelo dos veces.
+
+## Un error mío que la medición cazó
+
+Mi primer intento fue solo el arreglo del origen del `viewBox` (una línea,
+demostrablemente correcta). Medí con un analizador de coordenadas propio y dio
+«7 de 40 dentro de la ventana contra 1». Pero al renderizar a PNG y **contar
+píxeles con tinta**, dos planos habían pasado de 134 píxeles a **0**: el
+`viewBox` mal puesto atrapaba por accidente contenido que cae fuera de los
+extents declarados, y mi arreglo cambiaba un accidente por otro.
+
+**La medida de punta a punta contradijo a la medida indirecta, y tenía razón.**
+Sin renderizar habría mandado un parche que empeoraba archivos.
+
+Segundo error, también mío: para medir sin emitir, silencié el `printf` con una
+macro que salta la llamada. Pero **los argumentos son donde viven
+`transform_X`/`transform_Y`** — al no evaluarlos no se medía nada, y la caja
+volvía como `DBL_MAX`. La versión buena escribe al dispositivo nulo.
+
+## Resultado
+
+`example_r14.dwg` se ve: marco, pentágono, elipse, arco, círculos, achurado.
+
+Sobre **95 planos reales** del corpus, cada uno renderizado a PNG de 200×200 y
+puntuado por píxeles con tinta:
+
+| | stock | con el parche |
+|---|---:|---:|
+| planos que muestran un dibujo | **1** | **68** |
+| de esos, antes en blanco | — | 67 |
+| **planos que empeoran** | — | **0** |
+| píxeles con tinta, total | 80 | 55 775 |
+
+## Verificación
+
+- `make check`: **270 PASS / 0 FAIL / 0 SKIP**, sin cambio — y las pruebas de
+  dwg2SVG están dentro.
+- Los **148** DWG de `test/test-data` y `programs/` siguen convirtiendo con
+  salida cero y su SVG sigue siendo XML bien formado.
+
+## Dos cosas que no toqué, y lo digo en el PR
+
+- `output_XLINE` imprime sus **parámetros de rayo** (`txmin, tymin, txmax,
+  tymax`) en vez de los extremos recortados, así que una XLINE sale como un
+  `path` con coordenadas sin sentido. Su autor la marcó `// untested!` y la caja
+  de recorte usa `model_ymin` dos veces. Arreglo aparte: no quiero adivinar la
+  geometría que se pretendía.
+- Los planos con un INSERT a 25 millones de unidades del resto siguen saliendo
+  como una manchita. Acotar eso es una decisión de política sobre valores
+  atípicos que debe tomar upstream — es el mismo problema que en IngeCAD resolví
+  con `_world_extents`, y ahí la política la decido yo; en su programa, no.
+
+## Balance: 9 parches, 4 de ellos para issues de otros
+
+| # | Cierra | De quién |
+|---|---|---|
+| [#1358](https://github.com/LibreDWG/libredwg/pull/1358) | [#1294](https://github.com/LibreDWG/libredwg/issues/1294) | SimonSAMPERE, jun 2026 |
+| [#1364](https://github.com/LibreDWG/libredwg/pull/1364) | [#767](https://github.com/LibreDWG/libredwg/issues/767) | weikenxq, jun **2023** |
+| [#1365](https://github.com/LibreDWG/libredwg/pull/1365) | [#523](https://github.com/LibreDWG/libredwg/issues/523) | hoangmt + 3 más, nov **2022** |
+| [#1365](https://github.com/LibreDWG/libredwg/pull/1365) | [#1012](https://github.com/LibreDWG/libredwg/issues/1012) | acabrera1000, sep 2024 |
+
+Y los otros cinco (#1352, #1353, #1359, #1360, #1362) más el #1363, que cierra
+mi propio #1361.
