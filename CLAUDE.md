@@ -172,9 +172,9 @@ abierto.
 
 ### ✅ Segunda tanda (2026-08-06) — detalle en `docs/bugs-libredwg-2026-08-06.md`
 
-Los 30 fallos del barrido quedaron clasificados y luego **arreglados**: **10 PRs**
-(#1352, #1353, #1358, #1359, #1360, #1362, #1363, #1364, #1365, #1366), **1 issue vivo
-sin parche** (#1356),
+Los 30 fallos del barrido quedaron clasificados y luego **arreglados**: **11 PRs**
+(#1352, #1353, #1358, #1359, #1360, #1362, #1363, #1364, #1365, #1366, #1367), **1 issue
+vivo sin parche** (#1356),
 **1 retirado a propósito** (#1354, correcto pero de bajo valor) y **5 planos que no eran
 bugs** (2 bloqueados por objetos propietarios de Civil 3D —que BricsCAD tampoco abre—,
 1 archivo dañado, 2 dibujos vacíos de verdad). El #1358 cierra además el
@@ -198,7 +198,7 @@ Converter** y contra **BricsCAD** antes de reportar. En este barrido eso descart
 (entidades del modelspace del DXF de cada conversor); mezclar medidas distintas produjo dos
 cifras erróneas que hubo que retractar.
 
-⚠️ **`vendor/libredwg` YA NO es stock.** Se compila de `0.14.8556` **más los 10 parches**,
+⚠️ **`vendor/libredwg` YA NO es stock.** Se compila de `0.14.8556` **más los 11 parches**,
 todos abiertos como PR upstream; cada uno desaparece en cuanto se fusione y tomemos un
 release nuevo. El árbol de build lleva un `NO-ES-STOCK-LEEME.txt` que lo advierte, y el
 detalle vive en `tools/libredwg-patches/README.md`. IngeCAD lleva además un saneado del DXF
@@ -223,19 +223,21 @@ variable correcta para cruzar.
 un arreglo no está terminado hasta que está en `vendor/` y medido con `load_dwg()`. Medir en
 `externos/build-libredwg/` es trabajo en curso, no resultado — son binarios distintos.
 
-**El frente ahora son los issues de otros**, y ahí van **5 de los 10 parches**: el #1294
+**El frente ahora son los issues de otros**, y ahí van **6 de los 11 parches**: el #1294
 (jun 2026), el #767 (jun **2023**), y el #523 + #1012 con el PR #1365. El #523 llevaba
 **cuatro años** abierto con cuatro personas reportándolo, y el reproductor era el propio
 archivo de prueba de LibreDWG. Método que funcionó: buscar issues cuyo síntoma sea primo de
 uno ya resuelto, y no dar por sentado que el parche propio los cubre —el #1362 NO arreglaba
 el #767, aunque el mensaje de error fuera idéntico.
 
-⚠️ **Y la lección de medición del #523, que vale para todo el proyecto: medir de punta a
-punta, no por indicadores.** Mi primer parche ahí era demostrablemente correcto (una línea) y
+⚠️ **Y la lección de medición, que vale para todo el proyecto: medir de punta a punta, y
+con un criterio que no dependa de mi interpretación.** Mi primer parche ahí era demostrablemente correcto (una línea) y
 mi analizador de coordenadas decía «7 de 40 mejoran contra 1». Al **renderizar a PNG y contar
 píxeles con tinta**, dos planos habían pasado de 134 píxeles a 0. La medida indirecta y la
-real se contradijeron y ganó la real. Es la misma familia que la regla de `vendor/`: el
-resultado es lo que ve el usuario, no lo que dice el paso intermedio.
+real se contradijeron y ganó la real. En el #1021 casi reporté 15 nombres «corruptos» que
+estaban perfectos, porque los leí en latin-1 cuando eran UTF-8; el criterio bueno era
+`iconv -f UTF-8`, que no opina. Es la misma familia que la regla de `vendor/`: el resultado
+es lo que ve el usuario, no lo que dice el paso intermedio ni cómo yo decodifico los bytes.
 
 **Siguiente objetivo:** ya no hay bug de lectura propio pendiente. Queda el #1356 (handles
 duplicados en el DXF emitido, 1150 en `sedapar`), que IngeCAD sortea con `_dedupe_handles`, y

@@ -947,3 +947,117 @@ archivos que no tienen nada más de malo.
   cúbica global con condiciones de borde que habría que adivinar. **Y no cuesta
   el dibujo**: ezdxf renderiza el DXF de LibreDWG y el de ODA *idénticos byte a
   byte*, porque interpola desde los puntos de ajuste. Lo dejé.
+
+---
+
+# Undécimo parche: un surrogado UTF-16 tumbaba un DXF entero (PR #1367)
+
+El **#1021** (2024) reportaba que AutoCAD rechaza el DXF de LibreDWG:
+
+```
+Error in in APPID Table
+DXF-ReadError auf Line 106298.
+Invalid or incomplete DXF input -- drawing canceled.
+```
+
+y pegaba nombres de APPID que salían como basura (`AT_JNT_肘౐肘౐ᠺಜ풴ۥ...`)
+mientras otros del mismo listado salían perfectos (`AUDIT_I_190703115940-0`).
+
+## Cómo se acorraló
+
+Primer intento de medición: buscar nombres de APPID con bytes no imprimibles
+leyendo en latin-1. Dio 15 «corruptos» en 4 de los 5 planos — **y era falso**:
+`æ\xa0\x87é«\x98` es UTF-8 de «标高» (cota en chino), perfectamente válido. Mi
+lectura en latin-1 me engañó.
+
+El criterio bueno es objetivo y no depende de mi interpretación:
+
+```
+$ iconv -f UTF-8 -t UTF-8 Stahl.dxf > /dev/null
+iconv: secuencia de octetos no válida
+```
+
+**4 de los 5 planos producen un DXF que no es UTF-8 válido.** El de ODA, sobre el
+mismo DWG, sí lo es. Y un DXF de R2007 o posterior está especificado como UTF-8.
+
+Decodificando incrementalmente para hallar la posición exacta:
+
+```
+byte 333657 -> linea 40604: AT_JNT_\xed\xb4\xb8\xe0\xae\xb5...
+```
+
+`\xed\xb4\xb8` es **U+DD38, un surrogado bajo suelto**. Y comparando la lista
+completa de APPID contra ODA: 1687 en los dos lados, con **una** diferencia — ese
+nombre, que ODA escribe como `$TD_AUDIT_GENERATED_(10E7)`. O sea que el nombre en
+el DWG **sí está dañado**, ODA también lo ve inservible y lo reemplaza; la
+diferencia es que LibreDWG lo pasa tal cual como UTF-8 ilegal.
+
+## La causa
+
+```c
+        else /* if (c < 0x10000) */
+          {  /* windows ucs-2 has no D800-DC00 surrogate pairs. go straight up
+              */
+            str[i++] = (c >> 12) | 0xE0;
+```
+
+Los bucles UTF-16 → UTF-8 codifican **cualquier** unidad de código ≥ 0x800 como
+tres bytes, incluidos los surrogados D800–DFFF, que la RFC 3629 prohíbe. Y el
+decodificador del **mismo archivo** ya lo sabe:
+
+```c
+                      // reject overlong encodings and UTF-16 surrogates
+                      if (cp >= 0x800 && (cp < 0xD800 || cp > 0xDFFF))
+```
+
+**Octavo de los once parches que consiste en hacer que el código cumpla lo que ya
+decía de sí mismo** — solo que esta vez la contradicción está entre el lector y el
+escritor del mismo archivo.
+
+Un nombre dañado hacía ilegibles **106 000 líneas buenas**.
+
+## El arreglo, y lo que dejé fuera a propósito
+
+Una guarda uniforme (`NO_LONE_SURROGATE`) en los 6 sitios UTF-16: un surrogado
+suelto pasa a U+FFFD, que es el sustituto estándar y ocupa **los mismos tres
+bytes** — así que ningún bucle cambia de forma y ninguna aritmética de buffer se
+mueve.
+
+Lo que **no** hice: combinar un par surrogado genuino en el punto de código
+suplementario que representa. Recuperaría más (un emoji o un ideograma raro
+saldría bien en vez de dos U+FFFD) y cabría de sobra (4 bytes donde ya se
+reservan 6). Lo dejé fuera para que el parche sea una sola cosa verificable, y lo
+ofrecí como seguimiento en el PR.
+
+## Resultado
+
+| plano | antes | después |
+|---|---|---|
+| `Platte.dwg` | UTF-8 inválido | **válido** |
+| `Stahl.dwg` | UTF-8 inválido | **válido** |
+| `Teile.dwg` | UTF-8 inválido | **válido** |
+| `xx17.dwg` | UTF-8 inválido | **válido** |
+| `test-trichter.dwg` | válido | válido, **idéntico byte a byte** |
+
+Los cuatro difieren en **exactamente 6 bytes cada uno** — los dos surrogados.
+
+## Verificación
+
+- `make check`: **270 PASS / 0 FAIL / 0 SKIP**. `bit_convert_TU` tiene test
+  unitario; sus datos son solo del BMP, así que no se toca.
+- Los **146** DWG de `test/test-data` y `programs/`: **146 idénticos byte a
+  byte**. Ninguno lleva un surrogado.
+- Tres de esos 146 **sí** emiten UTF-8 inválido y el parche los deja en paz a
+  propósito: `example_2000`, `example_r13` y `2000/TS1` escriben el signo de
+  grados como el byte suelto `0xB0`. Son `$ACADVER AC1015` con `$DWGCODEPAGE
+  ANSI_1252`, y un DXF pre-R2007 va en la página de códigos del dibujo, no en
+  UTF-8 — así que ahí `0xB0` es correcto. La regla que impone este parche es solo
+  sobre las conversiones UTF-16.
+- Compilado y probado sobre un `e405fcff` **limpio** con este parche solo.
+
+## Un error de medición que conviene recordar
+
+Casi reporté 15 nombres «corruptos» que estaban bien. La lección: **cuando el
+criterio depende de cómo yo decodifico los bytes, el criterio es sospechoso.**
+`iconv -f UTF-8` no opina; o el archivo es UTF-8 válido o no lo es. Igual que con
+el #523, donde la medida indirecta decía «mejora» y el render decía «empeora».
