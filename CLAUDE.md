@@ -317,6 +317,63 @@ los 8 no fusionados de la 2ª tanda + estos 8. El harness quedó commiteado
 duplicado huérfano de `*Model_Space` que `in_dxf` deja al importar (hoy solo inocuo
 gracias a #1373).
 
+### ✅ Cuarta tanda (2026-08-09, misma sesión extendida) — la cola r14 + el harness ensanchado
+
+Con el fuzz seco en su primera configuración, dos movimientos: cazar la cola r14
+(197 fallos ya cosechados) y **ensanchar el harness** — DIMENSION renderizada, MINSERT,
+LEADER, ATTDEF, target r12, fuente R12, y comparación del CONTENIDO de los bloques (el
+compare de modelspace solo era ciego a la corrupción dentro de definiciones). Salieron
+**10 causas raíz más: PRs #1378–#1385** e issue **#1386**:
+
+- **#1378 (cuádruple, r13/r14):** el bit `isbylayerlt` se escribía ANTES del fixup que lo
+  calcula (vivía en el spec de handles, que corre después, y encima exigía
+  `from_version == R_2000` exacto); el ternario del decoder con la rama `: 3` muerta bajo
+  su propio `if`; CONTINUOUS/BYBLOCK sin handle materializado (r14 no tiene esos flags);
+  y el grupo 48 (ltype_scale) preso en una puerta `SINCE (R_2000b)` del writer DXF.
+  Con los cuatro: r14 pasó de 2 % a 100 % en linetype.
+- **#1379:** MTEXT con grupo 50 (rotación, válido, lo escribe el renderer de cotas de
+  ezdxf) → «Invalid DXF code» → **aborta el archivo entero**. Una cota en el plano y el
+  import devolvía nada.
+- **#1380:** `--as r12` **jamás funcionó**: el help lo anuncia como válido pero
+  `dwg_version_as` solo conoce «r11» (y el mensaje de error imprimía `argv[1]`:
+  «Invalid version '-y'»).
+- **#1381:** al escribir r11/r12 desde fuente r13+, los placeholders `0xDEADBEAF` de las
+  direcciones de tablas quedaban **sin parchear** (la pasada existía pero estaba bajo
+  `from_version < R_13b1`, con un FIXME que pedía una conversión que ya ocurría), y un
+  `strcmp` sensible a mayúsculas contra `*MODEL_SPACE` reclasificaba TODA entidad de
+  modelspace como contenido de bloque → dibujo vacío.
+- **#1382:** `dwg_next_handle` — el comentario promete «el handle más alto» y el bucle
+  tomaba el del último objeto con handle no-cero → handles duplicados en imports DXF.
+- **#1383:** los macros `VALUE_HANDLE`/`FIELD_HANDLE_N` elegían rama con DOS variables
+  distintas (`PRE` por target, `IF_ENCODE_SINCE_R13` por FUENTE): fuente R12 → target
+  r2000 no satisfacía ninguna y **no se escribía ni un handle** (225 overflows al releer
+  un dibujo de una línea).
+- **#1384:** los DXF R12 nombran sus bloques de layout `$MODEL_SPACE`/`$PAPER_SPACE`
+  (convención de AutoCAD) y todos los matchers del importer solo conocen `*Model_Space`
+  → toda entidad inalcanzable. Normalización en el lector de pares.
+- **#1385:** MINSERT de una columna volvía con `70=0` (DXF omite 70/71 cuando valen 1;
+  el default va en el hook de completado, NO en el upgrade — ponerlo ahí chocó con la
+  protección «already set» del matcher y causó una regresión que la propia campaña cazó
+  al instante).
+- **#1386 (issue):** lo que queda del writer pre-R13 (offsets de sección de bloques con
+  el marcador 0x40000000 filtrado; fuente R12 → r2000 aún estructuralmente coja aunque
+  → r2004 ya convierte completo), medido y documentado — territorio WIP de rurban, va
+  como datos, no como parche.
+
+**Estado del fuzz tras la tanda: fuente moderna → r2000/r2004 100 %, → r14 100 %**
+(los «BLOCKDIFF» restantes eran los 21 bloques de flecha estándar que LibreDWG
+materializa — relleno benigno, el harness ahora lo tolera). Todo el residuo (450/2000)
+es la vena pre-R13 del #1386. Verificación de siempre: make check 254/254, bench de
+1657 planos reales **0 empeoran** (y una lección de proceso: el primer bench de esta
+tanda se corrió mientras el árbol seguía recompilándose — contaminado, repetido con el
+árbol congelado; los benches de regresión exigen árbol quieto).
+
+**Método nuevo validado: el harness como red de seguridad de mis PROPIOS parches.** El
+default de MINSERT mal ubicado (en el upgrade en vez del hook de completado) rompió 671
+dibujos — la siguiente campaña lo cazó en 15 segundos y el repro dijo exactamente por
+qué («already set to 1» + abort). Fuzz que encuentra bugs ajenos también encuentra los
+míos: correr la campaña tras CADA parche, no solo al final.
+
 ---
 
 ## 🧪 Tests (desde el día uno)
