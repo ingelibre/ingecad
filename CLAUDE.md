@@ -376,6 +376,51 @@ míos: correr la campaña tras CADA parche, no solo al final.
 
 ---
 
+### ✅ Quinta tanda (2026-08-09, sesión extendida) — medir contra ODA, proxy, y arrancar L4
+
+Tres frentes del plan de Marco: (1) medir la paridad real contra ODA, (2) cazar el
+gráfico proxy, (3) empezar L4 (el writer moderno) en el fork.
+
+**(1) La medición honesta ODA vs LibreDWG sobre los 1657 planos reales.** Herramientas
+nuevas (`tools/oda_classify.py` + `tools/oda_vs_libredwg.py`), con el MISMO criterio
+ezdxf en ambos lados —convertir todo el corpus con ODAFileConverter a DXF y clasificar
+igual que `dwg_bench`. Resultado: **96,8 % de paridad (1604/1657)**. ODA adelante en 30
+(la mayoría NO son bugs de lectura: 7 `Helix` = spline 3D que no interpretamos, ~7 de
+Civil 3D/decode r2007 ya conocidos, ~15 `COUNT_DIFF` chicos por la conversión ACAD2018).
+Y **LibreDWG adelante en 15** —archivos viejos r11/r13/r2 que ODA rechaza con `OdError`
+y nosotros abrimos. Conclusión para el producto: **en lectura ya estamos en paridad
+práctica con ODA para el flujo real**; lo que falta es nicho (spline 3D, Civil 3D
+propietario, un par de bugs r2007), mapeado archivo por archivo en `oda-vs-ldwg.csv`.
+
+**(2) El gráfico proxy — PR #1387.** `dwg2dxf` descartaba por completo las entidades de
+clase no parseable (`UNKNOWN_ENT`: carreteras de Civil 3D, entidades de apps), perdiendo
+su gráfico. Ahora las preserva como `ACAD_PROXY_ENTITY` con el blob de gráficos (grupos
+90/91/95/70 + 92 tamaño + 310 hex), como hace ODA. **Medido: +181 planos con más
+entidades, +112 090, 0 regresiones**, y dos planos de Civil 3D que estaban vacíos ahora
+convierten. El frontend de IngeCAD (`ProxyGraphicPolicy.SHOW`) los DIBUJA solo. Es
+round-trip-safe: el propio `in_dxf` lo relee (verificado por `make check`). Lección de
+método, otra vez el harness atrapándome: mi v1 rompía el reimport (grupo 95 en hex donde
+el lector espera decimal) y `make check` lo cazó al instante; el bench de corpus
+(DWG→DXF→ezdxf) no habría visto ese fallo porque no ejercita el regreso DXF→DWG. Cada
+prueba cubre un tramo distinto; hay que correr las dos.
+
+**(3) L4 arrancado — rama `l4-r2018-writer` en el fork, doc en
+`docs/L4-r2018-writer-findings.md`.** El hallazgo que cambia el plan: **LibreDWG YA
+escribe r2004/r2010/r2013/r2018 y relee su salida con éxito** —pero ODA la rechaza. Con
+ODA como único juez válido: el **writer r2004 YA funciona** (ODA acepta same-version),
+así que L4 no es «escribir el contenedor moderno desde cero» sino la capa de
+**section-map + page-checksum de r2010/2013/2018**. r2018 está a **un solo CRB
+consistente** de distancia («CRC does not match», reproducible con un archivo de UNA
+línea). La trampa clásica confirmada en su forma más pura: LibreDWG verifica su propio
+CRC malo como bueno (`crc32 => verified`) porque computa igual en escritura y lectura —
+por eso su lector NUNCA lo cazará y **solo ODA/AutoCAD sirve de oráculo para L4**.
+Descartado que sea el tamaño (r2004 también pesa 1.6 MB por una línea y ODA lo acepta).
+Siguiente paso anotado: comparar byte a byte los section-page headers contra una
+referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
+el fork hasta madurar.
+
+---
+
 ## 🧪 Tests (desde el día uno)
 
 - **Round-trip conservador (el invariante sagrado):** abrir → tocar UNA entidad → guardar → re-abrir → todo lo NO tocado es byte/valor-idéntico (incl. entidades desconocidas y XDATA). Corre sobre el banco de DWG reales.
