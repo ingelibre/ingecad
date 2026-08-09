@@ -419,6 +419,59 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+### ✅ Sexta tanda (2026-08-09, misma sesión) — la medición ODA, el proxy, y L4 a fondo
+
+Tres frentes cerrados o muy avanzados:
+
+**(1) Paridad ODA medida sobre los 1657 planos = 96,8 %.** Herramientas
+`tools/oda_classify.py` + `tools/oda_vs_libredwg.py` (mismo criterio ezdxf en los dos
+lados). ODA gana en 30 (casi todo nicho: Helix/spline-3D, Civil 3D, diffs de conteo
+por ACAD2018), **LibreDWG gana en 15** (r11/r13/r2 viejos que ODA rechaza). En lectura
+ya estamos en paridad práctica para el flujo real. Mapa archivo-por-archivo en
+`scratchpad/oda-vs-ldwg.csv`.
+
+**(2) Gráfico proxy — PR #1387 (fusionable).** `dwg2dxf` preserva `UNKNOWN_ENT` como
+`ACAD_PROXY_ENTITY` con su gráfico. **+181 planos, +112 090 entidades, 0 regresiones**;
+dos planos de Civil 3D que estaban vacíos ahora convierten. El frontend de IngeCAD
+(`ProxyGraphicPolicy.SHOW`) los dibuja solo. Round-trip-safe (make check lo verifica).
+
+**(3) L4 — writer r2018, avanzado a fondo con la spec de ODA (rama local
+`l4-r2018-writer`, 12 commits, NO pusheada a ningún remoto).** De los tres muros de
+r2018: **CRC caído** (era escribir las páginas de datos crudas; se resolvió con el
+framing LZ todo-literal `store_R2004_section`), **compresión caída** (por tipo:
+FileDepList/AppInfo/Preview raw, el resto LZ, según ODA), y **el directorio de secciones
+entero del tercero coincide byte a byte con ODA** — todo verificado contra la
+**Open Design Specification for .dwg files v5.4.1** (`scratchpad/oda-spec.txt`, §4.4
+section page map, §4.5 section info): num_desc=13, Section Ids posicionales (vacío=0,
+datos descendentes N..1), sin describir INFO/SYSTEM_MAP, numeración con hueco de 1
+(info_id=N+2, map_id=N+4), páginas ajustadas, elisión de página-cero. **Verificado: r2004
+sigue aceptado por ODA, make check 254 verde, LibreDWG relee su salida.**
+
+#### 🔜 CONTINUAR L4 (cuando Marco diga «continúa donde quedamos»)
+
+**Estamos en:** el CONTENEDOR r2018 es spec-correcto de punta a punta. **El único muro
+que queda es la GENERACIÓN DE CONTENIDO por-sección.** La elisión de página-cero reveló
+que en el camino dxf2dwg, **`AcDb:AppInfo` y `AcDb:RevHistory` salen vacías (todo ceros)
+donde ODA les escribe contenido real** — por eso ODA aún dice «needs recovery». Detalle
+completo en `docs/L4-r2018-writer-findings.md` (updates 1-6, en el fork).
+
+**Próximo paso concreto:** generar el contenido de `AcDb:AppInfo` (spec pág. 96) y
+`AcDb:RevHistory` (pág. 100) para que dejen de ser todo-ceros y coincidan con ODA; luego
+verificar sección por sección contra el capítulo R2018 de la spec (pp. 71+). Reproductor:
+`min2018.dxf` (una línea) → `dxf2dwg --as r2018` → ODAFileConverter como único juez válido
+(el lector de LibreDWG NO sirve de oráculo: valida sus propios CRC malos). Construir sobre
+el **stack completo de parches** (no la rama L4 sola: el contenido de las secciones depende
+de ellos).
+
+⚠️ **Nada de L4/r2018 está enviado a upstream ni al fork** — vive solo en la rama local.
+No contamina nada. Solo se enviará en bloque cuando r2018 abra en AutoCAD/ODA.
+
+**Estimación honesta de r2018:** el contenedor (lo hecho) fue lo tratable. La generación
+de contenido byte-exacta para TODAS las secciones + el object-stream es el grueso y lo
+incierto: un archivo mínimo aceptado por ODA está a ~3-6 sesiones enfocadas; planos reales
+(object-stream completo byte-compatible) es bastante más, porque cualquier diferencia de
+codificación dispara «needs recovery». Es el «hueco histórico» del Track L por algo.
+
 ---
 
 ## 🧪 Tests (desde el día uno)
