@@ -358,7 +358,7 @@ class MainWindow(QMainWindow):
         lang_group = QActionGroup(self)
         # Each language is listed in its own name — recognizable no matter
         # which language is currently active.
-        for code, native_name in (("en", "English"), ("es", "Español")):
+        for code, native_name in (("cs", "Čeština"), ("en", "English"), ("es", "Español")):
             act = QAction(native_name, self)
             act.setCheckable(True)
             act.setChecked(i18n.current_language() == code)
