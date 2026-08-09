@@ -1,0 +1,678 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
+"""Track L2 harness: round-trip fuzzing of the LibreDWG *write* path.
+
+``dwg_bench.py`` sweeps real DWGs through ``dwg2dxf`` (the read path). This is
+the complement for the write path, which has no real-world corpus to lean on:
+*generate* seeded DXF drawings with ezdxf, write them to DWG with ``dxf2dwg``,
+read them back with ``dwg2dxf``, reload with ezdxf, and compare the modelspace
+entity by entity. Anything that does not survive the trip is a LibreDWG bug in
+the DXF importer, the DWG writer or the DWG reader — or a harness
+false positive, which triage must rule out first (linetype-name case, default
+materialization and float noise are the expected offenders).
+
+Every drawing is derived deterministically from its integer seed via an
+intermediate *spec* (a JSON-able list of entity descriptions), so a failure
+can be reproduced from the seed alone and *reduced* by dropping spec entries
+without disturbing the generation of the survivors.
+
+Usage:
+    python tools/dwg_fuzz.py run --count 500 [--seed 0] [--workers 6]
+                                 [--out report.csv] [--fails <dir>]
+    python tools/dwg_fuzz.py repro <seed> [--fails <dir>]
+    python tools/dwg_fuzz.py reduce <seed> --fails <dir>
+
+Categories:
+    OK              every fingerprint matched
+    GEN_FAIL        ezdxf refused to build/save the drawing (harness bug)
+    DXF2DWG_*       SEGV / ERR / TIMEOUT / EMPTY from the DXF->DWG step
+    DWG2DXF_*       SEGV / ERR / TIMEOUT / EMPTY from the DWG->DXF step
+    RELOAD_FAIL     ezdxf recover could not read the returned DXF
+    LOST / EXTRA    per-type entity counts differ after the trip
+    DIFF            counts match but entity attributes drifted
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from collections import Counter
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+from random import Random
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+TIMEOUT = 60  # seconds per conversion
+ROUND = 4     # decimals kept in fingerprints (abs tolerance 1e-4 drawing units)
+
+SOURCE_VERSIONS = ["R2000", "R2004", "R2007", "R2010", "R2013", "R2018"]
+TARGET_VERSIONS = ["r2000"] * 7 + ["r2004"] * 2 + ["r14"]
+
+LAYER_NAMES = ["MUROS", "EJES", "CAÑERÍAS", "COTAS 2", "L-01", "puntos_topo"]
+LINETYPES = ["CONTINUOUS", "DASHED", "CENTER", "DASHDOT"]
+TEXT_POOL = [
+    "PLANTA GENERAL",
+    "CAÑERÍA Ø150 PVC",
+    "N.P.T. +2.45 m²",
+    "AREA=125.40m2 100%%d",
+    "esc: 1/500 \"indicada\"",
+    "eje ^ referencia 45°",
+    "Ñandú é ü — cota",
+    "A" * 260,  # forces MTEXT chunking / long TV strings
+]
+BLOCK_NAMES = ["FZB0", "FZB1", "FZB2"]
+
+# ---------------------------------------------------------------------------
+# generation: seed -> spec -> ezdxf document
+# ---------------------------------------------------------------------------
+
+BASES = [(0.0, 0.0), (229_000.0, 8_252_000.0), (-1_234.5, 6_789.0)]
+
+
+def _pt(rng: Random, base, spread=200.0, z=0.0):
+    return [round(base[0] + rng.uniform(-spread, spread), 6),
+            round(base[1] + rng.uniform(-spread, spread), 6),
+            round(z, 6)]
+
+
+def _maybe_z(rng: Random):
+    return rng.uniform(-50, 4_500) if rng.random() < 0.25 else 0.0
+
+
+def _common(rng: Random, header) -> dict:
+    d: dict = {"layer": rng.randrange(len(header["layers"]))}
+    p = rng.random()
+    if p < 0.55:
+        d["color"] = 256          # ByLayer
+    elif p < 0.65:
+        d["color"] = 0            # ByBlock
+    else:
+        d["color"] = rng.randrange(1, 256)
+    if header["target"] == "r2004" and rng.random() < 0.15:
+        d["true_color"] = [rng.randrange(256) for _ in range(3)]
+    if rng.random() < 0.3:
+        d["ltype"] = rng.choice(LINETYPES)
+    if rng.random() < 0.2:
+        d["ltscale"] = round(rng.uniform(0.01, 100.0), 4)
+    return d
+
+
+def gen_specs(seed: int) -> tuple[dict, list[dict]]:
+    rng = Random(seed)
+    header = {
+        "seed": seed,
+        "version": rng.choice(SOURCE_VERSIONS),
+        "target": rng.choice(TARGET_VERSIONS),
+        "base": rng.choice(BASES),
+        "layers": [["0", 7, "CONTINUOUS"]] + [
+            [name, rng.randrange(1, 256), rng.choice(LINETYPES)]
+            for name in rng.sample(LAYER_NAMES, rng.randrange(1, 4))
+        ],
+        "blocks": [],
+    }
+    # 0-3 block definitions; the last may nest an insert of the first
+    for bi in range(rng.randrange(0, 4)):
+        ents = []
+        for _ in range(rng.randrange(1, 4)):
+            kind = rng.choice(["LINE", "CIRCLE", "TEXT", "LWPOLYLINE"])
+            ents.append(_gen_entity(rng, header, kind, spread=10.0))
+        if bi == 2 and rng.random() < 0.5:
+            ents.append({"t": "INSERT", "layer": 0, "color": 256,
+                         "name": BLOCK_NAMES[0], "insert": _pt(rng, (0, 0), 5),
+                         "xscale": 1.0, "yscale": 1.0, "zscale": 1.0,
+                         "rotation": round(rng.uniform(0, 360), 4),
+                         "attribs": []})
+        header["blocks"].append(ents)
+
+    kinds = ["LINE", "LINE", "LINE", "POINT", "CIRCLE", "ARC", "ELLIPSE",
+             "LWPOLYLINE", "LWPOLYLINE", "POLYLINE3D", "TEXT", "TEXT",
+             "MTEXT", "SOLID", "3DFACE", "SPLINE", "HATCH", "XLINE", "RAY"]
+    if header["blocks"]:
+        kinds += ["INSERT", "INSERT", "INSERT"]
+    entities = [_gen_entity(rng, header, rng.choice(kinds))
+                for _ in range(rng.randrange(5, 41))]
+    return header, entities
+
+
+def _gen_entity(rng: Random, header, kind: str, spread=200.0) -> dict:
+    base = header["base"]
+    d = _common(rng, header)
+    d["t"] = kind
+    z = _maybe_z(rng)
+    if kind == "LINE":
+        d["start"] = _pt(rng, base, spread, z)
+        d["end"] = _pt(rng, base, spread, _maybe_z(rng))
+    elif kind == "POINT":
+        d["loc"] = _pt(rng, base, spread, z)
+    elif kind in ("CIRCLE", "ARC"):
+        d["center"] = _pt(rng, base, spread, z)
+        d["radius"] = round(rng.choice(
+            [rng.uniform(0.001, 1), rng.uniform(1, 500), 1e6 * rng.random() + 1]), 6)
+        if kind == "ARC":
+            a = rng.uniform(0, 360)
+            d["start_angle"] = round(a, 4)
+            d["end_angle"] = round((a + rng.uniform(1, 359)) % 360, 4)
+        if rng.random() < 0.15:
+            d["extrusion"] = [0, 0, -1]
+    elif kind == "ELLIPSE":
+        d["center"] = _pt(rng, base, spread, z)
+        d["major_axis"] = [round(rng.uniform(1, 300), 6),
+                           round(rng.uniform(1, 300), 6), 0]
+        d["ratio"] = round(rng.uniform(0.05, 1.0), 6)
+        d["start_param"] = 0.0
+        d["end_param"] = round(rng.uniform(0.5, 2 * math.pi), 6)
+    elif kind == "LWPOLYLINE":
+        n = rng.randrange(2, 9)
+        d["points"] = [
+            _pt(rng, base, spread)[:2]
+            + [round(rng.uniform(-2, 2), 4) if rng.random() < 0.3 else 0.0]
+            for _ in range(n)]
+        d["closed"] = rng.random() < 0.5
+        if rng.random() < 0.25:
+            d["const_width"] = round(rng.uniform(0.05, 5.0), 4)
+        if rng.random() < 0.2:
+            d["elevation"] = round(z, 6)
+    elif kind == "POLYLINE3D":
+        d["points"] = [_pt(rng, base, spread, _maybe_z(rng))
+                       for _ in range(rng.randrange(2, 7))]
+    elif kind == "TEXT":
+        d["text"] = rng.choice(TEXT_POOL[:-1])
+        d["insert"] = _pt(rng, base, spread, z)
+        d["height"] = round(rng.uniform(0.1, 50), 4)
+        d["rotation"] = round(rng.uniform(0, 360), 4)
+        if rng.random() < 0.1:
+            d["extrusion"] = [0, 0, -1]
+    elif kind == "MTEXT":
+        parts = rng.sample(TEXT_POOL, rng.randrange(1, 4))
+        d["text"] = "\\P".join(parts)
+        d["insert"] = _pt(rng, base, spread, z)
+        d["char_height"] = round(rng.uniform(0.1, 20), 4)
+        d["width"] = round(rng.uniform(10, 500), 4)
+    elif kind in ("SOLID", "3DFACE"):
+        p0 = _pt(rng, base, spread, z if kind == "3DFACE" else 0.0)
+        pts = [p0]
+        for _ in range(3):
+            q = [p0[0] + rng.uniform(-30, 30), p0[1] + rng.uniform(-30, 30),
+                 p0[2] if kind == "SOLID" else _maybe_z(rng)]
+            pts.append([round(v, 6) for v in q])
+        d["corners"] = pts
+    elif kind == "SPLINE":
+        n = rng.randrange(3, 9)
+        d["degree"] = rng.choice([2, 3])
+        d["mode"] = rng.choice(["fit", "control"])
+        d["points"] = [_pt(rng, base, spread, _maybe_z(rng)) for _ in range(n)]
+    elif kind == "HATCH":
+        d["solid"] = rng.random() < 0.5
+        if not d["solid"]:
+            d["pattern"] = rng.choice(["ANSI31", "ANSI37", "NET"])
+            d["scale"] = round(rng.uniform(0.1, 50), 4)
+            d["angle"] = round(rng.uniform(0, 180), 4)
+        c = _pt(rng, base, spread)
+        w, h = rng.uniform(5, 100), rng.uniform(5, 100)
+        d["path"] = [[c[0], c[1], 0.0], [round(c[0] + w, 6), c[1],
+                     round(rng.uniform(-1, 1), 4) if rng.random() < 0.3 else 0.0],
+                     [round(c[0] + w, 6), round(c[1] + h, 6), 0.0],
+                     [c[0], round(c[1] + h, 6), 0.0]]
+    elif kind in ("XLINE", "RAY"):
+        d["start"] = _pt(rng, base, spread, z)
+        a = rng.uniform(0, 2 * math.pi)
+        d["unit"] = [round(math.cos(a), 9), round(math.sin(a), 9), 0.0]
+    elif kind == "INSERT":
+        d["name"] = BLOCK_NAMES[rng.randrange(len(header["blocks"]))]
+        d["insert"] = _pt(rng, base, spread, z)
+        d["xscale"] = round(rng.choice([1.0, rng.uniform(0.01, 20),
+                                        -rng.uniform(0.5, 2)]), 6)
+        d["yscale"] = round(rng.choice([d["xscale"], rng.uniform(0.01, 20)]), 6)
+        d["zscale"] = 1.0
+        d["rotation"] = round(rng.uniform(0, 360), 4)
+        d["attribs"] = []
+        if rng.random() < 0.3:
+            for i in range(rng.randrange(1, 3)):
+                d["attribs"].append(
+                    [f"TAG{i}", rng.choice(TEXT_POOL[:5]),
+                     _pt(rng, d["insert"][:2], 5)])
+    return d
+
+
+def build_doc(header: dict, entities: list[dict]):
+    import ezdxf
+
+    doc = ezdxf.new(dxfversion=header["version"], setup=True)
+    for name, color, ltype in header["layers"]:
+        if name != "0":
+            doc.layers.add(name, color=color, linetype=ltype)
+        else:
+            doc.layers.get("0").color = color
+    for bi, ents in enumerate(header["blocks"]):
+        blk = doc.blocks.new(name=BLOCK_NAMES[bi])
+        for spec in ents:
+            _add_entity(blk, spec, header)
+    msp = doc.modelspace()
+    for spec in entities:
+        _add_entity(msp, spec, header)
+    return doc
+
+
+def _add_entity(layout, d: dict, header) -> None:
+    at = {"layer": header["layers"][d["layer"]][0], "color": d["color"]}
+    if "true_color" in d:
+        r, g, b = d["true_color"]
+        at["true_color"] = (r << 16) | (g << 8) | b
+    if "ltype" in d:
+        at["linetype"] = d["ltype"]
+    if "ltscale" in d:
+        at["ltscale"] = d["ltscale"]
+    t = d["t"]
+    if t == "LINE":
+        layout.add_line(d["start"], d["end"], dxfattribs=at)
+    elif t == "POINT":
+        layout.add_point(d["loc"], dxfattribs=at)
+    elif t == "CIRCLE":
+        if "extrusion" in d:
+            at["extrusion"] = d["extrusion"]
+        layout.add_circle(d["center"], d["radius"], dxfattribs=at)
+    elif t == "ARC":
+        if "extrusion" in d:
+            at["extrusion"] = d["extrusion"]
+        layout.add_arc(d["center"], d["radius"], d["start_angle"],
+                       d["end_angle"], dxfattribs=at)
+    elif t == "ELLIPSE":
+        layout.add_ellipse(d["center"], d["major_axis"], d["ratio"],
+                           d["start_param"], d["end_param"], dxfattribs=at)
+    elif t == "LWPOLYLINE":
+        if "const_width" in d:
+            at["const_width"] = d["const_width"]
+        if "elevation" in d:
+            at["elevation"] = d["elevation"]
+        layout.add_lwpolyline(d["points"], format="xyb",
+                              close=d["closed"], dxfattribs=at)
+    elif t == "POLYLINE3D":
+        layout.add_polyline3d(d["points"], dxfattribs=at)
+    elif t == "TEXT":
+        at["insert"] = d["insert"]
+        at["height"] = d["height"]
+        at["rotation"] = d["rotation"]
+        if "extrusion" in d:
+            at["extrusion"] = d["extrusion"]
+        layout.add_text(d["text"], dxfattribs=at)
+    elif t == "MTEXT":
+        at["insert"] = d["insert"]
+        at["char_height"] = d["char_height"]
+        at["width"] = d["width"]
+        layout.add_mtext(d["text"], dxfattribs=at)
+    elif t == "SOLID":
+        layout.add_solid(d["corners"], dxfattribs=at)
+    elif t == "3DFACE":
+        layout.add_3dface(d["corners"], dxfattribs=at)
+    elif t == "SPLINE":
+        if d["mode"] == "fit":
+            layout.add_spline(d["points"], degree=d["degree"], dxfattribs=at)
+        else:
+            layout.add_open_spline(d["points"], degree=d["degree"],
+                                   dxfattribs=at)
+    elif t == "HATCH":
+        h = layout.add_hatch(dxfattribs=at)
+        if d["solid"]:
+            h.set_solid_fill(color=d["color"] if d["color"] not in (0, 256) else 7)
+        else:
+            h.set_pattern_fill(d["pattern"], scale=d["scale"], angle=d["angle"])
+        h.paths.add_polyline_path(
+            [(p[0], p[1], p[2]) for p in d["path"]], is_closed=True)
+    elif t == "XLINE":
+        layout.add_xline(d["start"], d["unit"], dxfattribs=at)
+    elif t == "RAY":
+        layout.add_ray(d["start"], d["unit"], dxfattribs=at)
+    elif t == "INSERT":
+        at.update(xscale=d["xscale"], yscale=d["yscale"], zscale=d["zscale"],
+                  rotation=d["rotation"])
+        ref = layout.add_blockref(d["name"], d["insert"], dxfattribs=at)
+        for tag, text, ins in d["attribs"]:
+            ref.add_attrib(tag, text, ins)
+
+
+# ---------------------------------------------------------------------------
+# fingerprints: what must survive the round trip
+# ---------------------------------------------------------------------------
+
+def _r(v):
+    return round(float(v), ROUND)
+
+
+def _rp(p):
+    return (_r(p[0]), _r(p[1]), _r(p[2]) if len(p) > 2 else 0.0)
+
+
+def _fp_common(e):
+    dxf = e.dxf
+    return (dxf.layer.upper(),
+            dxf.color,
+            dxf.true_color if dxf.hasattr("true_color") else None,
+            dxf.linetype.upper(),
+            _r(dxf.ltscale))
+
+
+def fingerprint(e):
+    t = e.dxftype()
+    c = _fp_common(e)
+    d = e.dxf
+    if t == "LINE":
+        g = (_rp(d.start), _rp(d.end))
+    elif t == "POINT":
+        g = (_rp(d.location),)
+    elif t == "CIRCLE":
+        g = (_rp(d.center), _r(d.radius), _rp(d.extrusion))
+    elif t == "ARC":
+        g = (_rp(d.center), _r(d.radius), _r(d.start_angle),
+             _r(d.end_angle), _rp(d.extrusion))
+    elif t == "ELLIPSE":
+        g = (_rp(d.center), _rp(d.major_axis), _r(d.ratio),
+             _r(d.start_param), _r(d.end_param))
+    elif t == "LWPOLYLINE":
+        g = (e.closed, _r(d.const_width), _r(d.elevation),
+             tuple((_r(x), _r(y), _r(b)) for x, y, b in e.get_points("xyb")))
+    elif t == "POLYLINE":
+        g = (e.is_3d_polyline, e.is_closed,
+             tuple(_rp(v.dxf.location) for v in e.vertices))
+    elif t == "TEXT":
+        g = (d.text, _rp(d.insert), _r(d.height), _r(d.rotation),
+             _rp(d.extrusion))
+    elif t == "MTEXT":
+        g = (e.text, _rp(d.insert), _r(d.char_height))
+    elif t in ("SOLID", "3DFACE"):
+        g = (_rp(d.vtx0), _rp(d.vtx1), _rp(d.vtx2), _rp(d.vtx3))
+    elif t == "SPLINE":
+        g = (d.degree, e.closed, len(e.control_points), len(e.fit_points))
+    elif t == "HATCH":
+        g = (d.pattern_name.upper(), d.solid_fill, len(e.paths))
+    elif t == "INSERT":
+        g = (d.name.upper(), _rp(d.insert), _r(d.xscale), _r(d.yscale),
+             _r(d.rotation),
+             tuple(sorted((a.dxf.tag, a.dxf.text) for a in e.attribs)))
+    elif t in ("XLINE", "RAY"):
+        g = (_rp(d.start), _rp(d.unit_vector))
+    else:
+        g = ()
+    return (t,) + c + g
+
+
+def fingerprints(msp) -> Counter:
+    return Counter(fingerprint(e) for e in msp
+                   if e.dxftype() not in ("SEQEND", "ATTRIB"))
+
+
+# ---------------------------------------------------------------------------
+# the round trip
+# ---------------------------------------------------------------------------
+
+def _convert(cmd: list[str], out: Path) -> tuple[str, str]:
+    """Run a converter. Returns (failure-category-suffix or '', signature)."""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=TIMEOUT,
+                              encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        return "TIMEOUT", ""
+    sig = ""
+    for line in reversed((proc.stderr or "").strip().splitlines()):
+        if "ERROR" in line or "Segmentation" in line:
+            sig = line.strip()[:160]
+            break
+    if proc.returncode < 0:
+        return "SEGV", f"signal {-proc.returncode}: {sig}"
+    if not out.is_file() or out.stat().st_size == 0:
+        return "EMPTY", sig or f"rc={proc.returncode}"
+    return "", sig
+
+
+def run_trip(header: dict, entities: list[dict], workdir: Path,
+             dxf2dwg: str, dwg2dxf: str) -> dict:
+    """Build, convert out and back, compare. Returns a result row."""
+    from ezdxf import recover
+
+    row = {"seed": header["seed"], "version": header["version"],
+           "target": header["target"], "n": len(entities),
+           "category": "?", "signature": ""}
+    gen_dxf = workdir / "gen.dxf"
+    gen_dwg = workdir / "gen.dwg"
+    back_dxf = workdir / "back.dxf"
+
+    try:
+        doc = build_doc(header, entities)
+        doc.saveas(gen_dxf)
+    except Exception as exc:
+        row.update(category="GEN_FAIL",
+                   signature=f"{type(exc).__name__}: {str(exc)[:140]}")
+        return row
+
+    fail, sig = _convert([dxf2dwg, "-y", "--as", header["target"],
+                          "-o", str(gen_dwg), str(gen_dxf)], gen_dwg)
+    if fail:
+        row.update(category=f"DXF2DWG_{fail}", signature=sig)
+        return row
+
+    fail, sig = _convert([dwg2dxf, "-y", "-o", str(back_dxf), str(gen_dwg)],
+                         back_dxf)
+    if fail:
+        row.update(category=f"DWG2DXF_{fail}", signature=sig)
+        return row
+
+    try:
+        doc_a, _ = recover.readfile(gen_dxf)
+        doc_b, _ = recover.readfile(back_dxf)
+    except Exception as exc:
+        row.update(category="RELOAD_FAIL",
+                   signature=f"{type(exc).__name__}: {str(exc)[:140]}")
+        return row
+
+    fp_a = fingerprints(doc_a.modelspace())
+    fp_b = fingerprints(doc_b.modelspace())
+    if fp_a == fp_b:
+        row["category"] = "OK"
+        return row
+
+    missing = fp_a - fp_b   # in the original, absent after the trip
+    extra = fp_b - fp_a
+    types_a = Counter(fp[0] for fp in fp_a.elements())
+    types_b = Counter(fp[0] for fp in fp_b.elements())
+    if types_a != types_b:
+        lost = types_a - types_b
+        gained = types_b - types_a
+        row["category"] = "LOST" if lost else "EXTRA"
+        row["signature"] = ("lost " + ",".join(f"{k}×{v}" for k, v in lost.items())
+                           + ("; gained " + ",".join(f"{k}×{v}" for k, v in gained.items())
+                              if gained else ""))[:160]
+    else:
+        row["category"] = "DIFF"
+        row["signature"] = ",".join(sorted({fp[0] for fp in missing}))[:160]
+    row["missing"] = missing
+    row["extra"] = extra
+    return row
+
+
+def save_artifacts(row: dict, header, entities, workdir: Path, fails: Path):
+    dest = fails / row["category"] / str(row["seed"])
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in ("gen.dxf", "gen.dwg", "back.dxf"):
+        src = workdir / name
+        if src.is_file():
+            shutil.copy2(src, dest / name)
+    (dest / "spec.json").write_text(
+        json.dumps({"header": header, "entities": entities},
+                   ensure_ascii=False, indent=1))
+    lines = [f"seed {row['seed']}  {row['version']} -> {row['target']}  "
+             f"{row['n']} entities", f"{row['category']}: {row['signature']}", ""]
+    for label in ("missing", "extra"):
+        for fp, cnt in list(row.get(label, {}).items())[:20]:
+            lines.append(f"{label} ×{cnt}: {fp!r}"[:400])
+    (dest / "report.txt").write_text("\n".join(lines) + "\n")
+
+
+def fuzz_one(seed: int, dxf2dwg: str, dwg2dxf: str,
+             fails: str | None, keep: list[int] | None = None) -> dict:
+    t0 = time.perf_counter()
+    header, entities = gen_specs(seed)
+    if keep is not None:
+        entities = [entities[i] for i in keep]
+    tmp = Path(tempfile.mkdtemp(prefix="dwgfuzz-"))
+    try:
+        row = run_trip(header, entities, tmp, dxf2dwg, dwg2dxf)
+        if row["category"] not in ("OK",) and fails:
+            save_artifacts(row, header, entities, tmp, Path(fails))
+        row.pop("missing", None)
+        row.pop("extra", None)
+        return row
+    finally:
+        row_time = round(time.perf_counter() - t0, 2)
+        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            row["seconds"] = row_time
+        except NameError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# reduction: drop spec entries while the failure persists
+# ---------------------------------------------------------------------------
+
+def reduce_seed(seed: int, dxf2dwg: str, dwg2dxf: str, fails: Path) -> None:
+    header, entities = gen_specs(seed)
+    tmp = Path(tempfile.mkdtemp(prefix="dwgfuzz-red-"))
+    try:
+        base = run_trip(header, entities, tmp, dxf2dwg, dwg2dxf)
+        target_cat = base["category"]
+        if target_cat == "OK":
+            print(f"seed {seed} passes — nothing to reduce")
+            return
+        print(f"seed {seed}: {target_cat} with {len(entities)} entities; reducing…")
+
+        keep = list(range(len(entities)))
+        chunk = max(1, len(keep) // 2)
+        while chunk >= 1:
+            i, shrunk = 0, False
+            while i < len(keep):
+                cand = keep[:i] + keep[i + chunk:]
+                if not cand:
+                    i += chunk
+                    continue
+                sub = [entities[j] for j in cand]
+                for f in tmp.iterdir():
+                    f.unlink()
+                r = run_trip(header, sub, tmp, dxf2dwg, dwg2dxf)
+                if r["category"] == target_cat:
+                    keep = cand
+                    shrunk = True
+                else:
+                    i += chunk
+            if chunk == 1 and not shrunk:
+                break
+            if not shrunk:
+                chunk //= 2
+        final = [entities[j] for j in keep]
+        for f in tmp.iterdir():
+            f.unlink()
+        row = run_trip(header, final, tmp, dxf2dwg, dwg2dxf)
+        dest = fails / f"{target_cat}" / f"{seed}-min"
+        save_artifacts(row, header, final, tmp, fails)
+        # save_artifacts wrote under category/<seed>; move to <seed>-min
+        src_dir = fails / target_cat / str(seed)
+        if src_dir.is_dir() and src_dir != dest:
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            src_dir.rename(dest)
+        print(f"reduced to {len(final)} entities "
+              f"(kept indices {keep}) -> {dest}")
+        print(f"{row['category']}: {row['signature']}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def _find_converters(args) -> tuple[str, str]:
+    from formats.dwg_bridge import find_dwg2dxf, find_dxf2dwg
+
+    dxf2dwg = args.dxf2dwg or find_dxf2dwg()
+    dwg2dxf = args.dwg2dxf or find_dwg2dxf()
+    if not dxf2dwg or not dwg2dxf:
+        print("converters not found (vendor/libredwg/bin)", file=sys.stderr)
+        sys.exit(1)
+    return str(dxf2dwg), str(dwg2dxf)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--dxf2dwg", type=Path, default=None)
+    ap.add_argument("--dwg2dxf", type=Path, default=None)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p_run = sub.add_parser("run")
+    p_run.add_argument("--count", type=int, default=200)
+    p_run.add_argument("--seed", type=int, default=0, help="first seed")
+    p_run.add_argument("--workers", type=int, default=6)
+    p_run.add_argument("--out", type=Path, default=Path("dwg_fuzz_report.csv"))
+    p_run.add_argument("--fails", type=Path, default=None)
+
+    p_rep = sub.add_parser("repro")
+    p_rep.add_argument("seed", type=int)
+    p_rep.add_argument("--fails", type=Path, default=None)
+
+    p_red = sub.add_parser("reduce")
+    p_red.add_argument("seed", type=int)
+    p_red.add_argument("--fails", type=Path, required=True)
+
+    args = ap.parse_args()
+    dxf2dwg, dwg2dxf = _find_converters(args)
+
+    if args.cmd == "repro":
+        row = fuzz_one(args.seed, dxf2dwg, dwg2dxf,
+                       str(args.fails) if args.fails else None)
+        print(json.dumps(row, ensure_ascii=False, indent=1))
+        return 0 if row["category"] == "OK" else 1
+
+    if args.cmd == "reduce":
+        reduce_seed(args.seed, dxf2dwg, dwg2dxf, args.fails)
+        return 0
+
+    seeds = range(args.seed, args.seed + args.count)
+    counts: dict[str, int] = {}
+    t0 = time.perf_counter()
+    with ProcessPoolExecutor(max_workers=args.workers) as pool, \
+         open(args.out, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, ["seed", "version", "target", "n",
+                                     "category", "signature", "seconds"])
+        writer.writeheader()
+        futures = {pool.submit(fuzz_one, s, dxf2dwg, dwg2dxf,
+                               str(args.fails) if args.fails else None): s
+                   for s in seeds}
+        for n, fut in enumerate(as_completed(futures), 1):
+            s = futures[fut]
+            try:
+                row = fut.result()
+            except Exception as exc:
+                row = {"seed": s, "version": "?", "target": "?", "n": 0,
+                       "category": "HARNESS_ERROR",
+                       "signature": str(exc)[:140], "seconds": 0}
+            counts[row["category"]] = counts.get(row["category"], 0) + 1
+            writer.writerow(row)
+            fh.flush()
+            if row["category"] != "OK":
+                print(f"[{row['category']}] seed {row['seed']} "
+                      f"({row['version']}->{row['target']}) — {row['signature']}",
+                      flush=True)
+            if n % 100 == 0:
+                print(f"--- {n}/{args.count} ({time.perf_counter()-t0:.0f}s) "
+                      f"{counts}", flush=True)
+    print(f"\nDONE in {time.perf_counter()-t0:.0f}s: {counts}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
