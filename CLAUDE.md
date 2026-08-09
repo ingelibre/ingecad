@@ -419,6 +419,21 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+### 🧭 RUMBO ACORDADO (2026-08-09) — próxima sesión: Layout en IngeCAD, cerrar v0.1 con r2004
+
+Marco validó la recomendación estratégica. **Orden de trabajo decidido:**
+
+1. **Layout (pestañas Model/Paper space como AutoCAD) en IngeCAD** — es feature de la app,
+   camino crítico de v0.1 (dims, Model/Layout tabs, PLOT). **ARRANCA ACÁ la próxima sesión.**
+2. **Cerrar v0.1 con r2004 para «Guardar como DWG»** — r2004 ya lo acepta ODA/AutoCAD hoy
+   (cambio de ~1 línea desde el r2000 actual); ODA opcional (instalación de un clic) cubre
+   el caso raro de quien necesite exportar r2018 específicamente.
+3. **r2018 writer propio = Track L de fondo**, sin bloquear el producto: madura en la rama
+   local `l4-r2018-writer` sesión a sesión cuando haya ganas. NO es camino crítico porque
+   r2004 ya resuelve el guardado. Ver «CONTINUAR L4» abajo para retomarlo.
+
+Cuando Marco diga «continúa», el default es **empezar por Layout** salvo que pida L4 explícito.
+
 ### ✅ Sexta tanda (2026-08-09, misma sesión) — la medición ODA, el proxy, y L4 a fondo
 
 Tres frentes cerrados o muy avanzados:
