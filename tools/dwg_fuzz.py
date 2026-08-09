@@ -52,8 +52,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 TIMEOUT = 60  # seconds per conversion
 ROUND = 4     # decimals kept in fingerprints (abs tolerance 1e-4 drawing units)
 
-SOURCE_VERSIONS = ["R2000", "R2004", "R2007", "R2010", "R2013", "R2018"]
-TARGET_VERSIONS = ["r2000"] * 7 + ["r2004"] * 2 + ["r14"]
+SOURCE_VERSIONS = ["R2000", "R2004", "R2007", "R2010", "R2013", "R2018", "R12"]
+TARGET_VERSIONS = ["r2000"] * 6 + ["r2004"] * 2 + ["r14"] + ["r12"]
+
+# entities expressible in an R12 DXF (no LWPOLYLINE/MTEXT/SPLINE/ELLIPSE/
+# HATCH/XLINE/RAY/DIMENSION-render blocks)
+R12_KINDS = ["LINE", "POINT", "CIRCLE", "ARC", "TEXT", "SOLID", "3DFACE",
+             "POLYLINE3D", "INSERT"]
 
 LAYER_NAMES = ["MUROS", "EJES", "CAÑERÍAS", "COTAS 2", "L-01", "puntos_topo"]
 LINETYPES = ["CONTINUOUS", "DASHED", "CENTER", "DASHDOT"]
@@ -118,11 +123,18 @@ def gen_specs(seed: int) -> tuple[dict, list[dict]]:
         "blocks": [],
     }
     # 0-3 block definitions; the last may nest an insert of the first
+    blk_kinds = (["LINE", "CIRCLE", "TEXT"] if header["version"] == "R12"
+                 else ["LINE", "CIRCLE", "TEXT", "LWPOLYLINE"])
     for bi in range(rng.randrange(0, 4)):
         ents = []
         for _ in range(rng.randrange(1, 4)):
-            kind = rng.choice(["LINE", "CIRCLE", "TEXT", "LWPOLYLINE"])
+            kind = rng.choice(blk_kinds)
             ents.append(_gen_entity(rng, header, kind, spread=10.0))
+        if rng.random() < 0.3:
+            ents.append({"t": "ATTDEF", "layer": 0, "color": 256,
+                         "tag": f"DEF{bi}", "text": rng.choice(TEXT_POOL[:5]),
+                         "prompt": "value?", "insert": _pt(rng, (0, 0), 5),
+                         "height": round(rng.uniform(0.5, 5), 4)})
         if bi == 2 and rng.random() < 0.5:
             ents.append({"t": "INSERT", "layer": 0, "color": 256,
                          "name": BLOCK_NAMES[0], "insert": _pt(rng, (0, 0), 5),
@@ -131,11 +143,17 @@ def gen_specs(seed: int) -> tuple[dict, list[dict]]:
                          "attribs": []})
         header["blocks"].append(ents)
 
-    kinds = ["LINE", "LINE", "LINE", "POINT", "CIRCLE", "ARC", "ELLIPSE",
-             "LWPOLYLINE", "LWPOLYLINE", "POLYLINE3D", "TEXT", "TEXT",
-             "MTEXT", "SOLID", "3DFACE", "SPLINE", "HATCH", "XLINE", "RAY"]
-    if header["blocks"]:
-        kinds += ["INSERT", "INSERT", "INSERT"]
+    if header["version"] == "R12" or header["target"] == "r12":
+        kinds = list(R12_KINDS)
+        if not header["blocks"]:
+            kinds.remove("INSERT")
+    else:
+        kinds = ["LINE", "LINE", "LINE", "POINT", "CIRCLE", "ARC", "ELLIPSE",
+                 "LWPOLYLINE", "LWPOLYLINE", "POLYLINE3D", "TEXT", "TEXT",
+                 "MTEXT", "SOLID", "3DFACE", "SPLINE", "HATCH", "XLINE",
+                 "RAY", "DIMLINEAR", "LEADER"]
+        if header["blocks"]:
+            kinds += ["INSERT", "INSERT", "INSERT", "MINSERT"]
     entities = [_gen_entity(rng, header, rng.choice(kinds))
                 for _ in range(rng.randrange(5, 41))]
     return header, entities
@@ -224,7 +242,7 @@ def _gen_entity(rng: Random, header, kind: str, spread=200.0) -> dict:
         d["start"] = _pt(rng, base, spread, z)
         a = rng.uniform(0, 2 * math.pi)
         d["unit"] = [round(math.cos(a), 9), round(math.sin(a), 9), 0.0]
-    elif kind == "INSERT":
+    elif kind in ("INSERT", "MINSERT"):
         d["name"] = BLOCK_NAMES[rng.randrange(len(header["blocks"]))]
         d["insert"] = _pt(rng, base, spread, z)
         d["xscale"] = round(rng.choice([1.0, rng.uniform(0.01, 20),
@@ -233,11 +251,27 @@ def _gen_entity(rng: Random, header, kind: str, spread=200.0) -> dict:
         d["zscale"] = 1.0
         d["rotation"] = round(rng.uniform(0, 360), 4)
         d["attribs"] = []
-        if rng.random() < 0.3:
+        if kind == "MINSERT":
+            d["rows"] = rng.randrange(2, 5)
+            d["cols"] = rng.randrange(1, 5)
+            d["row_spacing"] = round(rng.uniform(5, 50), 4)
+            d["col_spacing"] = round(rng.uniform(5, 50), 4)
+        elif rng.random() < 0.3:
             for i in range(rng.randrange(1, 3)):
                 d["attribs"].append(
                     [f"TAG{i}", rng.choice(TEXT_POOL[:5]),
                      _pt(rng, d["insert"][:2], 5)])
+    elif kind == "DIMLINEAR":
+        p1 = _pt(rng, base, spread)
+        p2 = _pt(rng, base, spread)
+        d["p1"], d["p2"] = p1[:2], p2[:2]
+        d["base"] = [round((p1[0] + p2[0]) / 2, 6),
+                     round(max(p1[1], p2[1]) + rng.uniform(5, 60), 6)]
+        d["angle"] = rng.choice([0.0, 90.0, round(rng.uniform(0, 360), 4)])
+        d["text"] = rng.choice(["<>", "<>", "<> m", " "])
+    elif kind == "LEADER":
+        d["points"] = [_pt(rng, base, spread)
+                       for _ in range(rng.randrange(2, 6))]
     return d
 
 
@@ -329,12 +363,26 @@ def _add_entity(layout, d: dict, header) -> None:
         layout.add_xline(d["start"], d["unit"], dxfattribs=at)
     elif t == "RAY":
         layout.add_ray(d["start"], d["unit"], dxfattribs=at)
-    elif t == "INSERT":
+    elif t in ("INSERT", "MINSERT"):
         at.update(xscale=d["xscale"], yscale=d["yscale"], zscale=d["zscale"],
                   rotation=d["rotation"])
         ref = layout.add_blockref(d["name"], d["insert"], dxfattribs=at)
+        if t == "MINSERT":
+            ref.grid(size=(d["rows"], d["cols"]),
+                     spacing=(d["row_spacing"], d["col_spacing"]))
         for tag, text, ins in d["attribs"]:
             ref.add_attrib(tag, text, ins)
+    elif t == "ATTDEF":
+        at.update(insert=d["insert"], height=d["height"], prompt=d["prompt"],
+                  tag=d["tag"])
+        layout.add_attdef(d["tag"], text=d["text"], dxfattribs=at)
+    elif t == "DIMLINEAR":
+        dim = layout.add_linear_dim(base=d["base"], p1=d["p1"], p2=d["p2"],
+                                    angle=d["angle"], text=d["text"],
+                                    dxfattribs=at)
+        dim.render()
+    elif t == "LEADER":
+        layout.add_leader(d["points"], dxfattribs=at)
 
 
 # ---------------------------------------------------------------------------
@@ -391,12 +439,23 @@ def fingerprint(e):
         g = (d.degree, e.closed, len(e.control_points), len(e.fit_points))
     elif t == "HATCH":
         g = (d.pattern_name.upper(), d.solid_fill, len(e.paths))
-    elif t == "INSERT":
+    elif t in ("INSERT", "MINSERT"):
+        t = "INSERT"  # ezdxf may expose a grid INSERT under either name
         g = (d.name.upper(), _rp(d.insert), _r(d.xscale), _r(d.yscale),
              _r(d.rotation),
+             d.get("row_count", 1), d.get("column_count", 1),
+             _r(d.get("row_spacing", 0)), _r(d.get("column_spacing", 0)),
              tuple(sorted((a.dxf.tag, a.dxf.text) for a in e.attribs)))
     elif t in ("XLINE", "RAY"):
         g = (_rp(d.start), _rp(d.unit_vector))
+    elif t == "ATTDEF":
+        g = (d.tag, d.text, _rp(d.insert), _r(d.height))
+    elif t == "DIMENSION":
+        # loose on purpose: geometry lives in the *D block, styles vary
+        g = (d.dimtype & 7, d.get("dimstyle", "").upper(), _rp(d.defpoint),
+             d.get("text", ""))
+    elif t == "LEADER":
+        g = (tuple(_rp(v) for v in e.vertices),)
     else:
         g = ()
     return (t,) + c + g
@@ -405,6 +464,18 @@ def fingerprint(e):
 def fingerprints(msp) -> Counter:
     return Counter(fingerprint(e) for e in msp
                    if e.dxftype() not in ("SEQEND", "ATTRIB"))
+
+
+def block_fingerprints(doc) -> dict:
+    """Per-block entity fingerprints. Anonymous/layout blocks excluded."""
+    out = {}
+    for b in doc.blocks:
+        name = b.name.upper()
+        if name.startswith(("*", "$")):
+            continue
+        out[name] = Counter(fingerprint(e) for e in b
+                            if e.dxftype() not in ("SEQEND", "ATTRIB"))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +544,28 @@ def run_trip(header: dict, entities: list[dict], workdir: Path,
     fp_a = fingerprints(doc_a.modelspace())
     fp_b = fingerprints(doc_b.modelspace())
     if fp_a == fp_b:
-        row["category"] = "OK"
+        blk_a = block_fingerprints(doc_a)
+        blk_b = block_fingerprints(doc_b)
+        if blk_a == blk_b:
+            row["category"] = "OK"
+            return row
+        # blocks only in the output are tolerated: LibreDWG materializes
+        # the standard arrowhead definitions (_CLOSEDFILLED & co.) that a
+        # DXF may reference by name without defining
+        bad = [n for n in blk_a if blk_a.get(n) != blk_b.get(n)]
+        if not bad:
+            row["category"] = "OK"
+            return row
+        row["category"] = "BLOCKDIFF"
+        row["signature"] = ",".join(sorted(bad))[:160]
+        row["missing"] = Counter()
+        row["extra"] = Counter()
+        for n in bad:
+            a, b = blk_a.get(n, Counter()), blk_b.get(n, Counter())
+            for fp, cnt in (a - b).items():
+                row["missing"][(n,) + fp] = cnt
+            for fp, cnt in (b - a).items():
+                row["extra"][(n,) + fp] = cnt
         return row
 
     missing = fp_a - fp_b   # in the original, absent after the trip
