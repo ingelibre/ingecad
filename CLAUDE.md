@@ -258,6 +258,65 @@ truncado, y que LibreDWG descarta `ACAD_PROXY_ENTITY` por completo (explica 3 de
 pérdidas parciales silenciosas). Con la lectura resuelta, el siguiente frente real de Track L
 es la **escritura** (L4: r2013/r2018) — y eso exige decidir el CLA.
 
+### ✅ Tercera tanda (2026-08-09) — la ESCRITURA, cazada por fuzzing (L2 write)
+
+El barrido de lectura estaba agotado, así que se construyó el complemento que faltaba:
+**`tools/dwg_fuzz.py`**, el harness round-trip del write path (ezdxf → `dxf2dwg` →
+`dwg2dxf` → comparar el modelspace huella a huella). Cada dibujo deriva de su semilla
+por un *spec* JSON, así que un fallo se reproduce desde el entero y se reduce quitando
+entradas del spec sin perturbar al resto. 2000 semillas corren en 15 s.
+
+**Primera campaña: el 94 % de los dibujos NO sobrevivía el viaje.** De ahí salieron
+**8 bugs de raíz distinta, los 8 con parche y PR: #1370–#1377**, todos verificados
+también contra el master de upstream (idéntica distribución de fallos que el vendor):
+
+- **#1370 (el grave):** `in_postprocess_SEQEND` re-envolvía un handle *relativo* como
+  absoluto → `INSERT.first_attrib = 2` (¡la tabla LTYPE!) → **AutoCAD/ODA rechazaban
+  entero cualquier DWG nuestro con bloques con atributos**. La promesa central del
+  producto («le devolví el plano sano al colega») estaba rota para ese caso y nadie lo
+  sabía porque LibreDWG sí leía su propio archivo.
+- **#1371:** los subentes (ATTRIB/VERTEX/SEQEND) se archivaban en la cadena del bloque
+  con entmode 2; AutoCAD los guarda con entmode 0, owner = entidad padre y fuera de la
+  cadena. ODA descartaba los ATTRIBs y el último vértice de cada polilínea.
+- **#1372:** `out_dxf` avisaba «stale subentity»… y lo escribía igual → vértices
+  duplicados al re-exportar. (El caso SEQEND de arriba ya hacía `return 0`.)
+- **#1373:** un BLOCK_HEADER sin BLOCK abortaba TODO el export DXF en r2004+ (por eso
+  el writer r2004 «perdía» el 100 % de los dibujos); r2000 sobrevivía el mismo dibujo.
+- **#1374:** SPLINE de solo fit-points → scenario 1 vacío. La línea correcta estaba
+  **comentada** en el handler del 74.
+- **#1375:** DXF r2007+ es UTF-8, pero `dynapi_set_helper` hace memcpy crudo a campos
+  codepage → mojibake en todo string no-ASCII (`CAÑERÍA` → `CAÃ‘ERÃ...`).
+- **#1376:** al bajar a r2000, `bit_downconvert_CMC` pisaba el índice ACI válido con una
+  búsqueda inversa por RGB que devuelve el primer match — y la paleta tiene RGB
+  repetidos: **170→5, 10→1: re-coloreo silencioso**.
+- **#1377:** el handler 420 dejaba método 0 (inválido) y nunca ponía el flag 0x80 que
+  el encoding r2004+ exige para escribir el rgb → todo true color perdido.
+
+**Con los 8: la campaña pasa de 5,6 % OK a 90 % — r2000 y r2004 al 100 %** (lo restante
+es el writer r14, pre-R13, otra historia). Verificación: `make check` upstream 254/254;
+bench de los 1657 DWG reales contra la base stock: **0 empeoran**, 10 mejoran (+118 788
+entidades, las ganancias ya conocidas de la 2ª tanda); ODA lee ahora completo lo que
+escribimos (ATTRIB=1, VERTEX=3/3, sin errores); cada parche compila aislado en árbol
+limpio.
+
+**Método nuevo que quedó validado — la referencia ODA campo a campo:** cuando el formato
+no está documentado, convertir el MISMO DXF con ODA a DWG, leer ambos con `dwgread -O
+json` y comparar entidad a entidad. Así salieron entmode/owner/cadena correctos (#1371)
+sin especular; mi primer intento (heredar entmode 2 del padre, «plausible») era
+exactamente lo contrario de lo que AutoCAD hace, y solo la referencia lo delató.
+Y la de siempre, tres veces más: la contradicción interna primero — la línea comentada
+(#1374), el «stale» que avisa y escribe igual (#1372), el `dwg_dup_handleref` de al lado
+que ya usaba `absolute_ref` (#1370).
+
+⚠️ **Pendiente decidido a propósito:** `vendor/` sigue en `0.14.8556 + 13`; estos 8 NO
+están en vendor todavía. El #1370/#1371 afectan el «Guardar como DWG» de IngeCAD hoy
+(un plano del colega con bloques con atributos se re-guarda ilegible para AutoCAD), así
+que la próxima re-vendorización debería ir a base `0.14.8566` (ya trae 5 de los 13) +
+los 8 no fusionados de la 2ª tanda + estos 8. El harness quedó commiteado
+(`tools/dwg_fuzz.py`); la cola conocida: writer r14 (~200/2000 fallos, nicho) y el
+duplicado huérfano de `*Model_Space` que `in_dxf` deja al importar (hoy solo inocuo
+gracias a #1373).
+
 ---
 
 ## 🧪 Tests (desde el día uno)
