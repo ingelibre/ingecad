@@ -30,6 +30,9 @@ class ToolContext:
     # Open the hatch style picker with the current settings; returns the chosen
     # settings dict {pattern, scale, angle, color} or None on cancel.
     ask_hatch: Callable[[dict], Optional[dict]] = lambda settings: None
+    # Undo the most recently executed Command (LINE's mid-command U erases
+    # the segment for real, like AutoCAD — not just forgets the point).
+    undo_last: Callable[[], None] = lambda: None
     # Editing services (selection, entity picking, edge geometry). The GUI
     # supplies the ToolController; tests supply a fake with the same duck
     # methods: pick_entity(point), edges_geometry(handles|None).

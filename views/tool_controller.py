@@ -243,6 +243,7 @@ class ToolController(QObject):
             ask_text=self._ask_text,
             ask_choice=self._ask_choice,
             ask_hatch=self._ask_hatch,
+            undo_last=self.window._cmd_undo,
         )
         self.tool = ALL_TOOL_CLASSES[name](ctx)
         self.tool.start()

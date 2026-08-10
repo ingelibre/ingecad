@@ -191,7 +191,233 @@ def add_arc_3p(p1, p2, p3) -> AddEntityCommand:
         lambda msp: msp.add_arc((center[0], center[1]), radius, a1, a3))
 
 
+# -- ARC geometry: AutoCAD's 11 methods reduced to (center, radius, a1, a2) ----
+#
+# DXF arcs always run counterclockwise from start_angle to end_angle; a
+# clockwise construction is stored with the angles swapped. Each function
+# returns (center, radius, start_deg, end_deg, end_point, ccw) where
+# end_point is the USER's end of the drawn arc and ccw is the direction the
+# user travelled (for tangent chaining) — not necessarily the entity's
+# end_angle side.
+
+def _dir_deg(frm, to) -> float:
+    return math.degrees(math.atan2(to[1] - frm[1], to[0] - frm[0]))
+
+
+def _polar(center, radius: float, angle_deg: float):
+    a = math.radians(angle_deg)
+    return (center[0] + radius * math.cos(a), center[1] + radius * math.sin(a))
+
+
+def arc_sca(start, center, angle_deg: float):
+    """Start, Center, included Angle. Positive = CCW; negative = CW."""
+    radius = math.dist(start, center)
+    if radius <= 0.0:
+        raise ValueError("zero radius")
+    a1 = _dir_deg(center, start)
+    end = _polar(center, radius, a1 + angle_deg)
+    if angle_deg >= 0.0:
+        return center, radius, a1, a1 + angle_deg, end, True
+    return center, radius, a1 + angle_deg, a1, end, False
+
+
+def arc_scl(start, center, chord: float):
+    """Start, Center, chord Length. Positive = minor arc CCW; negative =
+    major arc CCW (AutoCAD's rule)."""
+    radius = math.dist(start, center)
+    if radius <= 0.0 or abs(chord) > 2.0 * radius or chord == 0.0:
+        raise ValueError("chord does not fit the radius")
+    included = math.degrees(2.0 * math.asin(abs(chord) / (2.0 * radius)))
+    if chord < 0.0:
+        included = 360.0 - included
+    a1 = _dir_deg(center, start)
+    return (center, radius, a1, a1 + included,
+            _polar(center, radius, a1 + included), True)
+
+
+def arc_sea(start, end, angle_deg: float):
+    """Start, End, included Angle. Positive = CCW; negative = CW."""
+    if angle_deg == 0.0 or abs(angle_deg) >= 360.0:
+        raise ValueError("angle must be in (-360, 0) or (0, 360)")
+    if angle_deg < 0.0:
+        # a CW arc start->end is the CCW arc end->start
+        center, radius, a1, a2, _e, _ccw = arc_sea(end, start, -angle_deg)
+        return center, radius, a1, a2, _polar(center, radius, a1), False
+    chord = math.dist(start, end)
+    if chord <= 0.0:
+        raise ValueError("zero chord")
+    half = math.radians(angle_deg) / 2.0
+    radius = chord / (2.0 * math.sin(half))
+    mid = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+    ux, uy = (end[0] - start[0]) / chord, (end[1] - start[1]) / chord
+    left = (-uy, ux)
+    d = math.sqrt(max(radius * radius - (chord / 2.0) ** 2, 0.0))
+    side = 1.0 if angle_deg < 180.0 else -1.0
+    center = (mid[0] + side * d * left[0], mid[1] + side * d * left[1])
+    return (center, radius, _dir_deg(center, start), _dir_deg(center, end),
+            (end[0], end[1]), True)
+
+
+def arc_sed(start, end, direction_deg: float):
+    """Start, End, start-tangent Direction. Any arc, CW or CCW."""
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    u = (math.cos(math.radians(direction_deg)),
+         math.sin(math.radians(direction_deg)))
+    n = (-u[1], u[0])                       # left normal of the tangent
+    denom = 2.0 * (dx * n[0] + dy * n[1])
+    if abs(denom) < 1e-12:
+        raise ValueError("direction is collinear with the chord")
+    r_signed = (dx * dx + dy * dy) / denom
+    center = (start[0] + r_signed * n[0], start[1] + r_signed * n[1])
+    radius = abs(r_signed)
+    a_start = _dir_deg(center, start)
+    a_end = _dir_deg(center, end)
+    if r_signed > 0.0:                      # center left of tangent: CCW
+        return center, radius, a_start, a_end, (end[0], end[1]), True
+    return center, radius, a_end, a_start, (end[0], end[1]), False
+
+
+def arc_ser(start, end, radius: float):
+    """Start, End, Radius. Positive = minor arc CCW; negative = major arc
+    CCW (AutoCAD's rule). Chord must fit the radius."""
+    chord = math.dist(start, end)
+    if radius == 0.0 or chord <= 0.0 or chord > 2.0 * abs(radius):
+        raise ValueError("chord does not fit the radius")
+    r = abs(radius)
+    mid = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+    ux, uy = (end[0] - start[0]) / chord, (end[1] - start[1]) / chord
+    left = (-uy, ux)
+    d = math.sqrt(max(r * r - (chord / 2.0) ** 2, 0.0))
+    side = 1.0 if radius > 0.0 else -1.0    # minor: center left of the chord
+    center = (mid[0] + side * d * left[0], mid[1] + side * d * left[1])
+    return (center, r, _dir_deg(center, start), _dir_deg(center, end),
+            (end[0], end[1]), True)
+
+
+def add_arc_geom(geom) -> AddEntityCommand:
+    """Command from an arc geometry tuple (see the section comment)."""
+    center, radius, a1, a2 = geom[0], geom[1], geom[2], geom[3]
+    return AddEntityCommand(
+        "ARC", lambda msp: msp.add_arc((center[0], center[1]), radius, a1, a2))
+
+
+def arc_end_tangent(geom) -> float:
+    """Tangent direction (degrees) at the USER end of a drawn arc, following
+    the drawing direction — what LINE/ARC Continue chains from."""
+    center, end_point, ccw = geom[0], geom[4], geom[5]
+    a_end = _dir_deg(center, end_point)
+    return a_end + (90.0 if ccw else -90.0)
+
+
+# -- CIRCLE TTR: radius-r circle tangent to two objects -------------------------
+#
+# The center of a circle tangent to a LINE lies on one of the two parallels
+# at distance r; tangent to a CIRCLE(R), on one of the concentric circles of
+# radius R+r or |R-r|. Candidate centers are the intersections of those loci;
+# AutoCAD's documented disambiguation picks the candidate whose tangent
+# points are closest to the pick points.
+
+def _tangent_loci(obj, r: float) -> list:
+    kind = obj[0]
+    if kind == "line":
+        p1, p2 = obj[1], obj[2]
+        ux, uy = p2[0] - p1[0], p2[1] - p1[1]
+        length = math.hypot(ux, uy)
+        if length < 1e-12:
+            raise ValueError("degenerate line")
+        n = (-uy / length, ux / length)
+        return [("line", (p1[0] + s * r * n[0], p1[1] + s * r * n[1]),
+                 (ux / length, uy / length)) for s in (1.0, -1.0)]
+    center, big_r = obj[1], obj[2]
+    loci = [("circle", center, big_r + r)]
+    if abs(big_r - r) > 1e-12:
+        loci.append(("circle", center, abs(big_r - r)))
+    return loci
+
+
+def _loci_intersections(a, b) -> list:
+    """Intersection points of two loci (lines given as (point, unit))."""
+    if a[0] == "circle" and b[0] == "line":
+        a, b = b, a
+    if a[0] == "line" and b[0] == "line":
+        (px, py), (ux, uy) = a[1], a[2]
+        (qx, qy), (vx, vy) = b[1], b[2]
+        den = ux * vy - uy * vx
+        if abs(den) < 1e-12:
+            return []
+        t = ((qx - px) * vy - (qy - py) * vx) / den
+        return [(px + t * ux, py + t * uy)]
+    if a[0] == "line":
+        (px, py), (ux, uy) = a[1], a[2]
+        (cx, cy), r = b[1], b[2]
+        t0 = (cx - px) * ux + (cy - py) * uy
+        foot = (px + t0 * ux, py + t0 * uy)
+        d2 = r * r - ((foot[0] - cx) ** 2 + (foot[1] - cy) ** 2)
+        if d2 < -1e-9:
+            return []
+        h = math.sqrt(max(d2, 0.0))
+        return [(foot[0] + s * h * ux, foot[1] + s * h * uy)
+                for s in ((1.0, -1.0) if h > 1e-12 else (0.0,))]
+    (c1, r1), (c2, r2) = (a[1], a[2]), (b[1], b[2])
+    d = math.dist(c1, c2)
+    if d < 1e-12 or d > r1 + r2 + 1e-9 or d < abs(r1 - r2) - 1e-9:
+        return []
+    x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d)
+    h2 = r1 * r1 - x * x
+    h = math.sqrt(max(h2, 0.0))
+    ux, uy = (c2[0] - c1[0]) / d, (c2[1] - c1[1]) / d
+    base = (c1[0] + x * ux, c1[1] + x * uy)
+    if h < 1e-12:
+        return [base]
+    return [(base[0] - s * h * uy, base[1] + s * h * ux) for s in (1.0, -1.0)]
+
+
+def _tangent_point(obj, center) -> tuple[float, float]:
+    if obj[0] == "line":
+        (px, py), p2 = obj[1], obj[2]
+        ux, uy = p2[0] - px, p2[1] - py
+        length = math.hypot(ux, uy)
+        ux, uy = ux / length, uy / length
+        t = (center[0] - px) * ux + (center[1] - py) * uy
+        return (px + t * ux, py + t * uy)
+    c, big_r = obj[1], obj[2]
+    d = math.dist(c, center)
+    if d < 1e-12:
+        return c
+    return (c[0] + (center[0] - c[0]) * big_r / d,
+            c[1] + (center[1] - c[1]) * big_r / d)
+
+
+def ttr_center(obj1, pick1, obj2, pick2, radius: float):
+    """CIRCLE Ttr: center of the radius circle tangent to both objects,
+    choosing the candidate whose tangent points are closest to the pick
+    points (AutoCAD's documented rule). Raises ValueError when no circle
+    of that radius fits ("Circle does not exist.")."""
+    if radius <= 0.0:
+        raise ValueError("radius must be positive")
+    best = None
+    best_score = None
+    for locus1 in _tangent_loci(obj1, radius):
+        for locus2 in _tangent_loci(obj2, radius):
+            for center in _loci_intersections(locus1, locus2):
+                t1 = _tangent_point(obj1, center)
+                t2 = _tangent_point(obj2, center)
+                score = math.dist(t1, pick1) + math.dist(t2, pick2)
+                if best_score is None or score < best_score:
+                    best, best_score = center, score
+    if best is None:
+        raise ValueError("circle does not exist")
+    return best
+
+
 def add_polyline(points, closed: bool = False) -> AddEntityCommand:
+    """LWPOLYLINE from plain (x, y) pairs or full (x, y, start_width,
+    end_width, bulge) vertices (PLINE arc segments and tapered widths)."""
+    if points and len(points[0]) >= 5:
+        pts = [tuple(p[:5]) for p in points]
+        return AddEntityCommand(
+            "PLINE", lambda msp: msp.add_lwpolyline(
+                pts, format="xyseb", close=closed))
     pts = [(p[0], p[1]) for p in points]
     return AddEntityCommand(
         "PLINE", lambda msp: msp.add_lwpolyline(pts, close=closed))
