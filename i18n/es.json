@@ -354,5 +354,10 @@
   "MODEL": "MODELO",
   "Toggle paper/model space in the layout (MSPACE/PSPACE)": "Alternar espacio papel/modelo en la presentación (MSPACE/PSPACE)",
   "The Model tab is model space — the toggle works on a layout tab.": "La ficha Modelo es espacio modelo — el conmutador funciona en una presentación.",
-  "Select a viewport (border) or MSPACE first.": "Seleccione una ventana gráfica (su borde) o use MSPACE primero."
+  "Select a viewport (border) or MSPACE first.": "Seleccione una ventana gráfica (su borde) o use MSPACE primero.",
+  "Layout (sheet at 1:1)": "Presentación (hoja a 1:1)",
+  "Repeat {name}": "Repetir {name}",
+  "Copy Selection": "Copiar selección",
+  "Deselect All": "Deseleccionar todo",
+  "Display locked": "Vista bloqueada"
 }

@@ -1075,6 +1075,20 @@ class Viewport(QOpenGLWidget):
             if event.button() == Qt.RightButton:
                 self.stop_pan_mode()   # right-click ends PAN, like AutoCAD
                 return
+        if event.button() == Qt.RightButton and self.tool_delegate is not None:
+            window = getattr(self.tool_delegate, "window", None)
+            if self._zoom_window:
+                self._zoom_window = False        # right-click cancels the pick
+                self.setCursor(Qt.BlankCursor)
+                if self._rubber is not None:
+                    self._rubber.hide()
+            elif self.tool_delegate._grip_drag is not None:
+                self.tool_delegate.cancel()      # drop the hot grip
+            elif window is not None and hasattr(window, "on_canvas_right_click"):
+                # AutoCAD: Enter during a command, context menu when idle.
+                window.on_canvas_right_click(event.globalPosition().toPoint())
+            self.update()
+            return
         if self._zoom_window and event.button() == Qt.LeftButton:
             self._rubber_origin = event.position()
             if self._rubber is None:

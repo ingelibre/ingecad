@@ -35,8 +35,16 @@ class PrintDialog(QDialog):
         self.orientation.addItem(tr("Landscape"), True)
         self.orientation.addItem(tr("Portrait"), False)
         self.area = QComboBox(self)
+        self._layout_name = getattr(window, "_active_layout", "Model")
+        is_layout_tab = (self._layout_name != "Model"
+                         and window.document is not None)
+        if is_layout_tab:
+            # AutoCAD's contract: a layout plots at 1:1 — the sheet maps
+            # mm-to-mm and every viewport prints at its exact scale.
+            self.area.addItem(tr("Layout (sheet at 1:1)"), "layout")
         self.area.addItem(tr("Extents"), "extents")
         self.area.addItem(tr("Current view"), "view")
+        self.area.currentIndexChanged.connect(self._on_area_changed)
         self.scale = QComboBox(self)
         self.scale.addItem(tr("Fit to paper"), None)
         for n in pdf_out.COMMON_SCALES:
@@ -61,8 +69,18 @@ class PrintDialog(QDialog):
         pdf_btn.clicked.connect(self._to_pdf)
         printer_btn.clicked.connect(self._to_printer)
         form.addRow(buttons)
+        self._on_area_changed()
 
     # -- plot parameters -------------------------------------------------------
+    def _layout_mode(self) -> bool:
+        return self.area.currentData() == "layout"
+
+    def _on_area_changed(self) -> None:
+        # In layout mode paper/orientation/scale come from the page setup.
+        manual = not self._layout_mode()
+        for widget in (self.paper, self.orientation, self.scale, self.units):
+            widget.setEnabled(manual)
+
     def _mm_per_unit(self):
         n = self.scale.currentData()
         if n is None:
@@ -75,6 +93,10 @@ class PrintDialog(QDialog):
         return None                             # extents
 
     def _plot_on(self, printer) -> None:
+        if self._layout_mode():
+            pdf_out.plot_layout(self.window.document, printer,
+                                self._layout_name)
+            return
         pdf_out.plot(
             self.window.document, printer,
             layout_name=getattr(self.window, "_active_layout", None),
@@ -88,9 +110,14 @@ class PrintDialog(QDialog):
             self, tr("Save PDF"), f"{name}.pdf", "PDF (*.pdf)")
         if not path:
             return
-        printer = pdf_out.make_pdf_printer(
-            path, self.paper.currentText(),
-            landscape=self.orientation.currentData())
+        if self._layout_mode():
+            (width, height), _sheet = pdf_out.layout_sheet(
+                self.window.document, self._layout_name)
+            printer = pdf_out.make_pdf_printer_mm(path, width, height)
+        else:
+            printer = pdf_out.make_pdf_printer(
+                path, self.paper.currentText(),
+                landscape=self.orientation.currentData())
         self._plot_on(printer)
         self.window.command_line.echo(tr("PDF saved: {p}", p=path))
         self.accept()
@@ -100,11 +127,19 @@ class PrintDialog(QDialog):
         from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 
         printer = QPrinter(QPrinter.HighResolution)
-        size_id = getattr(QPageSize, self.paper.currentText(), QPageSize.A4)
-        printer.setPageSize(QPageSize(size_id))
-        printer.setPageOrientation(
-            QPageLayout.Landscape if self.orientation.currentData()
-            else QPageLayout.Portrait)
+        if self._layout_mode():
+            from PySide6.QtCore import QSizeF
+
+            (width, height), _sheet = pdf_out.layout_sheet(
+                self.window.document, self._layout_name)
+            printer.setPageSize(QPageSize(QSizeF(width, height),
+                                          QPageSize.Millimeter))
+        else:
+            size_id = getattr(QPageSize, self.paper.currentText(), QPageSize.A4)
+            printer.setPageSize(QPageSize(size_id))
+            printer.setPageOrientation(
+                QPageLayout.Landscape if self.orientation.currentData()
+                else QPageLayout.Portrait)
         dlg = QPrintDialog(printer, self)
         if dlg.exec():
             self._plot_on(printer)

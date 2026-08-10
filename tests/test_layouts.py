@@ -963,3 +963,104 @@ def test_vp_scale_combo_applies_and_tracks(qapp):
             break
     assert layout_ops.viewport_scale(vp) == pytest.approx(1.0 / 50.0)
     win.close()
+
+
+# -- PLOT: layout -> PDF at 1:1 ------------------------------------------------
+
+def test_plot_layout_pdf_page_size_and_true_scale(qapp, tmp_path):
+    import shutil
+    import subprocess
+
+    from formats import pdf_out
+
+    doc = Document.new()
+    doc.modelspace().add_circle((10.0, 5.0), 3.0)     # Ø 6 m in meters
+    history = History(doc)
+    psp = doc.doc.layouts.get("Layout1")
+    history.execute(layout_ops.page_setup_command(
+        psp, 297.0, 210.0, (5.0, 5.0, 5.0, 5.0), "ISO A4"))
+    # viewport at 10:1 (meters on a mm sheet = real 1:100): Ø 6 m -> Ø 60 mm
+    psp.add_viewport(center=(100.0, 80.0), size=(200.0, 140.0),
+                     view_center_point=(10.0, 5.0), view_height=14.0)
+
+    path = str(tmp_path / "layout.pdf")
+    printer = pdf_out.make_pdf_printer_mm(path, 297.0, 210.0)
+    pdf_out.plot_layout(doc, printer, "Layout1")
+    assert (tmp_path / "layout.pdf").exists()
+
+    if shutil.which("pdfinfo"):
+        info = subprocess.run(["pdfinfo", path], capture_output=True,
+                              text=True).stdout
+        size_line = next(l for l in info.splitlines() if "Page size" in l)
+        # 297 x 210 mm = 841.89 x 595.28 pts
+        w_pts = float(size_line.split(":")[1].split()[0])
+        h_pts = float(size_line.split(":")[1].split()[2])
+        assert w_pts == pytest.approx(841.89, abs=1.0)
+        assert h_pts == pytest.approx(595.28, abs=1.0)
+
+    if shutil.which("pdftoppm"):
+        # measure with a ruler, in pixels: at 150 dpi the Ø 60 mm circle
+        # must span 60 * 150 / 25.4 = 354 px
+        subprocess.run(["pdftoppm", "-r", "150", "-gray", "-png", path,
+                        str(tmp_path / "page")], check=True)
+        import numpy as np
+        from PIL import Image
+
+        page = next(tmp_path.glob("page*.png"))
+        img = np.array(Image.open(page).convert("L"))
+        ys, xs = np.nonzero(img < 128)
+        assert len(xs), "the plot produced no ink"
+        diameter_px = xs.max() - xs.min()
+        assert diameter_px == pytest.approx(60.0 * 150.0 / 25.4, abs=6.0)
+
+
+def test_plot_layout_borders_follow_flag(qapp):
+    from formats import pdf_out
+
+    doc = Document.new()
+    doc.modelspace().add_circle((10.0, 5.0), 3.0)
+    psp = doc.doc.layouts.get("Layout1")
+    psp.add_viewport(center=(100.0, 80.0), size=(200.0, 140.0),
+                     view_center_point=(10.0, 5.0), view_height=14.0)
+    # default flags: no viewport borders in the plot
+    n_default = len(pdf_out.build_graphics_scene(doc, "Layout1").items())
+    psp.dxf.plot_layout_flags = int(
+        psp.dxf.get_default("plot_layout_flags")) | 1
+    n_borders = len(pdf_out.build_graphics_scene(doc, "Layout1").items())
+    assert n_borders > n_default
+
+
+# -- canvas right-click routing ------------------------------------------------
+
+def test_right_click_is_enter_during_a_tool(qapp):
+    from PySide6.QtCore import QPoint
+
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    win.new_document()
+    win.tools.start_tool("LINE")
+    win.tools.on_click(0.0, 0.0)
+    win.tools.on_click(10.0, 5.0)
+    assert win.tools.active()
+    win.on_canvas_right_click(QPoint(0, 0))    # classic: right-click = Enter
+    assert not win.tools.active()
+    lines = [e for e in win.document.modelspace() if e.dxftype() == "LINE"]
+    assert len(lines) == 1
+    win.close()
+
+
+def test_right_click_accepts_prompt_default(qapp):
+    from PySide6.QtCore import QPoint
+
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    win.new_document()
+    win.dispatcher.submit("ZOOM")
+    assert win.dispatcher.pending_prompt is not None
+    win.on_canvas_right_click(QPoint(0, 0))    # accepts <Extents>
+    assert win.dispatcher.pending_prompt is None
+    win.close()

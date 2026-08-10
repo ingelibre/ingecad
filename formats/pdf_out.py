@@ -43,7 +43,20 @@ def build_graphics_scene(document, layout_name: str | None = None):
     scene = QGraphicsScene()
     backend = PyQtBackend(scene)
     context = RenderContext(document.doc)
-    Frontend(context, backend).draw_layout(layout, finalize=True)
+    Frontend(context, backend).draw_layout(layout, finalize=False)
+    if getattr(layout, "is_any_paperspace", False):
+        # Viewport frames plot only when the page setup asks for them
+        # (plot_layout_flags bit 1, off by AutoCAD's own default — clean
+        # sheets are what a signed plan wants).
+        try:
+            flags = int(layout.dxf.get_default("plot_layout_flags"))
+        except Exception:
+            flags = 0
+        if flags & 1:
+            from render.backend import _draw_viewport_borders
+
+            _draw_viewport_borders(layout, context, backend)
+    backend.finalize()
     return scene
 
 
@@ -52,9 +65,37 @@ def scene_extents(scene) -> QRectF:
     return scene.itemsBoundingRect()
 
 
+_PT_TO_MM = 25.4 / 72.0
+# Thinnest plotted stroke: AutoCAD's fine-pen practice (never a 0-width
+# hairline that disappears on high-resolution devices).
+_MIN_PLOT_MM = 0.1
+
+
+def _use_physical_pens(scene) -> None:
+    """Convert the backend's cosmetic pens (points, fixed device pixels —
+    a screen convention) into physical widths in scene units.
+
+    Only valid when the scene units are paper mm (a layout plot): the
+    0.25 mm default lineweight arrives as a 0.708 pt cosmetic pen, which a
+    1200 dpi printer would render as an invisible 0.015 mm hairline.
+    """
+    from PySide6.QtCore import Qt
+
+    for item in scene.items():
+        if not hasattr(item, "pen"):
+            continue
+        pen = item.pen()
+        if pen.style() == Qt.NoPen:
+            continue
+        pen.setCosmetic(False)
+        pen.setWidthF(max(pen.widthF() * _PT_TO_MM, _MIN_PLOT_MM))
+        item.setPen(pen)
+
+
 def plot(document, printer, layout_name: str | None = None,
          area: tuple[float, float, float, float] | None = None,
-         mm_per_unit: float | None = None) -> None:
+         mm_per_unit: float | None = None,
+         physical_pens: bool = False) -> None:
     """Render onto ``printer`` (PDF file or a physical printer).
 
     ``area`` is the world rect (x0, y0, x1, y1) to plot; None plots the
@@ -62,6 +103,8 @@ def plot(document, printer, layout_name: str | None = None,
     None fits the area to the page. The plot is centred on the page.
     """
     scene = build_graphics_scene(document, layout_name)
+    if physical_pens:
+        _use_physical_pens(scene)
     if area is None:
         r = scene_extents(scene)
         area = (r.left(), r.top(), r.right(), r.bottom())
@@ -89,6 +132,41 @@ def plot(document, printer, layout_name: str | None = None,
         scene.render(painter, target, source)
     finally:
         painter.end()
+
+
+def layout_sheet(document, layout_name: str):
+    """((width_mm, height_mm), sheet_rect) of a paperspace layout's paper."""
+    from core.layouts import paper_frame
+
+    layout = document.doc.layouts.get(layout_name)
+    sheet = paper_frame(layout)["sheet"]
+    x0, y0, x1, y1 = sheet
+    return (x1 - x0, y1 - y0), sheet
+
+
+def plot_layout(document, printer, layout_name: str) -> None:
+    """Plot a paperspace layout at 1:1 — the sheet maps mm-to-mm onto the
+    page, so every viewport prints at its exact scale (the AutoCAD
+    contract: layouts plot at 1:1, the scale lives in the viewports)."""
+    _size, sheet = layout_sheet(document, layout_name)
+    printer.setFullPage(True)   # the sheet IS the page; margins are drawn
+    plot(document, printer, layout_name, area=sheet, mm_per_unit=1.0,
+         physical_pens=True)    # scene units are paper mm on a layout
+
+
+def make_pdf_printer_mm(path: str, width_mm: float, height_mm: float):
+    """A vector-PDF QPrinter with an exact page size in mm (layout plots)."""
+    from PySide6.QtCore import QSizeF
+    from PySide6.QtGui import QPageSize
+    from PySide6.QtPrintSupport import QPrinter
+
+    printer = QPrinter(QPrinter.HighResolution)
+    printer.setOutputFormat(QPrinter.PdfFormat)
+    printer.setOutputFileName(path)
+    printer.setPageSize(QPageSize(QSizeF(width_mm, height_mm),
+                                  QPageSize.Millimeter))
+    printer.setFullPage(True)
+    return printer
 
 
 def make_pdf_printer(path: str, paper: str = "A4", landscape: bool = True):

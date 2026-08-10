@@ -195,6 +195,66 @@ class MainWindow(QMainWindow):
         self.tools.paste()
         self.viewport.setFocus()
 
+    # -- canvas right-click (classic AutoCAD shortcut menu) ---------------------
+    def on_canvas_right_click(self, global_pos) -> None:
+        """Right-click on the canvas: Enter while a command runs, the
+        shortcut menu when idle (classic AutoCAD defaults)."""
+        if self.tools.active() or self.tools._selecting_for is not None:
+            if not self.tools.on_text(""):
+                self.dispatcher.submit("")
+            return
+        if self.dispatcher.pending_prompt is not None:
+            self.dispatcher.submit("")      # accept the prompt's default
+            return
+        self.show_canvas_context_menu(global_pos)
+
+    def show_canvas_context_menu(self, global_pos) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        from core import layouts as layout_ops
+
+        menu = QMenu(self)
+        last = self.dispatcher.last_command
+        if last:
+            menu.addAction(tr("Repeat {name}", name=last),
+                           lambda: self.dispatcher.submit(last))
+            menu.addSeparator()
+        model_sel = bool(self.tools.selection)
+        vp = self.tools.paper_vp
+        vp_sel = vp is not None and vp.is_alive
+        act = menu.addAction(tr("Cut"), self._cmd_cut)
+        act.setEnabled(model_sel)
+        act = menu.addAction(tr("Copy"), self._cmd_copy)
+        act.setEnabled(model_sel)
+        menu.addAction(tr("Paste"), self._cmd_paste)
+        menu.addSeparator()
+        if vp_sel:
+            # selected viewport: AutoCAD's viewport shortcut entries
+            menu.addAction(tr("Erase"), self._cmd_delete)
+            lock = menu.addAction(tr("Display locked"))
+            lock.setCheckable(True)
+            lock.setChecked(layout_ops.is_viewport_locked(vp))
+            lock.triggered.connect(lambda _=False: self._cmd_vplock())
+            menu.addSeparator()
+            menu.addAction(tr("Deselect All"), self.tools.clear_selection)
+        elif model_sel:
+            menu.addAction(tr("Erase"), self._cmd_delete)
+            for label, name in ((tr("Move"), "MOVE"),
+                                (tr("Copy Selection"), "COPY"),
+                                (tr("Rotate"), "ROTATE"),
+                                (tr("Scale"), "SCALE")):
+                menu.addAction(
+                    label, lambda checked=False, n=name: self._invoke_command(n))
+            menu.addSeparator()
+            menu.addAction(tr("Deselect All"), self.tools.clear_selection)
+        else:
+            menu.addAction(tr("Undo"), self._cmd_undo)
+            menu.addAction(tr("Redo"), self._cmd_redo)
+            menu.addSeparator()
+            menu.addAction(tr("Pan"), lambda: self._invoke_command("PAN"))
+            menu.addAction(tr("Zoom Extents"), self.viewport.zoom_extents)
+        menu.exec(global_pos)
+
     def _plot_dialog(self) -> None:
         if self.document is None:
             self.command_line.echo(tr("Nothing to plot."))
