@@ -294,5 +294,16 @@
   "VPLOCK needs a viewport — select its border or MSPACE.": "VPLOCK necesita una ventana gráfica — seleccione su borde o use MSPACE.",
   "Viewport display locked — the scale is protected.": "Vista de la ventana gráfica bloqueada — la escala queda protegida.",
   "Viewport display unlocked.": "Vista de la ventana gráfica desbloqueada.",
-  "Viewport active (scale {scale}, display LOCKED — VPLOCK to unlock). PSPACE returns to paper.": "Ventana gráfica activa (escala {scale}, vista BLOQUEADA — VPLOCK para desbloquear). PSPACE vuelve al papel."
+  "Viewport active (scale {scale}, display LOCKED — VPLOCK to unlock). PSPACE returns to paper.": "Ventana gráfica activa (escala {scale}, vista BLOQUEADA — VPLOCK para desbloquear). PSPACE vuelve al papel.",
+  "Page Setup — {name}": "Configuración de página — {name}",
+  "Page Setup...": "Configurar página...",
+  "Custom...": "Personalizado...",
+  "Size": "Tamaño",
+  "Margins": "Márgenes",
+  "T": "S",
+  "R": "D",
+  "B": "I",
+  "L": "Iz",
+  "PAGESETUP works on a layout tab — switch to one first.": "PAGESETUP funciona en una presentación — cambie a una primero.",
+  "Page setup applied to \"{name}\": {w:g} × {h:g} mm.": "Configuración de página aplicada a \"{name}\": {w:g} × {h:g} mm."
 }

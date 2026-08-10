@@ -762,3 +762,89 @@ def test_vplock_targets_selected_viewport(qapp):
     win._cmd_vplock()                          # toggle -> unlocked
     assert not layout_ops.is_viewport_locked(vp)
     win.close()
+
+
+# -- page setup (PAGESETUP) ----------------------------------------------------
+
+def test_page_setup_command_writes_fields_and_spares_viewports():
+    doc = _doc_with_model_content()
+    history = History(doc)
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=30)
+    view_before = (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y,
+                   float(vp.dxf.view_height))
+    old = layout_ops.effective_page(psp)
+
+    history.execute(layout_ops.page_setup_command(
+        psp, 297.0, 210.0, (5.0, 10.0, 5.0, 10.0), "ISO A4"))
+    page = layout_ops.effective_page(psp)
+    assert (page["width"], page["height"]) == (297.0, 210.0)
+    assert page["margins"] == (5.0, 10.0, 5.0, 10.0)
+    assert psp.dxf.paper_size.startswith("ISO_A4_")
+    assert psp.dxf.plot_rotation == 0
+    # THE invariant: the colleague's viewports survive untouched
+    vps = [e for e in psp if e.dxftype() == "VIEWPORT"]
+    assert len(vps) == 1 and vps[0] is vp
+    assert (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y,
+            float(vp.dxf.view_height)) == view_before
+
+    history.undo()
+    back = layout_ops.effective_page(psp)
+    assert (back["width"], back["height"]) == (old["width"], old["height"])
+    history.redo()
+    assert layout_ops.effective_page(psp)["width"] == 297.0
+
+
+def test_page_setup_limits_follow_autocad_convention():
+    doc = _doc_with_model_content()
+    history = History(doc)
+    psp = doc.doc.layouts.get("Layout1")
+    history.execute(layout_ops.page_setup_command(
+        psp, 210.0, 297.0, (5.0, 6.0, 7.0, 8.0)))
+    # limits = sheet rect relative to the printable-area corner
+    assert tuple(psp.dxf.limmin)[:2] == (-8.0, -7.0)
+    assert tuple(psp.dxf.limmax)[:2] == (202.0, 290.0)
+    # and the rendered sheet agrees with the same convention
+    frame = layout_ops.paper_frame(psp)
+    assert frame["sheet"] == (-8.0, -7.0, 202.0, 290.0)
+
+
+def test_effective_page_reads_rotated_layouts():
+    doc = _doc_with_model_content()
+    layout = doc.doc.layouts.get("Layout1")
+    layout.dxf.paper_width = 210.0
+    layout.dxf.paper_height = 297.0
+    layout.dxf.top_margin = 4.0
+    layout.dxf.right_margin = 3.0
+    layout.dxf.bottom_margin = 2.0
+    layout.dxf.left_margin = 1.0
+    layout.dxf.plot_rotation = 1
+    page = layout_ops.effective_page(layout)
+    assert (page["width"], page["height"]) == (297.0, 210.0)
+    assert page["margins"] == (3.0, 2.0, 1.0, 4.0)   # rotated with the sheet
+
+
+def test_page_setup_dialog_roundtrip(qapp):
+    from views.page_setup_dialog import PageSetupDialog
+
+    win, t, vp = _layout_window(qapp)
+    layout = win.document.doc.layouts.get("Layout1")
+    win.history.execute(layout_ops.page_setup_command(
+        layout, 297.0, 210.0, (5.0, 5.0, 5.0, 5.0), "ISO A4"))
+    dialog = PageSetupDialog(win, layout)
+    # prefill: A4 matched, landscape, margins loaded
+    assert dialog.paper.currentData()[0] == "ISO A4"
+    assert dialog.orientation.currentData() is True
+    assert dialog.margin_top.value() == 5.0
+    # switch to A3 portrait and read back
+    for i in range(dialog.paper.count()):
+        if dialog.paper.itemData(i) != "custom" \
+                and dialog.paper.itemData(i)[0] == "ISO A3":
+            dialog.paper.setCurrentIndex(i)
+            break
+    dialog.orientation.setCurrentIndex(1)      # portrait
+    w, h, margins, name = dialog.values()
+    assert (w, h) == (297.0, 420.0)
+    assert name == "ISO A3"
+    win.close()

@@ -282,6 +282,7 @@ class MainWindow(QMainWindow):
         item(file_menu, tr("Open..."), self._open_dialog, QKeySequence.Open)
         item(file_menu, tr("Save As..."), self._save_as_dialog, QKeySequence.SaveAs)
         file_menu.addSeparator()
+        item(file_menu, tr("Page Setup..."), lambda: self._cmd_pagesetup())
         item(file_menu, tr("Plot..."), self._plot_dialog, QKeySequence.Print)
         file_menu.addSeparator()
         item(file_menu, tr("Quit"), self.close, QKeySequence.Quit)
@@ -841,6 +842,7 @@ class MainWindow(QMainWindow):
         d.register("MSPACE", self._cmd_mspace)
         d.register("PSPACE", self._cmd_pspace)
         d.register("VPLOCK", self._cmd_vplock)
+        d.register("PAGESETUP", self._cmd_pagesetup)
         # Phase 4 drawing + Phase 5 editing tools.
         for name in ("LINE", "CIRCLE", "ARC", "PLINE", "RECTANG", "POLYGON",
                      "ELLIPSE", "POINT", "TEXT", "MTEXT",
@@ -1009,6 +1011,30 @@ class MainWindow(QMainWindow):
             self._activate_viewport(vp)
         else:
             self._deactivate_viewport(echo=True)
+
+    def _cmd_pagesetup(self, *args) -> None:
+        """PAGESETUP: paper/orientation/margins of the current layout tab."""
+        from core import layouts as layout_ops
+        from views.page_setup_dialog import PageSetupDialog
+
+        if self.document is None:
+            self.new_document()
+        name = self._active_layout
+        if name == "Model":
+            self.command_line.echo(
+                tr("PAGESETUP works on a layout tab — switch to one first."))
+            return
+        layout = self.document.doc.layouts.get(name)
+        dialog = PageSetupDialog(self, layout)
+        if not dialog.exec():
+            return
+        width, height, margins, size_name = dialog.values()
+        self.history.execute(layout_ops.page_setup_command(
+            layout, width, height, margins, size_name))
+        self.regen_in_memory(zoom_after=True)   # the sheet changed size
+        self.command_line.echo(
+            tr("Page setup applied to \"{name}\": {w:g} × {h:g} mm.",
+               name=name, w=width, h=height))
 
     def _cmd_layout(self, *args) -> Prompt | None:
         """LAYOUT — AutoCAD keywords, headless flow in core.layouts."""
@@ -1209,7 +1235,19 @@ class MainWindow(QMainWindow):
                            lambda: self._delete_layout_tab(name))
             menu.addAction(tr("Rename"),
                            lambda: self._rename_layout_tab(name))
+            menu.addSeparator()
+            # AutoCAD's tab menu carries these two as well.
+            menu.addAction(tr("Page Setup..."),
+                           lambda: self._page_setup_for_tab(name))
+            menu.addAction(tr("Plot..."), self._plot_dialog)
         menu.exec(global_pos)
+
+    def _page_setup_for_tab(self, name: str) -> None:
+        # right-click targets a tab that may not be the active one: switch
+        # first (AutoCAD's Page Setup Manager also acts on the current tab)
+        if name != self._active_layout:
+            self.switch_layout(name)
+        self._cmd_pagesetup()
 
     def _new_layout_tab(self) -> None:
         if self.document is None:

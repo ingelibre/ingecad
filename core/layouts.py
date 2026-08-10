@@ -584,6 +584,111 @@ def viewport_fit_command(document, vp) -> SetViewportViewCommand:
                                   view_height=view_height, name="ZOOM Extents")
 
 
+# -- page setup (PAGESETUP) -----------------------------------------------------
+#
+# ⚠️ Written as direct DXF field updates ON PURPOSE: ezdxf's
+# Paperspace.page_setup() ends with reset_viewports(), which destroys every
+# floating viewport in the layout — calling it on a colleague's file would
+# break the conservative round-trip promise. See docs/reference/layout/.
+
+# Standard paper sizes in mm, portrait (width < height). The dialog offers
+# these; anything else is "Custom".
+PAPER_SIZES: list[tuple[str, float, float]] = [
+    ("ISO A0", 841.0, 1189.0),
+    ("ISO A1", 594.0, 841.0),
+    ("ISO A2", 420.0, 594.0),
+    ("ISO A3", 297.0, 420.0),
+    ("ISO A4", 210.0, 297.0),
+    ("ANSI Letter", 215.9, 279.4),
+    ("ANSI Legal", 215.9, 355.6),
+    ("ANSI B (11x17)", 279.4, 431.8),
+]
+
+
+def effective_page(layout) -> dict:
+    """Current sheet as the user sees it: effective (rotation-applied) size
+    and margins in mm, derived from the same math the renderer uses."""
+    frame = paper_frame(layout)
+    x0, y0, x1, y1 = frame["sheet"]
+    width, height = x1 - x0, y1 - y0
+    printable = frame["printable"]
+    if printable is None:
+        printable = frame["sheet"]
+    px0, py0, px1, py1 = printable
+    return {
+        "width": width,
+        "height": height,
+        "margins": (y1 - py1, x1 - px1, py0 - y0, px0 - x0),  # t, r, b, l
+    }
+
+
+class PageSetupCommand(Command):
+    """Apply a page setup to one layout by writing its PLOTSETTINGS fields.
+    Undoable; the floating viewports are never touched."""
+
+    needs_regen = True
+
+    def __init__(self, layout, fields: dict) -> None:
+        self.name = "PAGESETUP"
+        self.layout = layout
+        self._fields = fields
+        # get_default, not get: unset attributes fall back to the schema
+        # default (a fresh Layout1 stores nothing and means A3) — capturing
+        # None here would make undo skip the field.
+        self._old = {}
+        for key in fields:
+            try:
+                self._old[key] = layout.dxf.get_default(key)
+            except Exception:
+                self._old[key] = layout.dxf.get(key, None)
+
+    def _apply(self, values: dict, document) -> None:
+        for key, value in values.items():
+            if value is not None:
+                setattr(self.layout.dxf, key, value)
+        document.dirty = True
+
+    def do(self, document) -> None:
+        self._apply(self._fields, document)
+
+    def undo(self, document) -> None:
+        self._apply(self._old, document)
+
+
+def page_setup_command(layout, width: float, height: float,
+                       margins, size_name: str = "") -> PageSetupCommand:
+    """PAGESETUP: paper ``width`` x ``height`` mm (as displayed — rotation
+    is normalized to 0), ``margins`` = (top, right, bottom, left) mm.
+
+    Keeps the existing plot-origin offset and recomputes the paper limits
+    the way AutoCAD stores them (sheet rect relative to the printable-area
+    corner) — the equivalent of ezdxf's reset_paper_limits, minus the
+    viewport destruction.
+    """
+    m_top, m_right, m_bottom, m_left = (float(m) for m in margins)
+    try:
+        ox = float(layout.dxf.get("plot_origin_x_offset", 0.0)) or 0.0
+        oy = float(layout.dxf.get("plot_origin_y_offset", 0.0)) or 0.0
+    except (TypeError, ValueError):
+        ox = oy = 0.0
+    label = size_name.replace(" ", "_") if size_name else "User"
+    fields = {
+        "paper_width": float(width),
+        "paper_height": float(height),
+        "top_margin": m_top,
+        "right_margin": m_right,
+        "bottom_margin": m_bottom,
+        "left_margin": m_left,
+        "plot_rotation": 0,
+        "plot_paper_units": 1,          # mm (all lengths stored in mm anyway)
+        "unit_factor": 1.0,
+        "paper_size": f"{label}_({width:.2f}_x_{height:.2f}_MM)",
+        "limmin": (-(m_left + ox), -(m_bottom + oy)),
+        "limmax": (width - m_left - ox, height - m_bottom - oy),
+    }
+    return PageSetupCommand(layout, fields)
+
+
 # -- the paper sheet ------------------------------------------------------------
 
 def paper_frame(layout) -> dict:
