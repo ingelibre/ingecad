@@ -280,5 +280,13 @@
   "Viewport created.": "Ventana gráfica creada.",
   "Viewport created (Fit).": "Ventana gráfica creada (Ajustar).",
   "Zero-size viewport — nothing created.": "Ventana gráfica de tamaño cero — no se creó nada.",
-  "** {name} is not allowed in the Model tab — switch to a layout. **": "** {name} no está permitido en la ficha Modelo — cambie a una presentación. **"
+  "** {name} is not allowed in the Model tab — switch to a layout. **": "** {name} no está permitido en la ficha Modelo — cambie a una presentación. **",
+  "MSPACE needs a layout tab with a viewport.": "MSPACE necesita una presentación con una ventana gráfica.",
+  "No viewports in this layout — create one with MVIEW.": "No hay ventanas gráficas en esta presentación — cree una con MVIEW.",
+  "Viewport active (scale {scale}). Z + nXP sets the exact scale (e.g. 1/100XP); PSPACE returns to paper.": "Ventana gráfica activa (escala {scale}). Z + nXP fija la escala exacta (p. ej. 1/100XP); PSPACE vuelve al papel.",
+  "Paper space.": "Espacio papel.",
+  "Already in paper space.": "Ya está en espacio papel.",
+  "ZOOM [Extents/Window/Previous] or scale nXP:": "ZOOM [Extensión(E)/Ventana(W)/Previo(P)] o escala nXP:",
+  "nXP needs an active viewport — MSPACE or double-click one first.": "nXP necesita una ventana gráfica activa — use MSPACE o doble clic en una.",
+  "Viewport scale set to {scale}.": "Escala de la ventana gráfica fijada en {scale}."
 }

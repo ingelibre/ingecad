@@ -43,6 +43,8 @@ DEFAULT_ALIASES: dict[str, str] = {
     "LA": "LAYER",
     "LO": "LAYOUT",
     "MV": "MVIEW",
+    "MS": "MSPACE",
+    "PS": "PSPACE",
     "ST": "STYLE",
     "D": "DIMSTYLE",
     "DDIM": "DIMSTYLE",

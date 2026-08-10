@@ -381,3 +381,78 @@ def test_mview_alias():
     from core.aliases import DEFAULT_ALIASES, resolve
 
     assert resolve("MV", DEFAULT_ALIASES) == "MVIEW"
+
+
+# -- viewport scale (MSPACE + ZOOM nXP) ----------------------------------------
+
+def test_parse_xp_factor():
+    assert layout_ops.parse_xp_factor("1/100XP") == pytest.approx(0.01)
+    assert layout_ops.parse_xp_factor("0.5xp") == pytest.approx(0.5)
+    assert layout_ops.parse_xp_factor("2XP") == pytest.approx(2.0)
+    assert layout_ops.parse_xp_factor(" 1/50XP ") == pytest.approx(0.02)
+    for bad in ("E", "100", "XP", "0XP", "-1XP", "1/0XP", "abcXP"):
+        assert layout_ops.parse_xp_factor(bad) is None
+
+
+def test_scale_label():
+    assert layout_ops.scale_label(0.01) == "1:100"
+    assert layout_ops.scale_label(0.02) == "1:50"
+    assert layout_ops.scale_label(1.0) == "1:1"
+    assert layout_ops.scale_label(2.0) == "2:1"
+
+
+def test_xp_zoom_sets_exact_scale_and_undoes():
+    doc = _doc_with_model_content()
+    history = History(doc)
+    history.execute(layout_ops.viewport_from_corners(
+        doc, "Layout1", (0, 0), (200, 100)))
+    psp = doc.doc.layouts.get("Layout1")
+    vp = [e for e in psp if e.dxftype() == "VIEWPORT"][0]
+    before = float(vp.dxf.view_height)
+
+    history.execute(layout_ops.xp_zoom_command(vp, 0.01))   # ZOOM 1/100XP
+    assert float(vp.dxf.view_height) == pytest.approx(100.0 / 0.01)
+    assert layout_ops.viewport_scale(vp) == pytest.approx(0.01)
+    # scale relation from the reference: paper height / model height
+    assert vp.dxf.height / vp.dxf.view_height == pytest.approx(0.01)
+
+    history.undo()
+    assert float(vp.dxf.view_height) == pytest.approx(before)
+    history.redo()
+    assert layout_ops.viewport_scale(vp) == pytest.approx(0.01)
+
+
+def test_viewport_fit_command_recenters():
+    doc = _doc_with_model_content()
+    doc.doc.header["$EXTMIN"] = (0, 0, 0)
+    doc.doc.header["$EXTMAX"] = (100, 50, 0)
+    history = History(doc)
+    history.execute(layout_ops.viewport_from_corners(
+        doc, "Layout1", (0, 0), (200, 100)))
+    psp = doc.doc.layouts.get("Layout1")
+    vp = [e for e in psp if e.dxftype() == "VIEWPORT"][0]
+    history.execute(layout_ops.xp_zoom_command(vp, 2.0))    # zoom way in
+    history.execute(layout_ops.viewport_fit_command(doc, vp))
+    assert (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y) \
+        == (50.0, 25.0)
+    assert float(vp.dxf.view_height) == pytest.approx(50.0 * 1.02)
+
+
+def test_viewport_hit_topmost():
+    doc = _doc_with_model_content()
+    psp = doc.doc.layouts.get("Layout1")
+    below = psp.add_viewport(center=(100, 100), size=(120, 80),
+                             view_center_point=(0, 0), view_height=10)
+    above = psp.add_viewport(center=(120, 100), size=(60, 40),
+                             view_center_point=(0, 0), view_height=10)
+    assert layout_ops.viewport_hit(psp, 120, 100) is above   # overlap: top wins
+    assert layout_ops.viewport_hit(psp, 50, 100) is below
+    assert layout_ops.viewport_hit(psp, 500, 500) is None
+    assert layout_ops.viewport_rect(above) == (90.0, 80.0, 150.0, 120.0)
+
+
+def test_mspace_pspace_aliases():
+    from core.aliases import DEFAULT_ALIASES, resolve
+
+    assert resolve("MS", DEFAULT_ALIASES) == "MSPACE"
+    assert resolve("PS", DEFAULT_ALIASES) == "PSPACE"

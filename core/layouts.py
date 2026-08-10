@@ -259,6 +259,119 @@ def viewport_fit_printable(document, layout_name: str) -> AddViewportCommand:
                                  (rect[0], rect[1]), (rect[2], rect[3]))
 
 
+# -- viewport scale (MSPACE + ZOOM nXP, the AutoCAD way) ------------------------
+
+def visible_viewports(layout) -> list:
+    """The floating viewports a CAD app shows, in stacking order.
+
+    Mirrors the ezdxf frontend's _draw_viewports heuristic exactly (id and
+    status are unreliable in real files): sort by status, drop invisible
+    ones, and pop the first iff it claims to be the "main" viewport — the
+    one that represents the paper view itself, never a window.
+    """
+    viewports = [e for e in layout if e.dxftype() == "VIEWPORT"]
+    viewports.sort(key=lambda e: e.dxf.status)
+    viewports = [vp for vp in viewports if vp.dxf.status > 0]
+    if viewports and viewports[0].dxf.get("status", 1) == 1:
+        viewports.pop(0)
+    return viewports
+
+
+def viewport_hit(layout, x: float, y: float):
+    """Topmost visible viewport whose paper rectangle contains (x, y)."""
+    hit = None
+    for vp in visible_viewports(layout):        # stacking order: last on top
+        cx, cy = vp.dxf.center.x, vp.dxf.center.y
+        if (abs(x - cx) <= vp.dxf.width / 2.0
+                and abs(y - cy) <= vp.dxf.height / 2.0):
+            hit = vp
+    return hit
+
+
+def viewport_rect(vp) -> tuple[float, float, float, float]:
+    cx, cy = vp.dxf.center.x, vp.dxf.center.y
+    hw, hh = vp.dxf.width / 2.0, vp.dxf.height / 2.0
+    return (cx - hw, cy - hh, cx + hw, cy + hh)
+
+
+def parse_xp_factor(token: str) -> Optional[float]:
+    """AutoCAD's ZOOM nXP syntax: "1/100XP", "0.5XP", "2XP" → the paper/model
+    scale factor, or None when the token is not an XP scale."""
+    t = token.strip().upper()
+    if not t.endswith("XP"):
+        return None
+    body = t[:-2]
+    try:
+        if "/" in body:
+            num, den = body.split("/", 1)
+            factor = float(num) / float(den)
+        else:
+            factor = float(body)
+    except (ValueError, ZeroDivisionError):
+        return None
+    return factor if math.isfinite(factor) and factor > 0.0 else None
+
+
+def viewport_scale(vp) -> float:
+    """paper units per model unit = dxf.height / view_height."""
+    view_height = float(vp.dxf.view_height) or 1.0
+    return float(vp.dxf.height) / view_height
+
+
+def scale_label(factor: float) -> str:
+    """Human form of a viewport scale: 0.01 → "1:100", 2.0 → "2:1"."""
+    if factor <= 0.0:
+        return "?"
+    if factor >= 1.0:
+        n = factor
+        return f"{n:g}:1"
+    return f"1:{1.0 / factor:g}"
+
+
+class SetViewportViewCommand(Command):
+    """Change what a viewport looks at (ZOOM nXP / fit). Undoable — the
+    view lives in the DXF entity, so it is a document mutation."""
+
+    needs_regen = True
+
+    def __init__(self, vp, view_center=None, view_height=None,
+                 name: str = "ZOOM XP") -> None:
+        self.name = name
+        self.entity = vp
+        self._new_center = view_center
+        self._new_height = view_height
+        self._old_center = (vp.dxf.view_center_point.x,
+                            vp.dxf.view_center_point.y)
+        self._old_height = float(vp.dxf.view_height)
+
+    def do(self, document) -> None:
+        if self._new_center is not None:
+            self.entity.dxf.view_center_point = self._new_center
+        if self._new_height is not None:
+            self.entity.dxf.view_height = self._new_height
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        self.entity.dxf.view_center_point = self._old_center
+        self.entity.dxf.view_height = self._old_height
+        document.dirty = True
+
+
+def xp_zoom_command(vp, factor: float) -> SetViewportViewCommand:
+    """ZOOM nXP: model shown at ``factor`` paper units per model unit,
+    keeping the view center (AutoCAD keeps it too)."""
+    return SetViewportViewCommand(
+        vp, view_height=float(vp.dxf.height) / factor)
+
+
+def viewport_fit_command(document, vp) -> SetViewportViewCommand:
+    """ZOOM Extents inside an active viewport: fit the whole model."""
+    center, view_height = model_fit_view(
+        document, float(vp.dxf.width), float(vp.dxf.height))
+    return SetViewportViewCommand(vp, view_center=center,
+                                  view_height=view_height, name="ZOOM Extents")
+
+
 # -- the paper sheet ------------------------------------------------------------
 
 def paper_frame(layout) -> dict:

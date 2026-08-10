@@ -206,6 +206,9 @@ class Viewport(QOpenGLWidget):
         self._grid_buf = None    # (vao, vbo, count, key) — rebuilt on view change
         # Interactive tool hook (ToolController): hover/click/preview/markers.
         self.tool_delegate = None
+        # MSPACE-active viewport rect (paper world coords) — drawn with the
+        # heavy border AutoCAD gives the active viewport. None = paper space.
+        self.active_vp_rect = None
 
     # -- document hooks -------------------------------------------------------
     def set_scene(self, scene: Optional[Scene]) -> None:
@@ -798,6 +801,13 @@ class Viewport(QOpenGLWidget):
     def _paint_overlay(self) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        if self.active_vp_rect is not None:
+            # MSPACE: the active viewport gets AutoCAD's heavy border.
+            x0, y0, x1, y1 = self.active_vp_rect
+            sx0, sy0 = self.view.world_to_screen(x0, y1)   # top-left
+            sx1, sy1 = self.view.world_to_screen(x1, y0)
+            p.setPen(QPen(QColor(20, 20, 20), 3))
+            p.drawRect(sx0, sy0, sx1 - sx0, sy1 - sy0)
         self._draw_ucs_icon(p)
         if self.tool_delegate is not None:
             self._draw_selection(p)
@@ -1185,6 +1195,17 @@ class Viewport(QOpenGLWidget):
                 self.tool_delegate.on_hover(wx, wy, SNAP_PX / self.view.scale)
             self.cursorMoved.emit(wx, wy)
         self.update()
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        # AutoCAD: double-click enters/leaves a viewport on a layout tab.
+        if event.button() == Qt.LeftButton and self.tool_delegate is not None:
+            window = getattr(self.tool_delegate, "window", None)
+            if window is not None and hasattr(window, "on_canvas_double_click"):
+                pos = event.position()
+                wx, wy = self.view.screen_to_world(pos.x(), pos.y())
+                window.on_canvas_double_click(wx, wy)
+                return
+        super().mouseDoubleClickEvent(event)
 
     def wheelEvent(self, event) -> None:
         notches = event.angleDelta().y() / 120.0

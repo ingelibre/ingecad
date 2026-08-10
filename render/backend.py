@@ -373,12 +373,9 @@ def _draw_viewport_borders(layout, context, backend) -> None:
     """
     from ezdxf.math import Vec2
 
-    viewports = [e for e in layout if e.dxftype() == "VIEWPORT"]
-    viewports.sort(key=lambda e: e.dxf.status)
-    viewports = [vp for vp in viewports if vp.dxf.status > 0]
-    if viewports and viewports[0].dxf.get("status", 1) == 1:
-        viewports.pop(0)
-    for vp in viewports:
+    from core.layouts import visible_viewports
+
+    for vp in visible_viewports(layout):
         try:
             properties = context.resolve_all(vp)
             cx, cy = vp.dxf.center.x, vp.dxf.center.y

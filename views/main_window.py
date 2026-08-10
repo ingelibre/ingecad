@@ -105,6 +105,7 @@ class MainWindow(QMainWindow):
         self._regen_zoom = False
         self._layers_dock = None
         self._layers_panel = None
+        self._active_vp = None    # MSPACE-activated viewport entity, if any
         self._open_thread: QThread | None = None
         self._open_worker: _OpenWorker | None = None
         self._opening_name = ""
@@ -524,6 +525,7 @@ class MainWindow(QMainWindow):
     def new_document(self) -> None:
         self.document = Document.new()
         self._active_layout = "Model"
+        self._deactivate_viewport()
         self._refresh_layout_tabs()
         self.viewport.set_scene(None)
         self.tools.attach_document(self.document)
@@ -826,6 +828,8 @@ class MainWindow(QMainWindow):
         d.register("PLOT", lambda *a: self._plot_dialog())
         d.register("PRINT", lambda *a: self._plot_dialog())
         d.register("LAYOUT", self._cmd_layout)
+        d.register("MSPACE", self._cmd_mspace)
+        d.register("PSPACE", self._cmd_pspace)
         # Phase 4 drawing + Phase 5 editing tools.
         for name in ("LINE", "CIRCLE", "ARC", "PLINE", "RECTANG", "POLYGON",
                      "ELLIPSE", "POINT", "TEXT", "MTEXT",
@@ -842,6 +846,61 @@ class MainWindow(QMainWindow):
         ):
             d.register_future(name, phase)
 
+    # -- MSPACE / PSPACE (activate a viewport; ZOOM nXP sets its scale) ---------
+    def _cmd_mspace(self, *args) -> None:
+        from core import layouts as layout_ops
+
+        if self.document is None or self._active_layout == "Model":
+            self.command_line.echo(
+                tr("MSPACE needs a layout tab with a viewport."))
+            return
+        layout = self.document.doc.layouts.get(self._active_layout)
+        viewports = layout_ops.visible_viewports(layout)
+        if not viewports:
+            self.command_line.echo(
+                tr("No viewports in this layout — create one with MVIEW."))
+            return
+        self._activate_viewport(viewports[-1])   # topmost, like AutoCAD
+
+    def _cmd_pspace(self, *args) -> None:
+        self._deactivate_viewport(echo=True)
+
+    def _activate_viewport(self, vp) -> None:
+        from core import layouts as layout_ops
+
+        self._active_vp = vp
+        self.viewport.active_vp_rect = layout_ops.viewport_rect(vp)
+        self.viewport.update()
+        label = layout_ops.scale_label(layout_ops.viewport_scale(vp))
+        self.command_line.echo(
+            tr("Viewport active (scale {scale}). Z + nXP sets the exact "
+               "scale (e.g. 1/100XP); PSPACE returns to paper.", scale=label))
+
+    def _deactivate_viewport(self, echo: bool = False) -> None:
+        had = getattr(self, "_active_vp", None) is not None
+        self._active_vp = None
+        if getattr(self.viewport, "active_vp_rect", None) is not None:
+            self.viewport.active_vp_rect = None
+            self.viewport.update()
+        if echo:
+            self.command_line.echo(
+                tr("Paper space.") if had
+                else tr("Already in paper space."))
+
+    def on_canvas_double_click(self, wx: float, wy: float) -> None:
+        """AutoCAD: double-click inside a viewport enters it (MSPACE),
+        double-click on empty paper leaves it (PSPACE)."""
+        from core import layouts as layout_ops
+
+        if self.document is None or self._active_layout == "Model":
+            return
+        layout = self.document.doc.layouts.get(self._active_layout)
+        vp = layout_ops.viewport_hit(layout, wx, wy)
+        if vp is not None:
+            self._activate_viewport(vp)
+        else:
+            self._deactivate_viewport(echo=True)
+
     def _cmd_layout(self, *args) -> Prompt | None:
         """LAYOUT — AutoCAD keywords, headless flow in core.layouts."""
         if self.document is None:
@@ -856,16 +915,44 @@ class MainWindow(QMainWindow):
             current=lambda: self._active_layout,
             args=args)
 
-    # ZOOM [Extents/Window/Previous]
+    # ZOOM [Extents/Window/Previous/nXP]
     def _cmd_zoom(self, *args) -> Prompt | None:
         if args:
             return self._zoom_option(args[0])
+        if getattr(self, "_active_vp", None) is not None:
+            return Prompt(tr("ZOOM [Extents/Window/Previous] or scale nXP:"),
+                          self._zoom_option)
         return Prompt(tr("ZOOM [Extents/Window/Previous] <Extents>:"),
                       self._zoom_option)
 
     def _zoom_option(self, option: str) -> None:
+        from core import layouts as layout_ops
+
+        active_vp = getattr(self, "_active_vp", None)
+        if active_vp is not None and not active_vp.is_alive:
+            active_vp = None
+            self._deactivate_viewport()
+        factor = layout_ops.parse_xp_factor(option)
+        if factor is not None:
+            # AutoCAD's exact-scale idiom: ZOOM 1/100XP inside a viewport.
+            if active_vp is None:
+                self.command_line.echo(
+                    tr("nXP needs an active viewport — MSPACE or "
+                       "double-click one first."))
+                return
+            self.history.execute(layout_ops.xp_zoom_command(active_vp, factor))
+            self.command_line.echo(tr("Viewport scale set to {scale}.",
+                                      scale=layout_ops.scale_label(factor)))
+            self.regen_in_memory()
+            return
         opt = option.strip().upper() or "E"
         if opt in ("E", "EXTENTS"):
+            if active_vp is not None:
+                # inside a viewport, Extents fits the MODEL in it
+                self.history.execute(
+                    layout_ops.viewport_fit_command(self.document, active_vp))
+                self.regen_in_memory()
+                return
             self.viewport.zoom_extents()
         elif opt in ("W", "WINDOW"):
             self.viewport.start_zoom_window()
@@ -979,6 +1066,7 @@ class MainWindow(QMainWindow):
         from core import layouts as layout_ops
 
         self.tools.cancel()               # drop tool/selection across spaces
+        self._deactivate_viewport()       # MSPACE state is per-tab
         # $TILEMODE + the *Paper_Space block dance, so the file reopens on
         # this tab in AutoCAD too (ezdxf does not touch the header itself).
         layout_ops.switch_active(self.document, name)
@@ -1184,6 +1272,7 @@ class MainWindow(QMainWindow):
     def _on_open_done(self, document: Document, scene) -> None:
         self._set_busy("")
         self.document = document
+        self._deactivate_viewport()
         # the open may have fallen back to a paper layout (empty modelspace)
         self._active_layout = scene.layout_name or "Model"
         self._refresh_layout_tabs()
