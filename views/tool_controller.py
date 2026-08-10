@@ -25,6 +25,7 @@ from tools.blocks import BLOCK_TOOL_CLASSES
 from tools.dimension import DIM_TOOL_CLASSES
 from tools.draw import TOOL_CLASSES
 from tools.edit import EDIT_TOOL_CLASSES
+from tools.layout_tools import LAYOUT_TOOL_CLASSES
 
 SNAP_PX = 12.0   # aperture in logical pixels
 PICK_PX = 8.0    # pick box half-size in logical pixels
@@ -80,7 +81,7 @@ class _GhostWorker(QThread):
         self.done.emit(self._ents, scene)
 
 ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES,
-                    **DIM_TOOL_CLASSES}
+                    **DIM_TOOL_CLASSES, **LAYOUT_TOOL_CLASSES}
 
 
 class ToolController(QObject):
@@ -207,8 +208,15 @@ class ToolController(QObject):
         return self.tool is not None
 
     def start_tool(self, name: str) -> None:
-        if getattr(self.window, "_active_layout", "Model") != "Model":
-            # Paper space is view/plot-only in v0.1 (honest, like the plan).
+        in_paper = getattr(self.window, "_active_layout", "Model") != "Model"
+        if name in LAYOUT_TOOL_CLASSES and not in_paper:
+            # AutoCAD: "** Command not allowed in Model Tab **"
+            self.window.command_line.echo(
+                tr("** {name} is not allowed in the Model tab — switch to a "
+                   "layout. **", name=name))
+            return
+        if in_paper and name not in LAYOUT_TOOL_CLASSES:
+            # Model-space editing from a layout tab arrives with MSPACE.
             self.window.command_line.echo(
                 tr("Editing in paper space arrives in v0.2 — switch to the "
                    "Model tab to draw."))
@@ -243,6 +251,10 @@ class ToolController(QObject):
         self.changed.emit()
 
     # -- services for editing tools (ToolContext.services) ---------------------
+    def paper_context(self):
+        """(document, active layout name) for paper-space tools (MVIEW)."""
+        return self.window.document, self.window._active_layout
+
     def pick_entity(self, point):
         if self.index is None:
             return None
@@ -611,9 +623,11 @@ class ToolController(QObject):
                 h for h in self.selection
                 if (e := self.index.entity(h)) is not None and e.is_alive
             }
-        if isinstance(command, actions.AddDimensionCommand):
-            # A dimension renders into an anonymous block; the overlay can't
-            # show that cheaply, so regen now (creating one dim is not hot).
+        if isinstance(command, actions.AddDimensionCommand) \
+                or getattr(command, "needs_regen", False):
+            # A dimension renders into an anonymous block, a viewport's
+            # content is the model re-projected; the overlay can't show
+            # either cheaply, so regen now (creating one is not hot).
             self.window.regen_in_memory()
         elif added is not None:
             # Additive: show through the overlay, no hide, no urgent regen —
@@ -737,7 +751,8 @@ class ToolController(QObject):
         everything the command touched are hidden surgically and the restored
         or current entities ride the overlay; the full regen stays coalesced.
         """
-        if command is None or isinstance(command, actions.AddDimensionCommand):
+        if command is None or isinstance(command, actions.AddDimensionCommand) \
+                or getattr(command, "needs_regen", False):
             # unknown scope / dimension block graphics: only a regen is right;
             # hide what the undo just destroyed so it vanishes NOW (the regen
             # runs in the background and lands later)
@@ -872,6 +887,10 @@ class ToolController(QObject):
         needs_snap = grip_hot or (
             self.tool is not None and self._selecting_for is None
             and not self.tool.entity_picker)
+        if getattr(self.window, "_active_layout", "Model") != "Model":
+            # The snap engine indexes MODEL geometry; its points are model
+            # coordinates and mean nothing on a paper-space sheet.
+            needs_snap = False
         if needs_snap and self.osnap_on and self.snap_engine is not None:
             self.snap_hit = self.snap_engine.find(
                 (wx, wy), threshold_world,

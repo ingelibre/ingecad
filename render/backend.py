@@ -360,6 +360,46 @@ def build_scene_for_entities(document: Document, entities, flatten: float) -> Sc
     return pack(backend.buckets, _declared_extents(document))
 
 
+def _draw_viewport_borders(layout, context, backend) -> None:
+    """Synthesize the frame of every floating viewport.
+
+    The ezdxf frontend draws viewport CONTENT (clipped, scaled) but not the
+    border AutoCAD shows around it. Drawn through the backend's own entity
+    path so the vertices are attributed to the VIEWPORT handle (hide/undo
+    work surgically). Mirrors the frontend's _draw_viewports status
+    heuristic exactly, so borders and content always agree on which
+    viewports exist — including skipping the unreliable "main" viewport
+    that represents the paper view itself.
+    """
+    from ezdxf.math import Vec2
+
+    viewports = [e for e in layout if e.dxftype() == "VIEWPORT"]
+    viewports.sort(key=lambda e: e.dxf.status)
+    viewports = [vp for vp in viewports if vp.dxf.status > 0]
+    if viewports and viewports[0].dxf.get("status", 1) == 1:
+        viewports.pop(0)
+    for vp in viewports:
+        try:
+            properties = context.resolve_all(vp)
+            cx, cy = vp.dxf.center.x, vp.dxf.center.y
+            hw, hh = vp.dxf.width / 2.0, vp.dxf.height / 2.0
+            corners = [Vec2(cx - hw, cy - hh), Vec2(cx + hw, cy - hh),
+                       Vec2(cx + hw, cy + hh), Vec2(cx - hw, cy + hh)]
+            backend_props = BackendProperties(
+                color=properties.color or "#000000",
+                lineweight=properties.lineweight or 0.25,
+                layer=properties.layer or "0",
+                pen=1,
+                handle=vp.dxf.handle,
+            )
+            backend.enter_entity(vp, properties)
+            for a, b in zip(corners, corners[1:] + corners[:1]):
+                backend.draw_line(a, b, backend_props)
+            backend.exit_entity(vp)
+        except Exception:
+            continue    # one broken viewport must not blank the sheet
+
+
 def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     """Run the ezdxf frontend over the drawing and pack the result ("regen").
 
@@ -379,6 +419,8 @@ def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     context = TolerantRenderContext(document.doc)
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
     frontend.draw_layout(layout)
+    if layout_name is not None:
+        _draw_viewport_borders(layout, context, backend)
     scene = pack(backend.buckets, _declared_extents(document))
     scene.skipped = list(frontend.skipped)
     scene.layout_name = layout_name

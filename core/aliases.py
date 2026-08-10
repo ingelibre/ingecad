@@ -42,6 +42,7 @@ DEFAULT_ALIASES: dict[str, str] = {
     "H": "HATCH",
     "LA": "LAYER",
     "LO": "LAYOUT",
+    "MV": "MVIEW",
     "ST": "STYLE",
     "D": "DIMSTYLE",
     "DDIM": "DIMSTYLE",

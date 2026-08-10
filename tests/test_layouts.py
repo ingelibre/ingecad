@@ -265,3 +265,119 @@ def test_layout_alias_lo():
     from core.aliases import DEFAULT_ALIASES, resolve
 
     assert resolve("LO", DEFAULT_ALIASES) == "LAYOUT"
+
+
+# -- viewports (MVIEW) ---------------------------------------------------------
+
+def _doc_with_model_content():
+    doc = Document.new()
+    msp = doc.modelspace()
+    msp.add_line((0, 0), (100, 50))
+    msp.add_circle((50, 25), 20)
+    return doc
+
+
+def test_viewport_content_renders_in_layout_scene():
+    doc = _doc_with_model_content()
+    psp = doc.doc.layouts.get("Layout1")
+    psp.add_viewport(center=(148, 105), size=(200, 140),
+                     view_center_point=(50, 25), view_height=70)
+    scene = build_scene(doc, "Layout1")
+    # model line + circle re-projected into paper coordinates + the border
+    assert scene.lines.vertex_count > 300
+    x0, y0, x1, y1 = scene.extents
+    assert x1 - x0 <= 210.0 and y1 - y0 <= 150.0   # clipped to the viewport
+
+
+def test_viewport_border_is_drawn_and_owned():
+    doc = _doc_with_model_content()
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=70)
+    scene = build_scene(doc, "Layout1")
+    ranges = scene.handle_ranges.get(vp.dxf.handle)
+    assert ranges, "viewport border must be attributed to the VIEWPORT handle"
+    # the border is 4 segments = 8 line vertices
+    assert sum(count for _b, _f, count in ranges) >= 8
+
+
+def test_add_viewport_command_undo():
+    doc = _doc_with_model_content()
+    history = History(doc)
+    command = layout_ops.viewport_from_corners(
+        doc, "Layout1", (20, 20), (220, 160))
+    history.execute(command)
+    psp = doc.doc.layouts.get("Layout1")
+    vps = [e for e in psp if e.dxftype() == "VIEWPORT"]
+    assert len(vps) == 1
+    assert vps[0].dxf.width == pytest.approx(200.0)
+    history.undo()
+    assert not [e for e in psp if e.dxftype() == "VIEWPORT"]
+    assert command.removed_handles
+    history.redo()
+    assert len([e for e in psp if e.dxftype() == "VIEWPORT"]) == 1
+
+
+def test_model_fit_view_aspect():
+    doc = _doc_with_model_content()
+    doc.doc.header["$EXTMIN"] = (0, 0, 0)
+    doc.doc.header["$EXTMAX"] = (100, 50, 0)
+    # wide viewport (4:1): height-limited by model width / aspect
+    center, view_height = layout_ops.model_fit_view(doc, 400.0, 100.0)
+    assert center == (50.0, 25.0)
+    assert view_height == pytest.approx(50.0 * 1.02)
+    # tall viewport (1:2): width-limited -> view_height = mw / aspect
+    _c, view_height = layout_ops.model_fit_view(doc, 50.0, 100.0)
+    assert view_height == pytest.approx(200.0 * 1.02)
+
+
+def test_viewport_fit_printable_fills_sheet():
+    doc = _doc_with_model_content()
+    command = layout_ops.viewport_fit_printable(doc, "Layout1")
+    layout = doc.doc.layouts.get("Layout1")
+    frame = layout_ops.paper_frame(layout)
+    px0, py0, px1, py1 = frame["printable"]
+    assert command.size == (pytest.approx(px1 - px0), pytest.approx(py1 - py0))
+
+
+def test_mview_tool_flow():
+    from tools.base import ToolContext
+    from tools.layout_tools import MviewTool
+
+    doc = _doc_with_model_content()
+    history = History(doc)
+    executed = []
+    echoes = []
+    finished = []
+
+    class FakeServices:
+        def paper_context(self):
+            return doc, "Layout1"
+
+    def execute(command):
+        history.execute(command)
+        executed.append(command)
+
+    ctx = ToolContext(
+        execute=execute, prompt=echoes.append, echo=echoes.append,
+        finish=lambda: finished.append(True), services=FakeServices())
+
+    tool = MviewTool(ctx)
+    tool.start()
+    tool.on_point((20.0, 20.0))
+    tool.on_point((220.0, 160.0))
+    assert finished and executed
+    psp = doc.doc.layouts.get("Layout1")
+    assert len([e for e in psp if e.dxftype() == "VIEWPORT"]) == 1
+
+    # Fit option creates a printable-area viewport
+    tool2 = MviewTool(ctx)
+    tool2.start()
+    assert tool2.on_option("F")
+    assert len([e for e in psp if e.dxftype() == "VIEWPORT"]) == 2
+
+
+def test_mview_alias():
+    from core.aliases import DEFAULT_ALIASES, resolve
+
+    assert resolve("MV", DEFAULT_ALIASES) == "MVIEW"

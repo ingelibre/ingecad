@@ -152,6 +152,113 @@ def validate_new_name(document, name: str) -> Optional[str]:
     return None
 
 
+# -- floating viewports (MVIEW) -------------------------------------------------
+
+class AddViewportCommand(Command):
+    """MVIEW — create one floating viewport in a paperspace layout.
+
+    ``needs_regen`` tells the display layer that only a full regen can show
+    the result (the viewport's content is the whole model re-projected —
+    there is no cheap overlay for that, same as dimension blocks).
+    """
+
+    needs_regen = True
+
+    def __init__(self, layout_name: str, center, size,
+                 view_center, view_height: float) -> None:
+        self.name = "MVIEW"
+        self.layout_name = layout_name
+        self.center = center
+        self.size = size
+        self.view_center = view_center
+        self.view_height = view_height
+        self.entity = None
+
+    def do(self, document) -> None:
+        psp = document.doc.layouts.get(self.layout_name)
+        self.entity = psp.add_viewport(
+            center=self.center, size=self.size,
+            view_center_point=self.view_center, view_height=self.view_height)
+        # AutoCAD puts the viewport on the current layer (ezdxf's default is
+        # its own "VIEWPORTS" convention layer, which real files don't have).
+        current = document.doc.header.get("$CLAYER", "0")
+        if current in document.doc.layers:
+            self.entity.dxf.layer = current
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        if self.entity is not None:
+            self.removed_handles = [self.entity.dxf.handle]
+            psp = document.doc.layouts.get(self.layout_name)
+            psp.delete_entity(self.entity)
+            self.entity = None
+        document.dirty = True
+
+
+def model_fit_view(document, width: float, height: float):
+    """(view_center, view_height) that fits the whole model in a viewport
+    of the given paper aspect — MVIEW's default view, like AutoCAD's Fit.
+
+    Falls back to the origin at 1:1 when the model is empty.
+    """
+    ext = _model_extents(document)
+    if ext is None:
+        return (0.0, 0.0), max(height, 1.0)
+    x0, y0, x1, y1 = ext
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    mw, mh = max(x1 - x0, 1e-9), max(y1 - y0, 1e-9)
+    aspect = width / height if height > 0 else 1.0
+    # both model dimensions must fit: height-limited or width-limited
+    view_height = max(mh, mw / aspect) * 1.02      # small breathing margin
+    return (cx, cy), view_height
+
+
+def _model_extents(document):
+    """Model extents from the header, or measured; None when empty."""
+    try:
+        lo = document.doc.header["$EXTMIN"]
+        hi = document.doc.header["$EXTMAX"]
+        box = (float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1]))
+        if all(math.isfinite(v) for v in box) and abs(box[0]) < 1e19 \
+                and box[2] > box[0] and box[3] > box[1]:
+            return box
+    except Exception:
+        pass
+    try:
+        from ezdxf import bbox
+
+        ext = bbox.extents(document.modelspace(), fast=True)
+        if ext.has_data:
+            return (ext.extmin.x, ext.extmin.y, ext.extmax.x, ext.extmax.y)
+    except Exception:
+        pass
+    return None
+
+
+def viewport_from_corners(document, layout_name: str,
+                          c1, c2) -> Optional[AddViewportCommand]:
+    """MVIEW's corner-point default: a viewport spanning the picked rect,
+    showing the whole model fitted (AutoCAD then lets the user zoom it)."""
+    x0, x1 = sorted((c1[0], c2[0]))
+    y0, y1 = sorted((c1[1], c2[1]))
+    w, h = x1 - x0, y1 - y0
+    if w <= 0.0 or h <= 0.0:
+        return None
+    center = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+    view_center, view_height = model_fit_view(document, w, h)
+    return AddViewportCommand(layout_name, center, (w, h),
+                              view_center, view_height)
+
+
+def viewport_fit_printable(document, layout_name: str) -> AddViewportCommand:
+    """MVIEW Fit: one viewport filling the printable area of the sheet."""
+    layout = document.doc.layouts.get(layout_name)
+    frame = paper_frame(layout)
+    rect = frame["printable"] or frame["sheet"]
+    return viewport_from_corners(document, layout_name,
+                                 (rect[0], rect[1]), (rect[2], rect[3]))
+
+
 # -- the paper sheet ------------------------------------------------------------
 
 def paper_frame(layout) -> dict:

@@ -275,5 +275,10 @@
   "Enter layout to rename <{name}>:": "Indique presentación a renombrar <{name}>:",
   "Active layouts: {names}.": "Presentaciones activas: {names}.",
   "LAYOUT {option}: not available yet.": "LAYOUT {option}: aún no disponible.",
-  "Unknown LAYOUT option \"{name}\".": "Opción de LAYOUT desconocida: \"{name}\"."
+  "Unknown LAYOUT option \"{name}\".": "Opción de LAYOUT desconocida: \"{name}\".",
+  "Specify corner of viewport or [Fit] <Fit>:": "Precise esquina de la ventana gráfica o [Ajustar] <Ajustar>:",
+  "Viewport created.": "Ventana gráfica creada.",
+  "Viewport created (Fit).": "Ventana gráfica creada (Ajustar).",
+  "Zero-size viewport — nothing created.": "Ventana gráfica de tamaño cero — no se creó nada.",
+  "** {name} is not allowed in the Model tab — switch to a layout. **": "** {name} no está permitido en la ficha Modelo — cambie a una presentación. **"
 }

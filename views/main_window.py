@@ -832,7 +832,8 @@ class MainWindow(QMainWindow):
                      "ERASE", "MOVE", "COPY", "ROTATE", "SCALE", "MIRROR",
                      "OFFSET", "TRIM", "EXTEND", "FILLET",
                      "BLOCK", "INSERT", "EXPLODE", "HATCH",
-                     "DIMLINEAR", "DIMALIGNED", "DIMRADIUS", "DIMDIAMETER"):
+                     "DIMLINEAR", "DIMALIGNED", "DIMRADIUS", "DIMDIAMETER",
+                     "MVIEW"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
         # In-scope commands that land in later phases: answer honestly.
         for name, phase in (
