@@ -456,3 +456,232 @@ def test_pline_second_pt_three_point_arc():
     tool.on_enter()
     pts = _pline_entity(h).get_points("xyseb")
     assert abs(pts[0][4]) == pytest.approx(1.0)
+
+
+# -- RECTANG: sticky corner settings + Area/Dimensions/Rotation ----------------
+
+from tools.draw import PolygonTool, RectangTool  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_rect_state():
+    RectangTool.chamfer = (0.0, 0.0)
+    RectangTool.fillet = 0.0
+    RectangTool.elevation = 0.0
+    RectangTool.thickness = 0.0
+    RectangTool.pl_width = 0.0
+    RectangTool.rotation = 0.0
+    PolygonTool.last_sides = 4
+    PolygonTool.last_mode = "I"
+    yield
+
+
+def test_rectang_fillet_corners_and_sticky():
+    h = Harness()
+    tool = RectangTool(h.ctx)
+    tool.start()
+    assert tool.on_option("F")
+    assert tool.on_option("2")
+    tool.on_point((0.0, 0.0))
+    tool.on_point((20.0, 10.0))
+    pline = h.msp.query("LWPOLYLINE")[0]
+    pts = pline.get_points("xyseb")
+    assert len(pts) == 8
+    arc_bulges = [p[4] for p in pts if p[4] != 0.0]
+    assert len(arc_bulges) == 4
+    assert all(b == pytest.approx(math.tan(math.pi / 8)) for b in arc_bulges)
+    # sticky: the next RECTANG announces the state
+    h2 = Harness()
+    tool2 = RectangTool(h2.ctx)
+    tool2.start()
+    assert any("Fillet=2" in p for p in h2.prompts)
+
+
+def test_rectang_chamfer_excludes_fillet():
+    h = Harness()
+    tool = RectangTool(h.ctx)
+    tool.start()
+    assert tool.on_option("F")
+    assert tool.on_option("3")
+    assert tool.on_option("C")
+    assert tool.on_option("1")
+    assert tool.on_option("2")               # d2
+    assert RectangTool.fillet == 0.0         # chamfer cancels fillet
+    assert RectangTool.chamfer == (1.0, 2.0)
+    tool.on_point((0.0, 0.0))
+    tool.on_point((20.0, 10.0))
+    pts = h.msp.query("LWPOLYLINE")[0].get_points("xyseb")
+    assert len(pts) == 8
+    assert all(p[4] == 0.0 for p in pts)     # straight chamfer cuts
+
+
+def test_rectang_too_big_fillet_falls_back_square():
+    h = Harness()
+    tool = RectangTool(h.ctx)
+    tool.start()
+    assert tool.on_option("F")
+    assert tool.on_option("50")              # bigger than the rectangle
+    tool.on_point((0.0, 0.0))
+    tool.on_point((20.0, 10.0))
+    pts = h.msp.query("LWPOLYLINE")[0].get_points("xyseb")
+    assert len(pts) == 4                     # plain rectangle, like AutoCAD
+
+
+def test_rectang_width_and_elevation_thickness():
+    h = Harness()
+    tool = RectangTool(h.ctx)
+    tool.start()
+    assert tool.on_option("W")
+    assert tool.on_option("1.5")
+    assert tool.on_option("E")
+    assert tool.on_option("100")
+    assert tool.on_option("T")
+    assert tool.on_option("7")
+    tool.on_point((0.0, 0.0))
+    tool.on_point((20.0, 10.0))
+    pline = h.msp.query("LWPOLYLINE")[0]
+    pts = pline.get_points("xyseb")
+    assert all(p[2] == 1.5 and p[3] == 1.5 for p in pts)
+    assert pline.dxf.elevation == pytest.approx(100.0)
+    assert pline.dxf.thickness == pytest.approx(7.0)
+
+
+def test_rectang_dimensions_quadrant_placement():
+    h = Harness()
+    tool = RectangTool(h.ctx)
+    tool.start()
+    tool.on_point((10.0, 10.0))
+    assert tool.on_option("D")
+    assert tool.on_option("20")              # length
+    assert tool.on_option("5")               # width
+    tool.on_point((0.0, 0.0))                # pick lower-left quadrant
+    pts = h.msp.query("LWPOLYLINE")[0].get_points("xyseb")
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    assert (min(xs), min(ys)) == (-10.0, 5.0)
+    assert (max(xs), max(ys)) == (10.0, 10.0)
+
+
+def test_rectang_area_by_length():
+    h = Harness()
+    tool = RectangTool(h.ctx)
+    tool.start()
+    tool.on_point((0.0, 0.0))
+    assert tool.on_option("A")
+    assert tool.on_option("100")             # area
+    assert tool.on_option("L")
+    assert tool.on_option("20")              # length -> width = 5
+    pts = h.msp.query("LWPOLYLINE")[0].get_points("xyseb")
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    assert max(xs) == pytest.approx(20.0)
+    assert max(ys) == pytest.approx(5.0)
+
+
+def test_rectang_area_includes_fillet_loss():
+    h = Harness()
+    tool = RectangTool(h.ctx)
+    tool.start()
+    assert tool.on_option("F")
+    assert tool.on_option("1")
+    tool.on_point((0.0, 0.0))
+    assert tool.on_option("A")
+    assert tool.on_option("100")
+    assert tool.on_option("L")
+    assert tool.on_option("20")
+    pts = h.msp.query("LWPOLYLINE")[0].get_points("xyseb")
+    ys = [p[1] for p in pts]
+    # width = (100 + (4-pi)*1) / 20, so the FINAL area is exactly 100
+    assert max(ys) == pytest.approx((100.0 + (4.0 - math.pi)) / 20.0)
+
+
+def test_rectang_rotation():
+    h = Harness()
+    tool = RectangTool(h.ctx)
+    tool.start()
+    tool.on_point((0.0, 0.0))
+    assert tool.on_option("R")
+    assert tool.on_option("90")
+    tool.on_point((0.0, 20.0))               # along rotated +X
+    pts = h.msp.query("LWPOLYLINE")[0].get_points("xyseb")
+    xs = [round(p[0], 6) for p in pts]
+    ys = [round(p[1], 6) for p in pts]
+    assert max(ys) == pytest.approx(20.0)
+    assert min(xs) < 0 or max(xs) == pytest.approx(0.0)
+    assert RectangTool.rotation == 90.0      # sticky
+
+
+# -- POLYGON: Edge, Inscribed/Circumscribed, orientation -----------------------
+
+def test_polygon_inscribed_typed_radius_bottom_edge_horizontal():
+    h = Harness()
+    tool = PolygonTool(h.ctx)
+    tool.start()
+    assert tool.on_option("4")
+    tool.on_point((0.0, 0.0))                # center
+    assert tool.on_option("I")
+    assert tool.on_option("10")              # typed radius
+    pts = h.msp.query("LWPOLYLINE")[0].get_points("xyseb")
+    ys = sorted(round(p[1], 6) for p in pts)
+    # square inscribed r=10 with horizontal bottom edge: vertices at ±45°
+    assert ys[0] == ys[1] == pytest.approx(-10.0 * math.sin(math.pi / 4))
+
+
+def test_polygon_circumscribed_typed_radius():
+    h = Harness()
+    tool = PolygonTool(h.ctx)
+    tool.start()
+    assert tool.on_option("6")
+    tool.on_point((0.0, 0.0))
+    assert tool.on_option("C")
+    assert tool.on_option("10")              # apothem = 10
+    pts = h.msp.query("LWPOLYLINE")[0].get_points("xyseb")
+    # bottom edge midpoint at (0, -10): its two vertices have y = -10
+    ys = sorted(round(p[1], 6) for p in pts)
+    assert ys[0] == ys[1] == pytest.approx(-10.0)
+    assert PolygonTool.last_mode == "C"      # sticky <C> default
+
+
+def test_polygon_dragged_pick_is_vertex():
+    h = Harness()
+    tool = PolygonTool(h.ctx)
+    tool.start()
+    assert tool.on_option("5")
+    tool.on_point((0.0, 0.0))
+    assert tool.on_option("I")
+    tool.on_point((7.0, 3.0))                # dragged: this IS a vertex
+    pts = h.msp.query("LWPOLYLINE")[0].get_points("xyseb")
+    assert any(abs(p[0] - 7.0) < 1e-9 and abs(p[1] - 3.0) < 1e-9
+               for p in pts)
+
+
+def test_polygon_edge_ccw():
+    h = Harness()
+    tool = PolygonTool(h.ctx)
+    tool.start()
+    assert tool.on_option("4")
+    assert tool.on_option("E")
+    tool.on_point((0.0, 0.0))
+    tool.on_point((10.0, 0.0))
+    pts = h.msp.query("LWPOLYLINE")[0].get_points("xyseb")
+    ys = [p[1] for p in pts]
+    assert max(ys) == pytest.approx(10.0)    # body above the edge (CCW)
+    assert len(pts) == 4
+
+
+def test_polygon_sides_default_is_session_sticky():
+    h = Harness()
+    tool = PolygonTool(h.ctx)
+    tool.start()
+    assert tool.on_option("6")
+    tool.on_point((0.0, 0.0))
+    assert tool.on_option("I")
+    assert tool.on_option("5")
+    tool2 = PolygonTool(h.ctx)
+    tool2.start()
+    assert "<6>" in h.prompts[-1]            # POLYSIDES remembered
+    tool2.on_enter()                         # accept 6
+    tool2.on_point((50.0, 0.0))
+    tool2.on_point((60.0, 0.0))              # mode default I + dragged pick
+    plines = h.msp.query("LWPOLYLINE")
+    assert len(plines[1].get_points("xyseb")) == 6

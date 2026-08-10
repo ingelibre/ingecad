@@ -1287,72 +1287,471 @@ class PlineTool(Tool):
 
 
 class RectangTool(Tool):
+    """RECTANG with AutoCAD's sticky corner settings and placement options:
+    [Chamfer/Elevation/Fillet/Thickness/Width] before the first corner,
+    [Area/Dimensions/Rotation] after it. All settings persist per session
+    and the non-default state is announced at command start."""
+
+    chamfer = (0.0, 0.0)
+    fillet = 0.0
+    elevation = 0.0
+    thickness = 0.0
+    pl_width = 0.0
+    rotation = 0.0
+    last_area = 100.0
+    last_length = 10.0
+    last_width = 10.0
+
     def start(self) -> None:
         self.name = "RECTANG"
         self._first: Point | None = None
-        self.ctx.prompt(tr("RECTANG Specify first corner:"))
+        self._await = None
+        self._pending = {}
+        self._dims = None            # (length, width) from Dimensions
+        cls = type(self)
+        if (cls.chamfer != (0.0, 0.0) or cls.fillet or cls.elevation
+                or cls.thickness or cls.pl_width or cls.rotation):
+            self.ctx.echo(tr(
+                "Current rectangle modes: Chamfer={c1:g} x {c2:g} "
+                "Elevation={e:g} Fillet={f:g} Thickness={t:g} Width={w:g} "
+                "Rotation={r:g}",
+                c1=cls.chamfer[0], c2=cls.chamfer[1], e=cls.elevation,
+                f=cls.fillet, t=cls.thickness, w=cls.pl_width,
+                r=cls.rotation))
+        self._first_prompt()
 
+    def _first_prompt(self) -> None:
+        self.ctx.prompt(tr(
+            "Specify first corner point or "
+            "[Chamfer/Elevation/Fillet/Thickness/Width]:"))
+
+    def _corner_prompt(self) -> None:
+        self.ctx.prompt(tr(
+            "Specify other corner point or [Area/Dimensions/Rotation]:"))
+
+    # -- geometry --------------------------------------------------------------
+    def _to_local(self, point: Point) -> tuple[float, float]:
+        rot = math.radians(type(self).rotation)
+        dx, dy = point[0] - self._first[0], point[1] - self._first[1]
+        return (dx * math.cos(rot) + dy * math.sin(rot),
+                -dx * math.sin(rot) + dy * math.cos(rot))
+
+    def _build(self, length: float, width: float) -> None:
+        cls = type(self)
+        try:
+            points = actions.rect_vertices(
+                self._first, length, width, rotation_deg=cls.rotation,
+                chamfer=cls.chamfer, fillet=cls.fillet,
+                pl_width=cls.pl_width)
+        except ValueError:
+            self.ctx.echo(tr("Zero-size rectangle — nothing created."))
+            self.ctx.finish()
+            return
+        attribs = {}
+        if cls.elevation:
+            attribs["elevation"] = cls.elevation
+        if cls.thickness:
+            attribs["thickness"] = cls.thickness
+        self.ctx.execute(actions.add_polyline_ex(
+            points, closed=True, name="RECTANG", dxfattribs=attribs))
+        self.ctx.finish()
+
+    def _corner_loss(self) -> float:
+        """Area removed by the active chamfers or fillets (4 corners)."""
+        cls = type(self)
+        if cls.fillet > 0.0:
+            return (4.0 - math.pi) * cls.fillet * cls.fillet
+        d1, d2 = cls.chamfer
+        return 2.0 * d1 * d2
+
+    # -- input -----------------------------------------------------------------
     def on_point(self, point: Point) -> None:
+        if self._await in ("rot_p1", "rot_p2"):
+            if self._await == "rot_p1":
+                self._pending["rp1"] = point
+                self._await = "rot_p2"
+                self.ctx.prompt(tr("Specify second point:"))
+            else:
+                p1 = self._pending["rp1"]
+                type(self).rotation = math.degrees(
+                    math.atan2(point[1] - p1[1], point[0] - p1[0]))
+                self._await = None
+                self._first_prompt() if self._first is None \
+                    else self._corner_prompt()
+            return
+        if self._await is not None:
+            return                    # numeric sub-prompt: ignore picks
         if self._first is None:
             self._first = point
             self.last_point = point
-            self.ctx.prompt(tr("Specify other corner:"))
-        else:
-            self.ctx.execute(actions.add_rectangle(self._first, point))
-            self.ctx.finish()
+            self._corner_prompt()
+            return
+        if self._dims is not None:
+            # Dimensions placement: the pick chooses the quadrant
+            lx, ly = self._to_local(point)
+            length = self._dims[0] if lx >= 0 else -self._dims[0]
+            width = self._dims[1] if ly >= 0 else -self._dims[1]
+            self._build(length, width)
+            return
+        lx, ly = self._to_local(point)
+        self._build(lx, ly)
+
+    def on_enter(self) -> None:
+        defaults = {
+            "chamfer1": type(self).chamfer[0],
+            "chamfer2": None,        # filled when reached (defaults to d1)
+            "elevation": type(self).elevation,
+            "fillet": type(self).fillet,
+            "thickness": type(self).thickness,
+            "plwidth": type(self).pl_width,
+            "area": type(self).last_area,
+            "area_len": type(self).last_length,
+            "area_wid": type(self).last_width,
+            "dim_len": type(self).last_length,
+            "dim_wid": type(self).last_width,
+            "rot": type(self).rotation,
+        }
+        if self._await == "area_lw":
+            self.on_option("L")
+            return
+        if self._await in defaults:
+            value = defaults[self._await]
+            if value is None:
+                value = self._pending.get("d1", 0.0)
+            self.on_option(f"{value:g}")
+            return
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        t = text.upper()
+        value = _parse_number(text)
+        cls = type(self)
+        # numeric sub-prompts
+        if self._await == "chamfer1":
+            if value is None or value < 0:
+                return False
+            self._pending["d1"] = value
+            self._await = "chamfer2"
+            self.ctx.prompt(tr(
+                "Specify second chamfer distance for rectangles <{d:g}>:",
+                d=value))
+            return True
+        if self._await == "chamfer2":
+            if value is None or value < 0:
+                return False
+            cls.chamfer = (self._pending["d1"], value)
+            cls.fillet = 0.0          # chamfer and fillet are exclusive
+            self._await = None
+            self._first_prompt()
+            return True
+        if self._await == "fillet":
+            if value is None or value < 0:
+                return False
+            cls.fillet = value
+            cls.chamfer = (0.0, 0.0)
+            self._await = None
+            self._first_prompt()
+            return True
+        if self._await in ("elevation", "thickness", "plwidth"):
+            if value is None:
+                return False
+            setattr(cls, {"elevation": "elevation", "thickness": "thickness",
+                          "plwidth": "pl_width"}[self._await], value)
+            self._await = None
+            self._first_prompt()
+            return True
+        if self._await == "area":
+            if value is None or value <= 0:
+                return False
+            cls.last_area = value
+            self._await = "area_lw"
+            self.ctx.prompt(tr(
+                "Calculate rectangle dimensions based on [Length/Width] "
+                "<Length>:"))
+            return True
+        if self._await == "area_lw":
+            if t in ("L", "LENGTH"):
+                self._await = "area_len"
+                self.ctx.prompt(tr("Enter rectangle length <{v:g}>:",
+                                   v=cls.last_length))
+                return True
+            if t in ("W", "WIDTH"):
+                self._await = "area_wid"
+                self.ctx.prompt(tr("Enter rectangle width <{v:g}>:",
+                                   v=cls.last_width))
+                return True
+            return False
+        if self._await in ("area_len", "area_wid"):
+            if value is None or value <= 0:
+                return False
+            # the target area includes the corner cut (official rule)
+            total = cls.last_area + self._corner_loss()
+            other = total / value
+            if self._await == "area_len":
+                cls.last_length = value
+                self._build(value, other)
+            else:
+                cls.last_width = value
+                self._build(other, value)
+            self._await = None
+            return True
+        if self._await == "dim_len":
+            if value is None or value <= 0:
+                return False
+            cls.last_length = value
+            self._await = "dim_wid"
+            self.ctx.prompt(tr("Specify width for rectangles <{v:g}>:",
+                               v=cls.last_width))
+            return True
+        if self._await == "dim_wid":
+            if value is None or value <= 0:
+                return False
+            cls.last_width = value
+            self._dims = (cls.last_length, value)
+            self._await = None
+            self._corner_prompt()     # the next pick places the quadrant
+            return True
+        if self._await == "rot":
+            if t in ("P", "PICK", "POINTS"):
+                self._await = "rot_p1"
+                self.ctx.prompt(tr("Specify first point:"))
+                return True
+            if value is None:
+                return False
+            cls.rotation = value
+            self._await = None
+            self._first_prompt() if self._first is None \
+                else self._corner_prompt()
+            return True
+        if self._await is not None:
+            return False
+        # keywords
+        if self._first is None:
+            if t in ("C", "CHAMFER"):
+                self._await = "chamfer1"
+                self.ctx.prompt(tr(
+                    "Specify first chamfer distance for rectangles <{d:g}>:",
+                    d=cls.chamfer[0]))
+                return True
+            if t in ("E", "ELEVATION"):
+                self._await = "elevation"
+                self.ctx.prompt(tr(
+                    "Specify the elevation for rectangles <{v:g}>:",
+                    v=cls.elevation))
+                return True
+            if t in ("F", "FILLET"):
+                self._await = "fillet"
+                self.ctx.prompt(tr(
+                    "Specify fillet radius for rectangles <{v:g}>:",
+                    v=cls.fillet))
+                return True
+            if t in ("T", "THICKNESS"):
+                self._await = "thickness"
+                self.ctx.prompt(tr(
+                    "Specify thickness for rectangles <{v:g}>:",
+                    v=cls.thickness))
+                return True
+            if t in ("W", "WIDTH"):
+                self._await = "plwidth"
+                self.ctx.prompt(tr(
+                    "Specify line width for rectangles <{v:g}>:",
+                    v=cls.pl_width))
+                return True
+            return False
+        if t in ("A", "AREA"):
+            self._await = "area"
+            self.ctx.prompt(tr(
+                "Enter area of rectangle in current units <{v:g}>:",
+                v=cls.last_area))
+            return True
+        if t in ("D", "DIMENSIONS"):
+            self._await = "dim_len"
+            self.ctx.prompt(tr("Specify length for rectangles <{v:g}>:",
+                               v=cls.last_length))
+            return True
+        if t in ("R", "ROTATION"):
+            self._await = "rot"
+            self.ctx.prompt(tr(
+                "Specify rotation angle or [Pick points] <{v:g}>:",
+                v=cls.rotation))
+            return True
+        return False
 
     def preview_segments(self, cursor: Point):
-        if self._first is None:
+        if self._first is None or self._await is not None:
             return []
-        p1, p2 = self._first, cursor
-        c = [(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1]), (p1[0], p2[1])]
-        return list(zip(c, c[1:] + c[:1]))
+        try:
+            if self._dims is not None:
+                lx, ly = self._to_local(cursor)
+                length = self._dims[0] if lx >= 0 else -self._dims[0]
+                width = self._dims[1] if ly >= 0 else -self._dims[1]
+                points = actions.rect_vertices(
+                    self._first, length, width,
+                    rotation_deg=type(self).rotation)
+            else:
+                lx, ly = self._to_local(cursor)
+                points = actions.rect_vertices(
+                    self._first, lx, ly, rotation_deg=type(self).rotation)
+        except ValueError:
+            return []
+        ring = [(p[0], p[1]) for p in points]
+        return list(zip(ring, ring[1:] + ring[:1]))
 
 
 class PolygonTool(Tool):
+    """POLYGON with AutoCAD's full flow: sides (POLYSIDES session default),
+    Edge, Inscribed/Circumscribed with sticky <I/C> default, and the
+    orientation rules — a typed radius puts the bottom edge horizontal, a
+    picked point is a vertex (I) or an edge midpoint (C)."""
+
+    last_sides = 4        # POLYSIDES: session-only default
+    last_mode = "I"
+
     def start(self) -> None:
         self.name = "POLYGON"
         self._sides = 0
         self._center: Point | None = None
-        self.ctx.prompt(tr("POLYGON Enter number of sides <4>:"))
+        self._mode = None
+        self._edge_first: Point | None = None
+        self._stage = "sides"
+        self.ctx.prompt(tr("Enter number of sides <{n}>:",
+                           n=type(self).last_sides))
+
+    def _mode_prompt(self) -> None:
+        self._stage = "mode"
+        self.ctx.prompt(tr(
+            "Enter an option [Inscribed in circle/Circumscribed about "
+            "circle] <{m}>:", m=type(self).last_mode))
+
+    def _build_ring(self, ring) -> None:
+        self.ctx.execute(actions.add_polyline(ring, closed=True))
+        self.ctx.finish()
+
+    def _typed_radius(self, radius: float) -> None:
+        # bottom edge horizontal (snap angle 0): vertices straddle -90
+        first = -90.0 + 180.0 / self._sides
+        r = radius if self._mode == "I" \
+            else radius / math.cos(math.pi / self._sides)
+        self._build_ring(actions.polygon_ring(
+            self._center, self._sides, r, first))
+
+    def _dragged_radius(self, point: Point) -> None:
+        theta = math.degrees(math.atan2(point[1] - self._center[1],
+                                        point[0] - self._center[0]))
+        dist = math.dist(self._center, point)
+        if dist <= 0.0:
+            return
+        if self._mode == "I":
+            first, r = theta, dist                 # the pick IS a vertex
+        else:
+            first = theta + 180.0 / self._sides    # the pick is a midpoint
+            r = dist / math.cos(math.pi / self._sides)
+        self._build_ring(actions.polygon_ring(
+            self._center, self._sides, r, first))
 
     def on_option(self, text: str) -> bool:
-        if self._sides == 0:
+        t = text.upper()
+        if self._stage == "sides":
             try:
                 sides = int(text)
             except ValueError:
                 return False
             if 3 <= sides <= 1024:
                 self._sides = sides
-                self.ctx.prompt(tr("Specify center of polygon:"))
+                type(self).last_sides = sides
+                self._stage = "center"
+                self.ctx.prompt(tr("Specify center of polygon or [Edge]:"))
                 return True
             self.ctx.echo(tr("Between 3 and 1024 sides."))
+            return True
+        if self._stage == "center" and t in ("E", "EDGE"):
+            self._stage = "edge1"
+            self.ctx.prompt(tr("Specify first endpoint of edge:"))
+            return True
+        if self._stage == "mode":
+            if t in ("I", "INSCRIBED"):
+                self._mode = "I"
+            elif t in ("C", "CIRCUMSCRIBED"):
+                self._mode = "C"
+            else:
+                return False
+            type(self).last_mode = self._mode
+            self._stage = "radius"
+            self.ctx.prompt(tr("Specify radius of circle:"))
+            return True
+        if self._stage == "radius":
+            radius = _parse_number(text)
+            if radius is None or radius <= 0:
+                return False
+            self._typed_radius(radius)
             return True
         return False
 
     def on_enter(self) -> None:
-        if self._sides == 0:
-            self._sides = 4
-            self.ctx.prompt(tr("Specify center of polygon:"))
-        else:
-            self.ctx.finish()
+        if self._stage == "sides":
+            self._sides = type(self).last_sides
+            self._stage = "center"
+            self.ctx.prompt(tr("Specify center of polygon or [Edge]:"))
+            return
+        if self._stage == "mode":
+            self.on_option(type(self).last_mode)
+            return
+        self.ctx.finish()
 
     def on_point(self, point: Point) -> None:
-        if self._sides == 0:
-            return  # still waiting for the side count
-        if self._center is None:
+        if self._stage == "center":
             self._center = point
             self.last_point = point
-            self.ctx.prompt(tr("Specify a vertex (inscribed):"))
-        else:
-            self.ctx.execute(actions.add_polygon(self._center, point, self._sides))
-            self.ctx.finish()
+            self._mode_prompt()
+            return
+        if self._stage == "mode":
+            # picking instead of answering: accept the default mode and
+            # treat the pick as the dragged radius (AutoCAD flow shortcut)
+            self._mode = type(self).last_mode
+            self._stage = "radius"
+            self._dragged_radius(point)
+            return
+        if self._stage == "radius":
+            self._dragged_radius(point)
+            return
+        if self._stage == "edge1":
+            self._edge_first = point
+            self.last_point = point
+            self._stage = "edge2"
+            self.ctx.prompt(tr("Specify second endpoint of edge:"))
+            return
+        if self._stage == "edge2":
+            try:
+                ring = actions.polygon_from_edge(
+                    self._edge_first, point, self._sides)
+            except ValueError:
+                self.ctx.echo(tr("Zero-length edge."))
+                return
+            self._build_ring(ring)
 
     def preview_segments(self, cursor: Point):
-        if self._center is None or self._sides == 0:
-            return []
-        pts = actions.polygon_points(self._center, cursor, self._sides)
-        return list(zip(pts, pts[1:] + pts[:1]))
+        if self._stage in ("mode", "radius") and self._center is not None:
+            mode = self._mode or type(self).last_mode
+            theta = math.degrees(math.atan2(cursor[1] - self._center[1],
+                                            cursor[0] - self._center[0]))
+            dist = math.dist(self._center, cursor)
+            if dist <= 0.0:
+                return []
+            if mode == "I":
+                first, r = theta, dist
+            else:
+                first = theta + 180.0 / self._sides
+                r = dist / math.cos(math.pi / self._sides)
+            pts = actions.polygon_ring(self._center, self._sides, r, first)
+            return list(zip(pts, pts[1:] + pts[:1]))
+        if self._stage == "edge2" and self._edge_first is not None:
+            try:
+                pts = actions.polygon_from_edge(
+                    self._edge_first, cursor, self._sides)
+            except ValueError:
+                return []
+            return list(zip(pts, pts[1:] + pts[:1]))
+        return []
 
 
 TOOL_CLASSES = {

@@ -423,6 +423,102 @@ def add_polyline(points, closed: bool = False) -> AddEntityCommand:
         "PLINE", lambda msp: msp.add_lwpolyline(pts, close=closed))
 
 
+def add_polyline_ex(points, closed: bool = False, name: str = "PLINE",
+                    dxfattribs: dict | None = None) -> AddEntityCommand:
+    """add_polyline with xyseb vertices plus entity attributes (RECTANG's
+    Elevation -> elevation, Thickness -> thickness)."""
+    pts = [tuple(p[:5]) for p in points]
+    attribs = dict(dxfattribs or {})
+    # fresh dict per call: ezdxf may consume the attribs, and redo re-runs
+    # the factory
+    return AddEntityCommand(
+        name, lambda msp: msp.add_lwpolyline(
+            pts, format="xyseb", close=closed, dxfattribs=dict(attribs)))
+
+
+def rect_vertices(first, length: float, width: float, *,
+                  rotation_deg: float = 0.0, chamfer=(0.0, 0.0),
+                  fillet: float = 0.0, pl_width: float = 0.0) -> list:
+    """RECTANG's closed ring as xyseb vertices, honoring the sticky corner
+    settings: chamfered (8 vertices), filleted (arc corners, bulge
+    tan(90°/4)) or square. ``length``/``width`` are signed offsets from
+    ``first`` in the rotated frame. Corners that don't fit fall back to a
+    square rectangle, like AutoCAD."""
+    x0, x1 = (0.0, length) if length >= 0 else (length, 0.0)
+    y0, y1 = (0.0, width) if width >= 0 else (width, 0.0)
+    w, h = x1 - x0, y1 - y0
+    if w <= 0.0 or h <= 0.0:
+        raise ValueError("zero-size rectangle")
+    corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]     # CCW ring
+    d1, d2 = max(chamfer[0], 0.0), max(chamfer[1], 0.0)
+    r = max(fillet, 0.0)
+    ring: list[tuple] = []                                  # (x, y, bulge)
+    if r > 0.0 and 2.0 * r <= min(w, h) + 1e-12:
+        arc_bulge = math.tan(math.radians(90.0) / 4.0)      # CCW quarter turn
+        for i, c in enumerate(corners):
+            pin = corners[i - 1]
+            pout = corners[(i + 1) % 4]
+            din = _unit(pin, c)
+            dout = _unit(c, pout)
+            a = (c[0] - r * din[0], c[1] - r * din[1])
+            b = (c[0] + r * dout[0], c[1] + r * dout[1])
+            ring.append((a[0], a[1], arc_bulge))            # the corner arc
+            ring.append((b[0], b[1], 0.0))                  # then straight on
+    elif (d1 > 0.0 or d2 > 0.0) and d1 + d2 <= min(w, h) + 1e-12 \
+            and max(d1, d2) * 2.0 <= min(w, h) + 1e-12:
+        for i, c in enumerate(corners):
+            pin = corners[i - 1]
+            pout = corners[(i + 1) % 4]
+            din = _unit(pin, c)
+            dout = _unit(c, pout)
+            a = (c[0] - d1 * din[0], c[1] - d1 * din[1])
+            b = (c[0] + d2 * dout[0], c[1] + d2 * dout[1])
+            ring.append((a[0], a[1], 0.0))
+            ring.append((b[0], b[1], 0.0))
+    else:
+        ring = [(c[0], c[1], 0.0) for c in corners]
+    rot = math.radians(rotation_deg)
+    ca, sa = math.cos(rot), math.sin(rot)
+    out = []
+    for x, y, bulge in ring:
+        wx = first[0] + x * ca - y * sa
+        wy = first[1] + x * sa + y * ca
+        out.append((wx, wy, pl_width, pl_width, bulge))
+    return out
+
+
+def _unit(a, b):
+    d = math.dist(a, b)
+    return ((b[0] - a[0]) / d, (b[1] - a[1]) / d)
+
+
+def polygon_ring(center, sides: int, vertex_radius: float,
+                 first_vertex_deg: float) -> list:
+    """Vertices of a regular polygon, first vertex at the given angle."""
+    pts = []
+    for i in range(sides):
+        a = math.radians(first_vertex_deg + 360.0 * i / sides)
+        pts.append((center[0] + vertex_radius * math.cos(a),
+                    center[1] + vertex_radius * math.sin(a)))
+    return pts
+
+
+def polygon_from_edge(p1, p2, sides: int) -> list:
+    """POLYGON Edge: walk CCW from the first edge (body left of p1->p2)."""
+    s = math.dist(p1, p2)
+    if s <= 0.0:
+        raise ValueError("zero-length edge")
+    pts = [tuple(p1), tuple(p2)]
+    heading = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
+    turn = math.tau / sides
+    for _ in range(sides - 2):
+        heading += turn
+        last = pts[-1]
+        pts.append((last[0] + s * math.cos(heading),
+                    last[1] + s * math.sin(heading)))
+    return pts
+
+
 def add_rectangle(p1, p2) -> AddEntityCommand:
     pts = [(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1]), (p1[0], p2[1])]
     return AddEntityCommand(
