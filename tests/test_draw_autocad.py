@@ -885,3 +885,150 @@ def test_text_enter_repeats_below_previous():
     texts = {t.dxf.text: t.dxf.insert.y for t in h.msp.query("TEXT")}
     assert texts["dos"] == pytest.approx(
         texts["uno"] - 1.5 * TextTool.default_height)
+
+
+# -- -HATCH: the command-line hatch --------------------------------------------
+
+from tools.blocks import HatchCliTool, HatchTool  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_hatch_state():
+    HatchTool._last = {"pattern": "SOLID", "scale": 1.0, "angle": 0.0,
+                       "color": 256}
+    HatchCliTool._style = actions.HATCH_STYLE_NORMAL
+    HatchCliTool._user = (0.0, 1.0, False)
+    HatchCliTool._retain = False
+    yield
+
+
+def _cli_hatch(h):
+    tool = HatchCliTool(h.ctx)
+    tool.start()
+    return tool
+
+
+def test_minus_hatch_draw_boundary_and_pattern():
+    h = Harness()
+    tool = _cli_hatch(h)
+    assert tool.on_option("P")
+    assert tool.on_option("ANSI31")
+    assert tool.on_option("2")               # scale
+    assert tool.on_option("45")              # angle
+    assert tool.on_option("W")               # draW boundary
+    assert tool.on_option("")                # retain <N>
+    tool.on_point((0.0, 0.0))
+    tool.on_point((10.0, 0.0))
+    tool.on_point((10.0, 10.0))
+    assert tool.on_option("C")               # close the loop
+    tool.on_enter()                          # apply
+    hatch = h.msp.query("HATCH")[0]
+    assert hatch.dxf.pattern_name == "ANSI31"
+    assert hatch.dxf.pattern_scale == pytest.approx(2.0)
+    assert hatch.dxf.pattern_angle == pytest.approx(45.0)
+    assert not h.msp.query("LWPOLYLINE")     # boundary not retained
+
+
+def test_minus_hatch_retain_boundary_polyline():
+    h = Harness()
+    tool = _cli_hatch(h)
+    assert tool.on_option("W")
+    assert tool.on_option("Y")               # retain
+    tool.on_point((0.0, 0.0))
+    tool.on_point((10.0, 0.0))
+    tool.on_point((10.0, 10.0))
+    tool.on_enter()                          # Enter closes the loop
+    tool.on_enter()                          # apply (SOLID default)
+    assert len(h.msp.query("HATCH")) == 1
+    pline = h.msp.query("LWPOLYLINE")[0]
+    assert pline.closed
+
+
+def test_minus_hatch_style_suffix_and_ignore_drops_islands():
+    h = Harness()
+    # outer square with an island circle, via the region machinery fake
+    outer = [(0, 0), (20, 0), (20, 20), (0, 20)]
+    island = [(8, 8), (12, 8), (12, 12), (8, 12)]
+
+    class Services:
+        def hatch_region_at(self, point):
+            return (outer, [island])
+
+    h.ctx.services = Services()
+    tool = _cli_hatch(h)
+    assert tool.on_option("P")
+    assert tool.on_option("ANSI31,I")        # Ignore style via suffix
+    assert tool.on_option("")                # scale default
+    assert tool.on_option("")                # angle default
+    tool.on_point((1.0, 1.0))                # internal point
+    tool.on_enter()
+    hatch = h.msp.query("HATCH")[0]
+    assert hatch.dxf.hatch_style == actions.HATCH_STYLE_IGNORE
+    assert len(hatch.paths) == 1             # island dropped
+
+    # the style is session-sticky (like the HP* sysvars) — reset to check
+    # that Normal keeps the island as a hole and records style 0
+    HatchCliTool._style = actions.HATCH_STYLE_NORMAL
+    h2 = Harness()
+    h2.ctx.services = Services()
+    tool2 = _cli_hatch(h2)
+    tool2.on_point((1.0, 1.0))
+    tool2.on_enter()
+    hatch2 = h2.msp.query("HATCH")[0]
+    assert hatch2.dxf.hatch_style == actions.HATCH_STYLE_NORMAL
+    assert len(hatch2.paths) == 2
+
+
+def test_minus_hatch_user_defined_double():
+    h = Harness()
+    tool = _cli_hatch(h)
+    assert tool.on_option("P")
+    assert tool.on_option("U")
+    assert tool.on_option("30")              # angle
+    assert tool.on_option("2.5")             # spacing
+    assert tool.on_option("Y")               # double
+    assert tool.on_option("W")
+    assert tool.on_option("")
+    tool.on_point((0.0, 0.0))
+    tool.on_point((10.0, 0.0))
+    tool.on_point((10.0, 10.0))
+    assert tool.on_option("C")
+    tool.on_enter()
+    hatch = h.msp.query("HATCH")[0]
+    assert hatch.dxf.pattern_name == "U"
+    assert hatch.dxf.pattern_type == 0       # user-defined
+    assert hatch.dxf.pattern_double == 1
+    lines = hatch.pattern.lines
+    assert len(lines) == 2                   # double: second set at 90
+    assert lines[0].angle == pytest.approx(30.0)
+    assert lines[1].angle == pytest.approx(120.0)
+
+
+def test_minus_hatch_advanced_style_and_color():
+    h = Harness()
+    tool = _cli_hatch(h)
+    assert tool.on_option("A")
+    assert tool.on_option("O")               # Outer
+    assert HatchCliTool._style == actions.HATCH_STYLE_OUTER
+    assert tool.on_option("CO")
+    assert tool.on_option("1")               # red
+    assert tool.settings["color"] == 1
+    assert tool.on_option("CO")
+    assert tool.on_option(".")               # back to ByLayer
+    assert tool.settings["color"] == 256
+
+
+def test_minus_hatch_question_lists_patterns():
+    h = Harness()
+    tool = _cli_hatch(h)
+    assert tool.on_option("P")
+    assert tool.on_option("?")
+    assert any("ANSI31" in p for p in h.prompts)
+    assert tool.on_option("NOPE123")
+    assert any("Unknown pattern" in p for p in h.prompts)
+
+
+def test_minus_hatch_alias():
+    from core.aliases import DEFAULT_ALIASES, resolve
+
+    assert resolve("-H", DEFAULT_ALIASES) == "-HATCH"

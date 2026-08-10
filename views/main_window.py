@@ -1050,7 +1050,7 @@ class MainWindow(QMainWindow):
                      "ELLIPSE", "POINT", "TEXT", "MTEXT",
                      "ERASE", "MOVE", "COPY", "ROTATE", "SCALE", "MIRROR",
                      "OFFSET", "TRIM", "EXTEND", "FILLET",
-                     "BLOCK", "INSERT", "EXPLODE", "HATCH",
+                     "BLOCK", "INSERT", "EXPLODE", "HATCH", "-HATCH",
                      "DIMLINEAR", "DIMALIGNED", "DIMRADIUS", "DIMDIAMETER",
                      "MVIEW"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))

@@ -801,14 +801,39 @@ def _add_boundary(hatch, item, flags: int) -> None:
             hatch.paths.add_polyline_path(poly, is_closed=True, flags=flags)
 
 
-def add_hatch(boundaries, pattern="SOLID", scale=1.0, angle=0.0,
-              color=256, islands=None) -> AddEntityCommand:
-    """SOLID or a predefined pattern (ANSI31…) inside closed boundaries.
+#: -HATCH island styles (DXF group 75): what happens inside the outer loop.
+HATCH_STYLE_NORMAL = 0     # alternate fill at nested islands
+HATCH_STYLE_OUTER = 1      # hatch only the outermost level
+HATCH_STYLE_IGNORE = 2     # hatch straight through internal objects
 
-    ``boundaries`` and ``islands`` are ezdxf entities or point lists. Islands
-    are added as inner paths so the region is filled with holes ("Normal"
-    island style). ``color`` is an ACI; 256 = ByLayer (AutoCAD's default for a
-    new hatch).
+
+def user_pattern_definition(angle_deg: float, spacing: float,
+                            double: bool) -> list:
+    """-HATCH "User defined": continuous parallel lines at ``angle`` with
+    ``spacing`` between them; ``double`` adds a second set at 90 degrees."""
+    def line(a):
+        rad = math.radians(a)
+        offset = (-spacing * math.sin(rad), spacing * math.cos(rad))
+        return [a, (0.0, 0.0), offset, []]
+
+    lines = [line(angle_deg)]
+    if double:
+        lines.append(line(angle_deg + 90.0))
+    return lines
+
+
+def add_hatch(boundaries, pattern="SOLID", scale=1.0, angle=0.0,
+              color=256, islands=None, style=HATCH_STYLE_NORMAL,
+              user_def=None) -> AddEntityCommand:
+    """SOLID, a predefined pattern (ANSI31…) or a user-defined one inside
+    closed boundaries.
+
+    ``boundaries`` and ``islands`` are ezdxf entities or point lists.
+    ``style`` is the AutoCAD island style (Normal/Outer/Ignore): Ignore
+    drops the islands entirely; the style is also recorded in the entity
+    (group 75) for round-trip. ``user_def`` = (angle, spacing, double)
+    builds -HATCH's "User defined" pattern. ``color`` is an ACI; 256 =
+    ByLayer (AutoCAD's default for a new hatch).
     """
     from ezdxf.lldxf.const import (
         BOUNDARY_PATH_EXTERNAL, BOUNDARY_PATH_OUTERMOST)
@@ -818,8 +843,15 @@ def add_hatch(boundaries, pattern="SOLID", scale=1.0, angle=0.0,
 
     def factory(msp):
         h = msp.add_hatch(color=aci)
-        h.dxf.hatch_style = 0   # Normal: nested islands alternate fill
-        if name == "SOLID":
+        if user_def is not None:
+            u_angle, u_spacing, u_double = user_def
+            h.set_pattern_fill(
+                "U", color=aci, scale=1.0, angle=0.0,
+                definition=user_pattern_definition(u_angle, u_spacing,
+                                                   bool(u_double)))
+            h.dxf.pattern_type = 0    # user-defined
+            h.dxf.pattern_double = 1 if u_double else 0
+        elif name == "SOLID":
             h.set_solid_fill(color=aci)
         else:
             defn = _std_patterns().get(name)
@@ -827,8 +859,11 @@ def add_hatch(boundaries, pattern="SOLID", scale=1.0, angle=0.0,
                                definition=defn)
         for b in boundaries:
             _add_boundary(h, b, BOUNDARY_PATH_EXTERNAL)
-        for isl in (islands or ()):
-            _add_boundary(h, isl, BOUNDARY_PATH_OUTERMOST)
+        if style != HATCH_STYLE_IGNORE:
+            for isl in (islands or ()):
+                _add_boundary(h, isl, BOUNDARY_PATH_OUTERMOST)
+        # last: ezdxf's fill/path helpers overwrite hatch_style on the way
+        h.dxf.hatch_style = int(style)
         h.dxf.color = color   # keep ByLayer sentinel when requested
         return h
     return AddEntityCommand("HATCH", factory)

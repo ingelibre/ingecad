@@ -445,5 +445,17 @@
   "Specify first endpoint of text baseline:": "Especifique el primer extremo de la línea base del texto:",
   "Specify second endpoint of text baseline:": "Especifique el segundo extremo de la línea base del texto:",
   "Specify height <{h:g}>:": "Especifique la altura <{h:g}>:",
-  "Specify rotation angle of text <{r:g}>:": "Especifique el ángulo de rotación del texto <{r:g}>:"
+  "Specify rotation angle of text <{r:g}>:": "Especifique el ángulo de rotación del texto <{r:g}>:",
+  "Current hatch pattern:  {name}": "Patrón de sombreado actual:  {name}",
+  "Specify internal point or [Properties/Select objects/draW boundary/Advanced/hatch COlor]:": "Especifique un punto interno o [Propiedades(P)/Seleccionar objetos(S)/Dibujar contorno(W)/Avanzado(A)/COlor de sombreado]:",
+  "Enter a pattern name or [?/Solid/User defined] <{name}>:": "Indique el nombre del patrón o [?/Sólido(S)/Definido por el usuario(U)] <{name}>:",
+  "Specify a scale for the pattern <{s:g}>:": "Especifique la escala del patrón <{s:g}>:",
+  "Specify an angle for the pattern <{a:g}>:": "Especifique el ángulo del patrón <{a:g}>:",
+  "Specify angle for crosshatch lines <{a:g}>:": "Especifique el ángulo de las líneas de sombreado <{a:g}>:",
+  "Specify spacing between the lines <{s:g}>:": "Especifique el espaciado entre líneas <{s:g}>:",
+  "Double hatch area? [Yes/No] <N>:": "¿Sombreado doble? [Sí(Y)/No(N)] <N>:",
+  "Enter hatch style [Normal/Outer/Ignore] <{s}>:": "Indique el estilo de islas [Normal(N)/Exterior(O)/Ignorar(I)] <{s}>:",
+  "New hatch color (ACI 1-255, . = ByLayer) <{c}>:": "Nuevo color de sombreado (ACI 1-255, . = PorCapa) <{c}>:",
+  "Retain polyline boundary? [Yes/No] <N>:": "¿Conservar el contorno de polilínea? [Sí(Y)/No(N)] <N>:",
+  "Unknown pattern \"{name}\".": "Patrón desconocido \"{name}\"."
 }
