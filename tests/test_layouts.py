@@ -628,3 +628,73 @@ def test_paper_delete_selection_removes_viewport(qapp):
     win._cmd_undo()
     assert len([e for e in psp if e.dxftype() == "VIEWPORT"]) == 1
     win.close()
+
+
+# -- wheel/pan navigation inside the active viewport ---------------------------
+
+def test_zoom_viewport_view_keeps_anchor_point():
+    doc = _doc_with_model_content()
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=30)
+    # model point under paper anchor (120, 110) before the zoom
+    scale = layout_ops.viewport_scale(vp)                    # 2.0
+    mx = 50 + (120 - 100) / scale                            # 60.0
+    my = 25 + (110 - 100) / scale                            # 30.0
+    layout_ops.zoom_viewport_view(vp, 2.0, anchor=(120.0, 110.0))
+    assert float(vp.dxf.view_height) == pytest.approx(15.0)  # zoomed in 2x
+    new_scale = layout_ops.viewport_scale(vp)                # 4.0
+    # the same model point must still sit under the anchor
+    assert vp.dxf.view_center_point.x + (120 - 100) / new_scale \
+        == pytest.approx(mx)
+    assert vp.dxf.view_center_point.y + (110 - 100) / new_scale \
+        == pytest.approx(my)
+
+
+def test_pan_viewport_view_model_follows_cursor():
+    doc = _doc_with_model_content()
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=30)
+    layout_ops.pan_viewport_view(vp, 10.0, -4.0)   # drag right & down
+    # scale 2: view center moves the opposite way by delta/scale
+    assert vp.dxf.view_center_point.x == pytest.approx(45.0)
+    assert vp.dxf.view_center_point.y == pytest.approx(27.0)
+
+
+def test_vp_gesture_commits_one_undoable_command(qapp):
+    win, t, vp = _layout_window(qapp)
+    win._active_vp = vp                       # MSPACE on, without regen dance
+    before = (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y,
+              float(vp.dxf.view_height))
+    # a burst of wheel + pan events...
+    assert win.vp_view_zoom(1.2, (100.0, 100.0))
+    assert win.vp_view_zoom(1.2, (100.0, 100.0))
+    assert win.vp_view_pan(5.0, 2.0)
+    assert win._vp_gesture is not None
+    after = (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y,
+             float(vp.dxf.view_height))
+    assert after != before
+    # ...settles into ONE history entry
+    depth = len(win.history._undo)
+    win._vp_gesture_commit()
+    assert len(win.history._undo) == depth + 1
+    assert win._vp_gesture is None
+    # undo restores the pre-gesture view in one step
+    win._cmd_undo()
+    assert (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y,
+            float(vp.dxf.view_height)) == pytest.approx(before)
+    win._cmd_redo()
+    assert (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y,
+            float(vp.dxf.view_height)) == pytest.approx(after)
+    win.close()
+
+
+def test_vp_gesture_noop_commits_nothing(qapp):
+    win, t, vp = _layout_window(qapp)
+    win._active_vp = vp
+    win._vp_gesture_begin(vp)
+    depth = len(win.history._undo)
+    win._vp_gesture_commit()                  # nothing changed
+    assert len(win.history._undo) == depth
+    win.close()

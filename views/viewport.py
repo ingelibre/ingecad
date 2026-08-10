@@ -1166,7 +1166,7 @@ class Viewport(QOpenGLWidget):
             if self._panning:
                 delta = pos - self._last_pos
                 self._last_pos = pos
-                self.view.pan_pixels(delta.x(), delta.y())
+                self._pan_by(delta)
                 self.update()
             return   # open hand otherwise: no crosshair, no hover
         if self._zoom_window and self._rubber is not None and self._rubber.isVisible():
@@ -1188,7 +1188,7 @@ class Viewport(QOpenGLWidget):
         if self._panning:
             delta = pos - self._last_pos
             self._last_pos = pos
-            self.view.pan_pixels(delta.x(), delta.y())
+            self._pan_by(delta)
         else:
             self._cursor = pos
             wx, wy = self.view.screen_to_world(pos.x(), pos.y())
@@ -1217,10 +1217,35 @@ class Viewport(QOpenGLWidget):
                 return
         super().mouseDoubleClickEvent(event)
 
+    def _mspace_window(self):
+        """The MainWindow iff MSPACE is active (wheel/pan go to the vp)."""
+        window = getattr(self.tool_delegate, "window", None) \
+            if self.tool_delegate is not None else None
+        if window is not None and getattr(window, "_active_vp", None) is not None:
+            return window
+        return None
+
+    def _pan_by(self, delta) -> None:
+        """Middle/PAN drag: pans the paper — or the model inside the
+        active viewport when MSPACE is on (AutoCAD)."""
+        window = self._mspace_window()
+        if window is not None:
+            window.vp_view_pan(delta.x() / self.view.scale,
+                               -delta.y() / self.view.scale)
+        else:
+            self.view.pan_pixels(delta.x(), delta.y())
+
     def wheelEvent(self, event) -> None:
         notches = event.angleDelta().y() / 120.0
         if notches:
             pos = event.position()
+            window = self._mspace_window()
+            if window is not None:
+                # MSPACE: the wheel zooms the MODEL in the viewport,
+                # anchored at the cursor, exactly like the paper wheel.
+                wx, wy = self.view.screen_to_world(pos.x(), pos.y())
+                window.vp_view_zoom(1.2 ** notches, (wx, wy))
+                return
             self.view.zoom_at(pos.x(), pos.y(), 1.2 ** notches)
             self.update()
 

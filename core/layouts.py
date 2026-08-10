@@ -469,20 +469,25 @@ def scale_label(factor: float) -> str:
 
 
 class SetViewportViewCommand(Command):
-    """Change what a viewport looks at (ZOOM nXP / fit). Undoable — the
-    view lives in the DXF entity, so it is a document mutation."""
+    """Change what a viewport looks at (ZOOM nXP / fit / wheel gesture).
+    Undoable — the view lives in the DXF entity, so it is a document
+    mutation. ``old_center``/``old_height`` override the captured "before"
+    state for gestures that already mutated the entity live (wheel/pan
+    bursts commit ONE command at the end, like AutoCAD groups zooms)."""
 
     needs_regen = True
 
     def __init__(self, vp, view_center=None, view_height=None,
-                 name: str = "ZOOM XP") -> None:
+                 name: str = "ZOOM XP",
+                 old_center=None, old_height=None) -> None:
         self.name = name
         self.entity = vp
         self._new_center = view_center
         self._new_height = view_height
-        self._old_center = (vp.dxf.view_center_point.x,
-                            vp.dxf.view_center_point.y)
-        self._old_height = float(vp.dxf.view_height)
+        self._old_center = old_center if old_center is not None else (
+            vp.dxf.view_center_point.x, vp.dxf.view_center_point.y)
+        self._old_height = (old_height if old_height is not None
+                            else float(vp.dxf.view_height))
 
     def do(self, document) -> None:
         if self._new_center is not None:
@@ -502,6 +507,36 @@ def xp_zoom_command(vp, factor: float) -> SetViewportViewCommand:
     keeping the view center (AutoCAD keeps it too)."""
     return SetViewportViewCommand(
         vp, view_height=float(vp.dxf.height) / factor)
+
+
+def zoom_viewport_view(vp, factor: float, anchor=None) -> None:
+    """Wheel zoom inside an active viewport (live, no Command): scale the
+    view about the model point under ``anchor`` (paper coords), so the
+    geometry under the cursor stays under the cursor — same feel as the
+    paper-space wheel."""
+    scale = viewport_scale(vp)
+    cx, cy = vp.dxf.center.x, vp.dxf.center.y
+    vcx, vcy = vp.dxf.view_center_point.x, vp.dxf.view_center_point.y
+    new_height = float(vp.dxf.view_height) / factor
+    if new_height <= 0.0 or not math.isfinite(new_height):
+        return
+    if anchor is not None:
+        mx = vcx + (anchor[0] - cx) / scale       # model point under cursor
+        my = vcy + (anchor[1] - cy) / scale
+        new_scale = float(vp.dxf.height) / new_height
+        vcx = mx - (anchor[0] - cx) / new_scale
+        vcy = my - (anchor[1] - cy) / new_scale
+    vp.dxf.view_height = new_height
+    vp.dxf.view_center_point = (vcx, vcy)
+
+
+def pan_viewport_view(vp, dx_paper: float, dy_paper: float) -> None:
+    """Middle-drag pan inside an active viewport (live, no Command): the
+    model follows the cursor, so the view center moves the other way."""
+    scale = viewport_scale(vp)
+    vp.dxf.view_center_point = (
+        vp.dxf.view_center_point.x - dx_paper / scale,
+        vp.dxf.view_center_point.y - dy_paper / scale)
 
 
 def viewport_fit_command(document, vp) -> SetViewportViewCommand:

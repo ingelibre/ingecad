@@ -106,6 +106,16 @@ class MainWindow(QMainWindow):
         self._layers_dock = None
         self._layers_panel = None
         self._active_vp = None    # MSPACE-activated viewport entity, if any
+        # Wheel/pan inside the active viewport mutate its view live; ONE
+        # Command is committed when the gesture settles (AutoCAD groups
+        # zooms too). Holds (vp, old_view_center, old_view_height).
+        self._vp_gesture = None
+        from PySide6.QtCore import QTimer
+
+        self._vp_gesture_timer = QTimer(self)
+        self._vp_gesture_timer.setSingleShot(True)
+        self._vp_gesture_timer.setInterval(700)
+        self._vp_gesture_timer.timeout.connect(self._vp_gesture_commit)
         self._open_thread: QThread | None = None
         self._open_worker: _OpenWorker | None = None
         self._opening_name = ""
@@ -877,7 +887,66 @@ class MainWindow(QMainWindow):
             tr("Viewport active (scale {scale}). Z + nXP sets the exact "
                "scale (e.g. 1/100XP); PSPACE returns to paper.", scale=label))
 
+    # -- wheel/pan navigation inside the active viewport ------------------------
+    def vp_view_zoom(self, factor: float, anchor) -> bool:
+        """Wheel over the canvas while MSPACE is active: zoom the MODEL
+        inside the viewport (at the cursor), not the paper."""
+        from core import layouts as layout_ops
+
+        vp = self._active_vp
+        if vp is None or not vp.is_alive:
+            return False
+        self._vp_gesture_begin(vp)
+        layout_ops.zoom_viewport_view(vp, factor, anchor)
+        self.document.dirty = True
+        self._vp_gesture_timer.start()
+        self.regen_in_memory()          # coalesced; content converges live
+        return True
+
+    def vp_view_pan(self, dx_world: float, dy_world: float) -> bool:
+        """Middle-drag while MSPACE is active: pan the model in the viewport."""
+        from core import layouts as layout_ops
+
+        vp = self._active_vp
+        if vp is None or not vp.is_alive:
+            return False
+        self._vp_gesture_begin(vp)
+        layout_ops.pan_viewport_view(vp, dx_world, dy_world)
+        self.document.dirty = True
+        self._vp_gesture_timer.start()
+        self.regen_in_memory()
+        return True
+
+    def _vp_gesture_begin(self, vp) -> None:
+        if self._vp_gesture is None:
+            self._vp_gesture = (
+                vp,
+                (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y),
+                float(vp.dxf.view_height))
+
+    def _vp_gesture_commit(self) -> None:
+        """Fold the finished wheel/pan burst into one undoable Command."""
+        from core import layouts as layout_ops
+
+        gesture, self._vp_gesture = self._vp_gesture, None
+        self._vp_gesture_timer.stop()
+        if gesture is None:
+            return
+        vp, old_center, old_height = gesture
+        if not vp.is_alive:
+            return
+        now_center = (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y)
+        now_height = float(vp.dxf.view_height)
+        if now_center == old_center and now_height == old_height:
+            return
+        # do() re-applies the values already live — recording, not changing.
+        self.history.execute(layout_ops.SetViewportViewCommand(
+            vp, view_center=now_center, view_height=now_height,
+            name=tr("Viewport view"),
+            old_center=old_center, old_height=old_height))
+
     def _deactivate_viewport(self, echo: bool = False) -> None:
+        self._vp_gesture_commit()       # leaving MSPACE settles the gesture
         had = getattr(self, "_active_vp", None) is not None
         self._active_vp = None
         if getattr(self.viewport, "active_vp_rect", None) is not None:
@@ -933,6 +1002,10 @@ class MainWindow(QMainWindow):
         if active_vp is not None and not active_vp.is_alive:
             active_vp = None
             self._deactivate_viewport()
+        if active_vp is not None:
+            # a pending wheel/pan burst must land in history BEFORE the
+            # explicit ZOOM command, so undo peels them in order
+            self._vp_gesture_commit()
         factor = layout_ops.parse_xp_factor(option)
         if factor is not None:
             # AutoCAD's exact-scale idiom: ZOOM 1/100XP inside a viewport.

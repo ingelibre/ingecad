@@ -288,5 +288,6 @@
   "Already in paper space.": "Ya está en espacio papel.",
   "ZOOM [Extents/Window/Previous] or scale nXP:": "ZOOM [Extensión(E)/Ventana(W)/Previo(P)] o escala nXP:",
   "nXP needs an active viewport — MSPACE or double-click one first.": "nXP necesita una ventana gráfica activa — use MSPACE o doble clic en una.",
-  "Viewport scale set to {scale}.": "Escala de la ventana gráfica fijada en {scale}."
+  "Viewport scale set to {scale}.": "Escala de la ventana gráfica fijada en {scale}.",
+  "Viewport view": "Vista de la ventana gráfica"
 }
