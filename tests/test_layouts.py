@@ -698,3 +698,67 @@ def test_vp_gesture_noop_commits_nothing(qapp):
     win._vp_gesture_commit()                  # nothing changed
     assert len(win.history._undo) == depth
     win.close()
+
+
+# -- display lock (VPLOCK) -----------------------------------------------------
+
+def test_viewport_lock_flag_and_command():
+    doc = _doc_with_model_content()
+    history = History(doc)
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=30)
+    assert not layout_ops.is_viewport_locked(vp)
+    history.execute(layout_ops.SetViewportLockCommand(vp, True))
+    assert layout_ops.is_viewport_locked(vp)
+    history.undo()
+    assert not layout_ops.is_viewport_locked(vp)
+    history.redo()
+    assert layout_ops.is_viewport_locked(vp)
+    # unlocking preserves the other flag bits
+    other_flags = int(vp.dxf.flags) & ~0x4000
+    history.execute(layout_ops.SetViewportLockCommand(vp, False))
+    assert not layout_ops.is_viewport_locked(vp)
+    assert (int(vp.dxf.flags) & ~0x4000) == other_flags
+
+
+def test_locked_viewport_ignores_wheel_and_pan(qapp):
+    win, t, vp = _layout_window(qapp)
+    win._active_vp = vp
+    win.history.execute(layout_ops.SetViewportLockCommand(vp, True))
+    view_before = (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y,
+                   float(vp.dxf.view_height))
+    assert not win.vp_view_zoom(1.2, (100.0, 100.0))   # falls through
+    assert not win.vp_view_pan(5.0, 2.0)
+    assert (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y,
+            float(vp.dxf.view_height)) == view_before
+    assert win._vp_gesture is None                     # no gesture opened
+    win.close()
+
+
+def test_locked_viewport_refuses_xp(qapp):
+    win, t, vp = _layout_window(qapp)
+    win._active_vp = vp
+    win.history.execute(layout_ops.SetViewportLockCommand(vp, True))
+    height_before = float(vp.dxf.view_height)
+    win._zoom_option("1/100XP")
+    assert float(vp.dxf.view_height) == height_before
+    win._zoom_option("E")
+    assert float(vp.dxf.view_height) == height_before
+    # unlock through the command surface, then XP works again
+    win._cmd_vplock("OFF")
+    win._zoom_option("1/100XP")
+    assert float(vp.dxf.view_height) == pytest.approx(vp.dxf.height * 100.0)
+    win.close()
+
+
+def test_vplock_targets_selected_viewport(qapp):
+    win, t, vp = _layout_window(qapp)
+    t._pick_tolerance = 2.0
+    t.on_click(60.0, 100.0)                    # select by border, no MSPACE
+    assert t.paper_vp is vp
+    win._cmd_vplock()                          # toggle -> locked
+    assert layout_ops.is_viewport_locked(vp)
+    win._cmd_vplock()                          # toggle -> unlocked
+    assert not layout_ops.is_viewport_locked(vp)
+    win.close()

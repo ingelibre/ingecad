@@ -840,6 +840,7 @@ class MainWindow(QMainWindow):
         d.register("LAYOUT", self._cmd_layout)
         d.register("MSPACE", self._cmd_mspace)
         d.register("PSPACE", self._cmd_pspace)
+        d.register("VPLOCK", self._cmd_vplock)
         # Phase 4 drawing + Phase 5 editing tools.
         for name in ("LINE", "CIRCLE", "ARC", "PLINE", "RECTANG", "POLYGON",
                      "ELLIPSE", "POINT", "TEXT", "MTEXT",
@@ -875,6 +876,35 @@ class MainWindow(QMainWindow):
     def _cmd_pspace(self, *args) -> None:
         self._deactivate_viewport(echo=True)
 
+    def _cmd_vplock(self, *args) -> None:
+        """VPLOCK (BricsCAD): toggle the display lock of the active or
+        selected viewport. Optional ON/OFF argument."""
+        from core import layouts as layout_ops
+
+        vp = self._active_vp
+        if vp is None or not vp.is_alive:
+            vp = self.tools.paper_vp
+        if vp is None or not vp.is_alive:
+            self.command_line.echo(
+                tr("VPLOCK needs a viewport — select its border or MSPACE."))
+            return
+        self._vp_gesture_commit()   # settle any live wheel burst first
+        arg = (args[0].strip().upper() if args else "")
+        if arg in ("ON", "1"):
+            locked = True
+        elif arg in ("OFF", "0"):
+            locked = False
+        else:
+            locked = not layout_ops.is_viewport_locked(vp)
+        if locked == layout_ops.is_viewport_locked(vp):
+            pass    # already in that state: echo it anyway
+        else:
+            self.history.execute(
+                layout_ops.SetViewportLockCommand(vp, locked))
+        self.command_line.echo(
+            tr("Viewport display locked — the scale is protected.") if locked
+            else tr("Viewport display unlocked."))
+
     def _activate_viewport(self, vp) -> None:
         from core import layouts as layout_ops
 
@@ -883,9 +913,14 @@ class MainWindow(QMainWindow):
         self.viewport.active_vp_rect = layout_ops.viewport_rect(vp)
         self.viewport.update()
         label = layout_ops.scale_label(layout_ops.viewport_scale(vp))
-        self.command_line.echo(
-            tr("Viewport active (scale {scale}). Z + nXP sets the exact "
-               "scale (e.g. 1/100XP); PSPACE returns to paper.", scale=label))
+        if layout_ops.is_viewport_locked(vp):
+            self.command_line.echo(
+                tr("Viewport active (scale {scale}, display LOCKED — "
+                   "VPLOCK to unlock). PSPACE returns to paper.", scale=label))
+        else:
+            self.command_line.echo(
+                tr("Viewport active (scale {scale}). Z + nXP sets the exact "
+                   "scale (e.g. 1/100XP); PSPACE returns to paper.", scale=label))
 
     # -- wheel/pan navigation inside the active viewport ------------------------
     def vp_view_zoom(self, factor: float, anchor) -> bool:
@@ -896,6 +931,8 @@ class MainWindow(QMainWindow):
         vp = self._active_vp
         if vp is None or not vp.is_alive:
             return False
+        if layout_ops.is_viewport_locked(vp):
+            return False    # locked: the wheel falls through to the paper
         self._vp_gesture_begin(vp)
         layout_ops.zoom_viewport_view(vp, factor, anchor)
         self.document.dirty = True
@@ -910,6 +947,8 @@ class MainWindow(QMainWindow):
         vp = self._active_vp
         if vp is None or not vp.is_alive:
             return False
+        if layout_ops.is_viewport_locked(vp):
+            return False    # locked: the drag falls through to the paper
         self._vp_gesture_begin(vp)
         layout_ops.pan_viewport_view(vp, dx_world, dy_world)
         self.document.dirty = True
@@ -1006,6 +1045,13 @@ class MainWindow(QMainWindow):
             # a pending wheel/pan burst must land in history BEFORE the
             # explicit ZOOM command, so undo peels them in order
             self._vp_gesture_commit()
+        if active_vp is not None and layout_ops.is_viewport_locked(active_vp) \
+                and (layout_ops.parse_xp_factor(option) is not None
+                     or option.strip().upper() in ("", "E", "EXTENTS")):
+            # AutoCAD: a display-locked viewport keeps its view.
+            self.command_line.echo(
+                tr("Viewport is view-locked — VPLOCK to unlock."))
+            return
         factor = layout_ops.parse_xp_factor(option)
         if factor is not None:
             # AutoCAD's exact-scale idiom: ZOOM 1/100XP inside a viewport.

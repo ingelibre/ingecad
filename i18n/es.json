@@ -289,5 +289,10 @@
   "ZOOM [Extents/Window/Previous] or scale nXP:": "ZOOM [Extensión(E)/Ventana(W)/Previo(P)] o escala nXP:",
   "nXP needs an active viewport — MSPACE or double-click one first.": "nXP necesita una ventana gráfica activa — use MSPACE o doble clic en una.",
   "Viewport scale set to {scale}.": "Escala de la ventana gráfica fijada en {scale}.",
-  "Viewport view": "Vista de la ventana gráfica"
+  "Viewport view": "Vista de la ventana gráfica",
+  "Viewport is view-locked — VPLOCK to unlock.": "La ventana gráfica tiene la vista bloqueada — VPLOCK para desbloquear.",
+  "VPLOCK needs a viewport — select its border or MSPACE.": "VPLOCK necesita una ventana gráfica — seleccione su borde o use MSPACE.",
+  "Viewport display locked — the scale is protected.": "Vista de la ventana gráfica bloqueada — la escala queda protegida.",
+  "Viewport display unlocked.": "Vista de la ventana gráfica desbloqueada.",
+  "Viewport active (scale {scale}, display LOCKED — VPLOCK to unlock). PSPACE returns to paper.": "Ventana gráfica activa (escala {scale}, vista BLOQUEADA — VPLOCK para desbloquear). PSPACE vuelve al papel."
 }

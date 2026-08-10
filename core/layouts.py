@@ -509,6 +509,43 @@ def xp_zoom_command(vp, factor: float) -> SetViewportViewCommand:
         vp, view_height=float(vp.dxf.height) / factor)
 
 
+def is_viewport_locked(vp) -> bool:
+    """AutoCAD's display lock (flag 0x4000): the VIEW is frozen — wheel,
+    pan and nXP must not touch it. Moving/resizing/erasing the viewport
+    entity itself stays allowed (the lock protects the scale, not the
+    window)."""
+    from ezdxf.lldxf.const import VSF_LOCK_ZOOM
+
+    try:
+        return bool(int(vp.dxf.get("flags", 0)) & VSF_LOCK_ZOOM)
+    except (TypeError, ValueError):
+        return False
+
+
+class SetViewportLockCommand(Command):
+    """VPLOCK — toggle the display lock. Undoable; nothing rendered
+    changes, so no regen is needed."""
+
+    def __init__(self, vp, locked: bool) -> None:
+        self.name = "VPLOCK"
+        self.entity = vp
+        self.locked = locked
+
+    def _set(self, locked: bool, document) -> None:
+        from ezdxf.lldxf.const import VSF_LOCK_ZOOM
+
+        flags = int(self.entity.dxf.get("flags", 0))
+        self.entity.dxf.flags = (flags | VSF_LOCK_ZOOM) if locked \
+            else (flags & ~VSF_LOCK_ZOOM)
+        document.dirty = True
+
+    def do(self, document) -> None:
+        self._set(self.locked, document)
+
+    def undo(self, document) -> None:
+        self._set(not self.locked, document)
+
+
 def zoom_viewport_view(vp, factor: float, anchor=None) -> None:
     """Wheel zoom inside an active viewport (live, no Command): scale the
     view about the model point under ``anchor`` (paper coords), so the

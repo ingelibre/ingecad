@@ -1229,11 +1229,11 @@ class Viewport(QOpenGLWidget):
         """Middle/PAN drag: pans the paper — or the model inside the
         active viewport when MSPACE is on (AutoCAD)."""
         window = self._mspace_window()
-        if window is not None:
-            window.vp_view_pan(delta.x() / self.view.scale,
-                               -delta.y() / self.view.scale)
-        else:
-            self.view.pan_pixels(delta.x(), delta.y())
+        if window is not None and window.vp_view_pan(
+                delta.x() / self.view.scale, -delta.y() / self.view.scale):
+            return
+        # no active viewport, or its display is locked: pan the paper
+        self.view.pan_pixels(delta.x(), delta.y())
 
     def wheelEvent(self, event) -> None:
         notches = event.angleDelta().y() / 120.0
@@ -1242,10 +1242,11 @@ class Viewport(QOpenGLWidget):
             window = self._mspace_window()
             if window is not None:
                 # MSPACE: the wheel zooms the MODEL in the viewport,
-                # anchored at the cursor, exactly like the paper wheel.
+                # anchored at the cursor, exactly like the paper wheel —
+                # unless the display is locked, then the paper zooms.
                 wx, wy = self.view.screen_to_world(pos.x(), pos.y())
-                window.vp_view_zoom(1.2 ** notches, (wx, wy))
-                return
+                if window.vp_view_zoom(1.2 ** notches, (wx, wy)):
+                    return
             self.view.zoom_at(pos.x(), pos.y(), 1.2 ** notches)
             self.update()
 
