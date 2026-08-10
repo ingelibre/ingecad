@@ -664,7 +664,8 @@ class MainWindow(QMainWindow):
                 ("CIRCLE", tr("Circle")), ("ARC", tr("Arc")),
                 ("ELLIPSE", tr("Ellipse")), ("RECTANG", tr("Rectangle")),
                 ("POLYGON", tr("Polygon")), ("POINT", tr("Point")),
-                ("TEXT", tr("Text")), ("MTEXT", tr("Multiline text"))]
+                ("TEXT", tr("Text")), ("MTEXT", tr("Multiline text")),
+                ("HATCH", tr("Hatch"))]
         modify = [("ERASE", tr("Erase")), ("MOVE", tr("Move")),
                   ("COPY", tr("Copy")), ("ROTATE", tr("Rotate")),
                   ("SCALE", tr("Scale")), ("MIRROR", tr("Mirror")),

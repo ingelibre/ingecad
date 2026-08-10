@@ -425,9 +425,16 @@ Marco validó la recomendación estratégica. **Orden de trabajo decidido:**
 
 1. **Layout (pestañas Model/Paper space como AutoCAD) en IngeCAD** — es feature de la app,
    camino crítico de v0.1 (dims, Model/Layout tabs, PLOT). **ARRANCA ACÁ la próxima sesión.**
-2. **Cerrar v0.1 con r2004 para «Guardar como DWG»** — r2004 ya lo acepta ODA/AutoCAD hoy
-   (cambio de ~1 línea desde el r2000 actual); ODA opcional (instalación de un clic) cubre
-   el caso raro de quien necesite exportar r2018 específicamente.
+2. ~~**Cerrar v0.1 con r2004 para «Guardar como DWG»**~~ — **DESCARTADO 2026-08-10, la
+   premisa era falsa para nuestro camino**: el «r2004 ya funciona» de L4 se midió con
+   `dwgrewrite` de un modelo decodificado de DWG; el modelo que construye `in_dxf` (el
+   camino dxf2dwg que IngeCAD usa) produce un r2004 con el object stream roto que ni
+   LibreDWG relee (repro mínimo: DXF de 1 línea → `--as r2004` → ENTITIES vacío; falla
+   igual en stock 0.14.8578, en el stack parcheado y en la base pre-ventana). v0.1 cierra
+   con r2000 (que abre en todo AutoCAD/BricsCAD desde 2000); el bug r2004 cross-modelo es
+   el siguiente objetivo Track L. La re-vendorización sí se hizo: base 0.14.8578 + 17
+   (10 nuestros ya absorbidos upstream, #1387 proxies incluido) — detalle en
+   `tools/libredwg-patches/README.md`.
 3. **r2018 writer propio = Track L de fondo**, sin bloquear el producto: madura en la rama
    local `l4-r2018-writer` sesión a sesión cuando haya ganas. NO es camino crítico porque
    r2004 ya resuelve el guardado. Ver «CONTINUAR L4» abajo para retomarlo.

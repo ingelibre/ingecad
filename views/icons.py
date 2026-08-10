@@ -247,6 +247,29 @@ def _fillet():
     return pm
 
 
+def _hatch():
+    pm, p = _canvas()
+    p.drawRect(QRectF(4, 4, 16, 16))                 # the boundary
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.2))
+    for i in range(4):                               # ANSI31-style diagonals
+        offset = 4 + i * 4
+        p.drawLine(QPointF(4, 4 + offset), QPointF(4 + offset, 4))
+    p.restore()
+    p.end()
+    return pm
+
+
+def _insert():
+    pm, p = _canvas()
+    p.drawRect(QRectF(6, 6, 12, 12))                 # the block
+    p.drawLine(QPointF(9, 12), QPointF(15, 12))      # its geometry
+    p.drawLine(QPointF(12, 9), QPointF(12, 15))
+    _node(p, 6, 18)                                  # insertion point
+    p.end()
+    return pm
+
+
 # -- layout / paper-space icons -------------------------------------------------
 
 def _mview():
@@ -304,6 +327,7 @@ _PAINTERS = {
     "ERASE": _erase, "MOVE": _move, "COPY": _copy, "ROTATE": _rotate,
     "SCALE": _scale, "MIRROR": _mirror, "OFFSET": _offset, "TRIM": _trim,
     "EXTEND": _extend, "FILLET": _fillet,
+    "HATCH": _hatch, "-HATCH": _hatch, "INSERT": _insert,
     "MVIEW": _mview, "VPLOCK": _vplock, "PAGESETUP": _pagesetup,
     "LAYOUT": _layout,
 }

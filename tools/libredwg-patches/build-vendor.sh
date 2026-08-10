@@ -13,8 +13,9 @@
 # the release tarball ships configure and the Makefiles already generated.
 set -euo pipefail
 
-VERSION=${LIBREDWG_VERSION:-0.14.8556}
-SHA256=${LIBREDWG_SHA256:-}
+VERSION=${LIBREDWG_VERSION:-0.14.8578}
+# Pinned: GitHub's dist.sha256 for this release, verified 2026-08-10.
+SHA256=${LIBREDWG_SHA256:-2a93a33c56b836d8e4aa3c4009abbc348bd483b640d4b8133b9370c9fafa8e55}
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 PATCH="$ROOT/tools/libredwg-patches/current/ingecad-vendor-$VERSION.patch"
 WORK=${LIBREDWG_BUILD_DIR:-$ROOT/build/libredwg}

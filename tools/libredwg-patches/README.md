@@ -3,7 +3,39 @@
 IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 (`vendor/libredwg/bin`, gitignored).
 
-## Current state — 2026-08-07: THIRTEEN patches, all submitted upstream
+## Current state — 2026-08-10: base 0.14.8578 + SEVENTEEN patches
+
+Re-vendorized onto release **0.14.8578** (`current/ingecad-vendor-0.14.8578.patch`,
+built by `build-vendor.sh`). Upstream absorbed **10 of our fixes** between 0.14.8556
+and this tag (the whole a8ce2489..0.14.8578 window is our merged PRs: SEQEND
+#1370, SPLINE fit-only #1374, CMC #1376, true color #1377, MTEXT 50 #1379,
+`--as r12` #1380, pre-R13 addresses #1381 (rurban's version), $MODEL_SPACE #1384,
+sentinel search #1362-redo, trailing newline #1366-redo). The 17 still carried:
+
+- the 8 unmerged read fixes of the 2026-08-06 wave (#1358, #1359, #1360,
+  #1364, #1365, #1368, #1369 + the TIMEBLL spec halves),
+- the unmerged write/import fixes: subentity ownership #1371, stale-subentity
+  #1372, BLOCK_HEADER-without-BLOCK #1373, UTF-8→codepage #1375 (dynapi/MTEXT
+  parts), next-handle-max #1382, MINSERT defaults #1385, r14 linetype #1378,
+  proxy-graphics preservation **#1387** (Civil 3D UNKNOWN_ENT → ACAD_PROXY_ENTITY,
+  now actually shipped in the app),
+- the TV-NUL comment refinement.
+
+Verified: 304 IngeCAD tests green; read parity exact on the capturas plans
+(10 084 = 10 084, 9 847 = 9 847 entities old vs new); write-path fuzz over 80
+seeds improves from 4 OK / 12 EMPTY / 8 LOST / 17 EXTRA (old vendor) to
+10 OK / 33 DIFF with **zero** EMPTY/LOST/EXTRA.
+
+⚠️ **r2004 as a save target stays OFF.** Any model built by `in_dxf` (the
+dxf2dwg path IngeCAD uses) encodes an r2004 whose object stream LibreDWG
+cannot re-read (objects truncate at ~21-39, ownership handles broken) — on
+stock 0.14.8578, on the patched stack, and on the pre-window base alike.
+Minimal repro: `ezdxf 1-line DXF → dxf2dwg --as r2004 → dwg2dxf → empty
+ENTITIES`. The L4 notes' "r2004 works" was measured on `dwgrewrite` of a
+same-version DWG-decoded model + the ODA oracle — a different path. Next
+Track L target; IngeCAD keeps writing r2000.
+
+## Previous state — 2026-08-07: THIRTEEN patches, all submitted upstream
 
 > **`vendor/libredwg` is no longer stock.** It is built from `0.14.8556` plus the
 > thirteen fixes below, every one of them open as a PR upstream. Each exists because
