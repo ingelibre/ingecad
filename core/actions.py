@@ -1106,31 +1106,51 @@ class SetPropertyCommand(Command):
         document.dirty = True
 
 
-def add_ellipse(center, major_axis, ratio: float) -> AddEntityCommand:
+def add_ellipse(center, major_axis, ratio: float,
+                start_param: float = 0.0,
+                end_param: float = math.tau) -> AddEntityCommand:
     """major_axis: vector from center to the major-axis endpoint. ratio =
-    minor/major in (0, 1]."""
+    minor/major in (0, 1]. Non-default params make an elliptical arc."""
     return AddEntityCommand(
         "ELLIPSE",
         lambda msp: msp.add_ellipse((center[0], center[1]),
                                     major_axis=(major_axis[0], major_axis[1]),
-                                    ratio=ratio))
+                                    ratio=ratio, start_param=start_param,
+                                    end_param=end_param))
+
+
+def _ellipse_normalize(center, first_axis, other_dist: float):
+    """The FIRST axis may be the minor one (official ELLIPSE rule): when the
+    other half-axis is longer, the axes swap — never clamp the ratio."""
+    first_len = math.hypot(*first_axis)
+    if first_len <= 1e-12:
+        return center, first_axis, 1.0
+    if other_dist <= first_len:
+        return center, first_axis, other_dist / first_len
+    # perpendicular (CCW) axis becomes the major one
+    scale = other_dist / first_len
+    major = (-first_axis[1] * scale, first_axis[0] * scale)
+    return center, major, first_len / other_dist
 
 
 def ellipse_from_axis(p1, p2, other_dist: float):
     """Axis endpoints p1,p2 + distance to the other axis -> (center, major, ratio)."""
     center = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
-    major = ((p2[0] - p1[0]) / 2.0, (p2[1] - p1[1]) / 2.0)
-    major_len = math.hypot(*major)
-    ratio = min(1.0, other_dist / major_len) if major_len > 1e-12 else 1.0
-    return center, major, ratio
+    first = ((p2[0] - p1[0]) / 2.0, (p2[1] - p1[1]) / 2.0)
+    return _ellipse_normalize(center, first, other_dist)
 
 
 def ellipse_from_center(center, axis_end, other_dist: float):
-    """Center + major-axis endpoint + distance to the other axis."""
-    major = (axis_end[0] - center[0], axis_end[1] - center[1])
-    major_len = math.hypot(*major)
-    ratio = min(1.0, other_dist / major_len) if major_len > 1e-12 else 1.0
-    return center, major, ratio
+    """Center + first-axis endpoint + distance to the other axis."""
+    first = (axis_end[0] - center[0], axis_end[1] - center[1])
+    return _ellipse_normalize(center, first, other_dist)
+
+
+def ellipse_param_from_angle(ratio: float, angle_deg: float) -> float:
+    """True angle from the center (relative to the major axis) -> the DXF
+    parametric angle t of p(t) = c + a·cos(t) + b·sin(t)."""
+    a = math.radians(angle_deg)
+    return math.atan2(math.sin(a), max(ratio, 1e-12) * math.cos(a)) % math.tau
 
 
 def add_point(pos) -> AddEntityCommand:
@@ -1144,12 +1164,27 @@ def _current_text_style(msp) -> str:
     return name if name in msp.doc.styles else "Standard"
 
 
-def add_text(pos, text: str, height: float, rotation: float = 0.0) -> AddEntityCommand:
+def add_text(pos, text: str, height: float, rotation: float = 0.0,
+             align: str = "LEFT", p2=None,
+             style: str | None = None) -> AddEntityCommand:
+    """TEXT with an AutoCAD justification (TextEntityAlignment name).
+    ALIGNED/FIT take ``p2`` as the second baseline point."""
     def make(msp):
+        from ezdxf.enums import TextEntityAlignment
+
+        chosen = style if style and style in msp.doc.styles \
+            else _current_text_style(msp)
         entity = msp.add_text(
             text, height=height,
-            dxfattribs={"rotation": rotation, "style": _current_text_style(msp)})
-        entity.set_placement((pos[0], pos[1]))
+            dxfattribs={"rotation": rotation, "style": chosen})
+        anchor = getattr(TextEntityAlignment, align, TextEntityAlignment.LEFT)
+        if align in ("ALIGNED", "FIT") and p2 is not None:
+            entity.set_placement((pos[0], pos[1]), (p2[0], p2[1]),
+                                 align=anchor)
+        elif align == "LEFT":
+            entity.set_placement((pos[0], pos[1]))
+        else:
+            entity.set_placement((pos[0], pos[1]), align=anchor)
         return entity
     return AddEntityCommand("TEXT", make)
 

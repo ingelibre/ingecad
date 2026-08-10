@@ -14,6 +14,16 @@ from tools.base import ToolContext
 from tools.draw import ArcTool, EllipseTool, MTextTool, PointTool, TextTool
 
 
+@pytest.fixture(autouse=True)
+def _fresh_text_state():
+    # TEXT's height/rotation defaults are session-sticky like AutoCAD's
+    # TEXTSIZE / last rotation — reset them per test.
+    TextTool.default_height = 2.5
+    TextTool.last_rotation = 0.0
+    TextTool._last_final = None
+    yield
+
+
 class Harness:
     def __init__(self, text_answer="Hola"):
         self.document = Document(ezdxf.new("R2018", setup=True))

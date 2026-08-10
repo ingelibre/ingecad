@@ -552,57 +552,190 @@ class ArcTool(Tool):
 
 
 class EllipseTool(Tool):
+    """ELLIPSE with AutoCAD's full tree: axis-endpoint (the first axis may
+    be the minor one), Center, Rotation (projected circle, invalid between
+    89.4 and 90.6 degrees), and Arc — elliptical arcs with start/end in
+    Angle or Parameter mode plus Included angle."""
+
     def start(self) -> None:
         self.name = "ELLIPSE"
         self._mode = "AXIS"
+        self._arc = False
         self._pts: list[Point] = []
-        self.ctx.prompt(tr("ELLIPSE Specify axis endpoint or [Center]:"))
+        self._geom = None            # (center, major, ratio) once known
+        self._await = None
+        self._start_deg = None
+        self._param_mode = False
+        self.ctx.prompt(tr("Specify axis endpoint of ellipse or [Arc/Center]:"))
 
+    # -- shared geometry -------------------------------------------------------
+    def _resolve(self, other: float):
+        if self._mode == "AXIS":
+            return actions.ellipse_from_axis(self._pts[0], self._pts[1], other)
+        return actions.ellipse_from_center(self._pts[0], self._pts[1], other)
+
+    def _axis_center(self) -> Point:
+        if self._mode == "AXIS":
+            return ((self._pts[0][0] + self._pts[1][0]) / 2.0,
+                    (self._pts[0][1] + self._pts[1][1]) / 2.0)
+        return self._pts[0]
+
+    def _finish_full(self, other: float) -> None:
+        center, major, ratio = self._resolve(other)
+        if ratio > 1e-9:
+            if self._arc:
+                self._geom = (center, major, ratio)
+                self._await = "start_angle"
+                self.ctx.prompt(tr("Specify start angle or [Parameter]:"))
+                return
+            self.ctx.execute(actions.add_ellipse(center, major, ratio))
+        self.ctx.finish()
+
+    def _param_of(self, value_deg: float) -> float:
+        _center, _major, ratio = self._geom
+        if self._param_mode:
+            return math.radians(value_deg) % math.tau
+        return actions.ellipse_param_from_angle(ratio, value_deg)
+
+    def _angle_of_point(self, point: Point) -> float:
+        """True angle of a picked point, measured from the major axis."""
+        center, major, _ratio = self._geom
+        axis = math.degrees(math.atan2(major[1], major[0]))
+        raw = math.degrees(math.atan2(point[1] - center[1],
+                                      point[0] - center[0]))
+        return raw - axis
+
+    def _finish_arc(self, end_deg: float) -> None:
+        center, major, ratio = self._geom
+        start = self._param_of(self._start_deg)
+        end = self._param_of(end_deg)
+        if abs((end - start) % math.tau) < 1e-9:
+            end = start + math.tau
+        self.ctx.execute(actions.add_ellipse(
+            center, major, ratio, start_param=start, end_param=end))
+        self.ctx.finish()
+
+    # -- input -----------------------------------------------------------------
     def on_option(self, text: str) -> bool:
-        if text.upper() in ("C", "CENTER") and not self._pts:
-            self._mode = "CENTER"
-            self.ctx.prompt(tr("Specify center of ellipse:"))
+        t = text.upper()
+        value = _parse_number(text)
+        if not self._pts and self._await is None:
+            if t in ("C", "CENTER"):
+                self._mode = "CENTER"
+                self.ctx.prompt(tr("Specify center of ellipse:"))
+                return True
+            if t in ("A", "ARC") and not self._arc:
+                self._arc = True
+                self.ctx.prompt(tr(
+                    "Specify axis endpoint of elliptical arc or [Center]:"))
+                return True
+        if self._await == "distance":
+            if t in ("R", "ROTATION"):
+                self._await = "rotation"
+                self.ctx.prompt(tr("Specify rotation around major axis:"))
+                return True
+            if value is not None and value > 0:
+                self._await = None
+                self._finish_full(value)
+                return True
+            return False
+        if self._await == "rotation":
+            if value is None:
+                return False
+            folded = abs(value) % 180.0
+            if 89.4 <= folded <= 90.6:
+                self.ctx.echo(tr("Invalid rotation angle."))
+                return True
+            first_len = math.dist(self._axis_center(), self._pts[1]) \
+                if self._mode == "CENTER" else \
+                math.dist(self._pts[0], self._pts[1]) / 2.0
+            other = first_len * abs(math.cos(math.radians(value)))
+            self._await = None
+            self._finish_full(max(other, first_len * 1e-6))
+            return True
+        if self._await == "start_angle":
+            if t in ("P", "PARAMETER"):
+                self._param_mode = not self._param_mode
+                self.ctx.prompt(
+                    tr("Specify start parameter or [Angle]:")
+                    if self._param_mode
+                    else tr("Specify start angle or [Parameter]:"))
+                return True
+            if t in ("A", "ANGLE") and self._param_mode:
+                self._param_mode = False
+                self.ctx.prompt(tr("Specify start angle or [Parameter]:"))
+                return True
+            if value is None:
+                return False
+            self._start_deg = value
+            self._await = "end_angle"
+            self.ctx.prompt(
+                tr("Specify end angle or [Parameter/Included angle]:"))
+            return True
+        if self._await == "end_angle":
+            if t in ("P", "PARAMETER"):
+                self._param_mode = not self._param_mode
+                self.ctx.prompt(
+                    tr("Specify end parameter or [Angle/Included angle]:")
+                    if self._param_mode
+                    else tr("Specify end angle or [Parameter/Included angle]:"))
+                return True
+            if t in ("I", "INCLUDED"):
+                self._await = "included"
+                self.ctx.prompt(tr("Specify included angle for arc <180>:"))
+                return True
+            if value is None:
+                return False
+            self._finish_arc(value)
+            return True
+        if self._await == "included":
+            if value is None:
+                return False
+            # included is measured in the same mode as the start value
+            self._finish_arc(self._start_deg + value)
             return True
         return False
 
+    def on_enter(self) -> None:
+        if self._await == "included":
+            self._finish_arc(self._start_deg + 180.0)
+            return
+        self.ctx.finish()
+
     def on_point(self, point: Point) -> None:
+        if self._await == "distance":
+            self._await = None
+            self._finish_full(math.dist(self._axis_center(), point))
+            return
+        if self._await == "start_angle":
+            self._param_mode = False
+            self._start_deg = self._angle_of_point(point)
+            self._await = "end_angle"
+            self.ctx.prompt(
+                tr("Specify end angle or [Parameter/Included angle]:"))
+            return
+        if self._await == "end_angle":
+            self._param_mode = False
+            self._finish_arc(self._angle_of_point(point))
+            return
+        if self._await is not None:
+            return
         self._pts.append(point)
         self.last_point = point
-        need = 3
         if len(self._pts) < 2:
             self.ctx.prompt(tr("Specify other endpoint of axis:")
                             if self._mode == "AXIS"
                             else tr("Specify endpoint of axis:"))
-        elif len(self._pts) < need:
-            self.ctx.prompt(tr("Specify distance to other axis:"))
         else:
-            self._build()
-
-    def _build(self) -> None:
-        p1, p2, p3 = self._pts
-        if self._mode == "AXIS":
-            center = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
-            other = math.dist(center, p3)
-            center, major, ratio = actions.ellipse_from_axis(p1, p2, other)
-        else:  # CENTER: p1=center, p2=axis endpoint, p3=distance
-            other = math.dist(p1, p3)
-            center, major, ratio = actions.ellipse_from_center(p1, p2, other)
-        if ratio > 1e-9:
-            self.ctx.execute(actions.add_ellipse(center, major, ratio))
-        self.ctx.finish()
+            self._await = "distance"
+            self.ctx.prompt(tr("Specify distance to other axis or [Rotation]:"))
 
     def preview_segments(self, cursor: Point):
-        if len(self._pts) == 2:
-            if self._mode == "AXIS":
-                center = ((self._pts[0][0] + self._pts[1][0]) / 2.0,
-                          (self._pts[0][1] + self._pts[1][1]) / 2.0)
-            else:
-                center = self._pts[0]
-            other = math.dist(center, cursor)
-            major = math.dist(center, self._pts[1] if self._mode == "AXIS"
-                              else self._pts[1])
-            return _ellipse_preview(self._pts[0], self._pts[1], other, self._mode)
-        if self._pts:
+        if self._await == "distance" and len(self._pts) == 2:
+            other = math.dist(self._axis_center(), cursor)
+            return _ellipse_preview(self._pts[0], self._pts[1], other,
+                                    self._mode)
+        if self._pts and self._await is None:
             return [(self._pts[0], cursor)]
         return []
 
@@ -619,16 +752,30 @@ class PointTool(Tool):
         self.ctx.prompt(tr("Specify a point (Enter ends):"))
 
 
+_JUSTIFY_KEYS = {
+    "L": "LEFT", "LEFT": "LEFT", "C": "CENTER", "CENTER": "CENTER",
+    "R": "RIGHT", "RIGHT": "RIGHT", "A": "ALIGNED", "ALIGN": "ALIGNED",
+    "M": "MIDDLE", "MIDDLE": "MIDDLE", "F": "FIT", "FIT": "FIT",
+    "TL": "TOP_LEFT", "TC": "TOP_CENTER", "TR": "TOP_RIGHT",
+    "ML": "MIDDLE_LEFT", "MC": "MIDDLE_CENTER", "MR": "MIDDLE_RIGHT",
+    "BL": "BOTTOM_LEFT", "BC": "BOTTOM_CENTER", "BR": "BOTTOM_RIGHT",
+}
+
+
 class TextTool(Tool):
     """Single-line TEXT (DTEXT): type in place on the canvas, AutoCAD-style.
 
-    After start point / height / rotation, a caret appears at the point and
-    the typed characters show live. Enter commits the line and starts a new
-    one below; clicking a new point commits and restarts there; Esc finishes,
-    keeping every completed line.
+    First prompt takes [Justify/Style] (justification keywords also work
+    directly); Align/Fit take two baseline points; the height prompt is
+    skipped for fixed-height styles; Enter at the start prompt repeats
+    below the previous text. After the prompts a caret appears and typed
+    characters show live; Enter commits the line and starts a new one
+    below; a new pick restarts there; Esc finishes.
     """
 
-    default_height = 2.5   # session-sticky, like AutoCAD's last height
+    default_height = 2.5     # TEXTSIZE: session-sticky
+    last_rotation = 0.0
+    _last_final = None       # (pos, height, rotation) of the last session
 
     def start(self) -> None:
         self.name = "TEXT"
@@ -636,8 +783,50 @@ class TextTool(Tool):
         self._height = None
         self.typing = False
         self._buffer = ""
-        self._rotation = 0.0
-        self.ctx.prompt(tr("TEXT Specify start point:"))
+        self._rotation = None
+        self._align = "LEFT"
+        self._p2 = None
+        self._await = None
+        self._style = None
+        style, fixed = self._style_info()
+        self.ctx.echo(tr('Current text style: "{s}"  Text height: {h:g}',
+                         s=style, h=fixed or type(self).default_height))
+        self.ctx.prompt(tr("Specify start point of text or [Justify/Style]:"))
+
+    # -- style plumbing --------------------------------------------------------
+    def _document(self):
+        services = self.ctx.services
+        window = getattr(services, "window", None) if services else None
+        return getattr(window, "document", None)
+
+    def _style_info(self) -> tuple[str, float]:
+        """(current style name, fixed height or 0)."""
+        document = self._document()
+        name = self._style
+        if document is not None:
+            doc = document.doc
+            if name is None:
+                name = doc.header.get("$TEXTSTYLE", "Standard")
+            if name in doc.styles:
+                try:
+                    return name, float(doc.styles.get(name).dxf.height or 0.0)
+                except Exception:
+                    return name, 0.0
+        return name or "Standard", 0.0
+
+    # -- prompts ---------------------------------------------------------------
+    def _after_point(self) -> None:
+        _style, fixed = self._style_info()
+        if fixed > 0.0:
+            self._height = fixed
+            self._rotation_prompt()
+        else:
+            self.ctx.prompt(tr("Specify height <{h:g}>:",
+                               h=type(self).default_height))
+
+    def _rotation_prompt(self) -> None:
+        self.ctx.prompt(tr("Specify rotation angle of text <{r:g}>:",
+                           r=type(self).last_rotation))
 
     def on_point(self, point: Point) -> None:
         if self.typing:
@@ -645,27 +834,114 @@ class TextTool(Tool):
             self._pos = point
             self._buffer = ""
             return
-        self._pos = point
-        self.last_point = point
-        self.ctx.prompt(tr("Specify height <{h}>:", h=type(self).default_height))
+        if self._await == "align_p1":
+            self._pos = point
+            self.last_point = point
+            self._await = "align_p2"
+            self.ctx.prompt(tr("Specify second endpoint of text baseline:"))
+            return
+        if self._await == "align_p2":
+            self._p2 = point
+            self._rotation = math.degrees(math.atan2(
+                point[1] - self._pos[1], point[0] - self._pos[0]))
+            self._await = None
+            if self._align == "FIT":
+                self.ctx.prompt(tr("Specify height <{h:g}>:",
+                                   h=type(self).default_height))
+                return
+            # ALIGNED: height derives from the fit; nominal for the entity
+            span = max(math.dist(self._pos, self._p2), 1e-9)
+            self._height = span / 4.0
+            self._begin_typing()
+            return
+        if self._pos is None:
+            self._pos = point
+            self.last_point = point
+            self._after_point()
 
     def on_option(self, text: str) -> bool:
-        if self._pos is None or self.typing:
+        t = text.upper()
+        if self.typing:
+            return False
+        if self._await == "justify":
+            align = _JUSTIFY_KEYS.get(t)
+            if align is None:
+                return False
+            self._await = None
+            self._set_align(align)
+            return True
+        if self._await == "style":
+            self._await = None
+            if t == "?":
+                document = self._document()
+                if document is not None:
+                    names = ", ".join(s.dxf.name for s in document.doc.styles)
+                    self.ctx.echo(tr("Text styles: {names}", names=names))
+                self.ctx.prompt(
+                    tr("Specify start point of text or [Justify/Style]:"))
+                return True
+            if text.strip():
+                document = self._document()
+                if document is not None \
+                        and text.strip() not in document.doc.styles:
+                    self.ctx.echo(tr('Unknown text style "{name}".',
+                                     name=text.strip()))
+                else:
+                    self._style = text.strip()
+                    if document is not None:
+                        document.doc.header["$TEXTSTYLE"] = self._style
+                        document.dirty = True
+            self.ctx.prompt(
+                tr("Specify start point of text or [Justify/Style]:"))
+            return True
+        if self._pos is None and self._await is None:
+            if t in ("J", "JUSTIFY"):
+                self._await = "justify"
+                self.ctx.prompt(tr(
+                    "Enter an option [Left/Center/Right/Align/Middle/Fit/"
+                    "TL/TC/TR/ML/MC/MR/BL/BC/BR]:"))
+                return True
+            if t in ("S", "STYLE"):
+                self._await = "style"
+                style, _f = self._style_info()
+                self.ctx.prompt(tr("Enter style name or [?] <{s}>:", s=style))
+                return True
+            align = _JUSTIFY_KEYS.get(t)
+            if align is not None and t not in ("L", "LEFT"):
+                # justification keywords work directly at the first prompt
+                self._set_align(align)
+                return True
+            return False
+        if self._pos is None:
             return False
         if self._height is None:
-            try:
-                self._height = float(text) if text else type(self).default_height
-            except ValueError:
+            value = _parse_number(text) if text else type(self).default_height
+            if value is None or value <= 0:
                 return False
-            type(self).default_height = self._height
-            self.ctx.prompt(tr("Specify rotation angle <0>:"))
+            self._height = value
+            type(self).default_height = value
+            if self._align == "FIT":
+                self._begin_typing()   # rotation comes from the two points
+            else:
+                self._rotation_prompt()
             return True
-        try:
-            self._rotation = float(text) if text else 0.0
-        except ValueError:
-            return False
-        self._begin_typing()
-        return True
+        if self._rotation is None:
+            value = _parse_number(text) if text else type(self).last_rotation
+            if value is None:
+                return False
+            self._rotation = value
+            type(self).last_rotation = value
+            self._begin_typing()
+            return True
+        return False
+
+    def _set_align(self, align: str) -> None:
+        self._align = align
+        if align in ("ALIGNED", "FIT"):
+            self._await = "align_p1"
+            self.ctx.prompt(tr("Specify first endpoint of text baseline:"))
+        else:
+            self.ctx.prompt(tr("Specify start point of text or [Justify/Style]:"))
 
     def on_enter(self) -> None:
         if self.typing:
@@ -673,15 +949,33 @@ class TextTool(Tool):
             self._pos = self._next_line_pos()
             self._buffer = ""
             return
+        if self._pos is None and self._await is None:
+            last = type(self)._last_final
+            if last is not None:
+                # documented: Enter repeats directly beneath the previous
+                # text, skipping the height and rotation prompts
+                pos, height, rotation = last
+                self._pos, self._height, self._rotation = pos, height, rotation
+                self._pos = self._next_line_pos()
+                self._begin_typing()
+                return
+            self.ctx.finish()
+            return
+        if self._await == "style":
+            self.on_option("")       # keep the current style
+            return
         if self._pos is None:
             self.ctx.finish()
         elif self._height is None:
-            self._height = type(self).default_height
-            self.ctx.prompt(tr("Specify rotation angle <0>:"))
+            self.on_option("")
+        elif self._rotation is None:
+            self.on_option("")
         else:
             self._begin_typing()
 
     def _begin_typing(self) -> None:
+        if self._rotation is None:
+            self._rotation = type(self).last_rotation
         self.typing = True
         self._buffer = ""
         self.ctx.prompt(tr("Enter text (Enter for new line, Esc to finish):"))
@@ -706,12 +1000,17 @@ class TextTool(Tool):
     def _commit_line(self) -> None:
         if self._buffer.strip():
             self.ctx.execute(actions.add_text(
-                self._pos, self._buffer, self._height, self._rotation))
+                self._pos, self._buffer, self._height, self._rotation,
+                align=self._align, p2=self._p2, style=self._style))
+            type(self)._last_final = (self._pos, self._height, self._rotation)
 
     def _next_line_pos(self) -> Point:
         # baseline drops by 1.5x the height, in the text's local -Y direction
         d = 1.5 * self._height
         r = math.radians(self._rotation)
+        if self._p2 is not None:      # ALIGNED/FIT: the whole baseline drops
+            self._p2 = (self._p2[0] + d * math.sin(r),
+                        self._p2[1] - d * math.cos(r))
         return (self._pos[0] + d * math.sin(r), self._pos[1] - d * math.cos(r))
 
 

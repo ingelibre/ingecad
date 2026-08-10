@@ -685,3 +685,203 @@ def test_polygon_sides_default_is_session_sticky():
     tool2.on_point((60.0, 0.0))              # mode default I + dragged pick
     plines = h.msp.query("LWPOLYLINE")
     assert len(plines[1].get_points("xyseb")) == 6
+
+
+# -- ELLIPSE: axis swap, Rotation, Arc -----------------------------------------
+
+from tools.draw import EllipseTool, TextTool  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_text_state():
+    TextTool.default_height = 2.5
+    TextTool.last_rotation = 0.0
+    TextTool._last_final = None
+    yield
+
+
+def test_ellipse_first_axis_may_be_minor():
+    # official rule: the first axis defines the MINOR axis when the other
+    # half-axis is longer — swap, never clamp
+    center, major, ratio = actions.ellipse_from_axis((-5, 0), (5, 0), 12.0)
+    assert center == (0.0, 0.0)
+    assert (major[0], major[1]) == (pytest.approx(0.0), pytest.approx(12.0))
+    assert ratio == pytest.approx(5.0 / 12.0)
+
+
+def test_ellipse_rotation_projected_circle():
+    h = Harness()
+    tool = EllipseTool(h.ctx)
+    tool.start()
+    tool.on_point((0.0, 0.0))
+    tool.on_point((20.0, 0.0))
+    assert tool.on_option("R")
+    assert tool.on_option("60")               # minor = major * cos(60) = 0.5
+    e = h.msp.query("ELLIPSE")[0]
+    assert e.dxf.ratio == pytest.approx(0.5)
+    # invalid band 89.4..90.6 rejected
+    h2 = Harness()
+    tool2 = EllipseTool(h2.ctx)
+    tool2.start()
+    tool2.on_point((0.0, 0.0))
+    tool2.on_point((20.0, 0.0))
+    assert tool2.on_option("R")
+    assert tool2.on_option("90")
+    assert any("Invalid rotation" in p for p in h2.prompts)
+    assert not h2.msp.query("ELLIPSE")
+
+
+def test_ellipse_arc_angles():
+    h = Harness()
+    tool = EllipseTool(h.ctx)
+    tool.start()
+    assert tool.on_option("A")                # elliptical arc
+    tool.on_point((-10.0, 0.0))
+    tool.on_point((10.0, 0.0))
+    assert tool.on_option("5")                # other half-axis
+    assert tool.on_option("0")                # start angle
+    assert tool.on_option("90")               # end angle
+    e = h.msp.query("ELLIPSE")[0]
+    assert e.dxf.start_param == pytest.approx(0.0)
+    # true angle 90 == parameter pi/2 on the axis
+    assert e.dxf.end_param == pytest.approx(math.pi / 2.0)
+
+
+def test_ellipse_arc_included_and_angle_param_mapping():
+    h = Harness()
+    tool = EllipseTool(h.ctx)
+    tool.start()
+    assert tool.on_option("A")
+    tool.on_point((-10.0, 0.0))
+    tool.on_point((10.0, 0.0))
+    assert tool.on_option("5")                # ratio 0.5
+    assert tool.on_option("45")               # start TRUE angle 45
+    assert tool.on_option("I")                # included
+    assert tool.on_option("90")
+    e = h.msp.query("ELLIPSE")[0]
+    # true angle 45 with ratio .5 -> param = atan2(sin45, .5*cos45)
+    expected = math.atan2(math.sin(math.radians(45)),
+                          0.5 * math.cos(math.radians(45)))
+    assert e.dxf.start_param == pytest.approx(expected)
+
+
+def test_ellipse_arc_parameter_mode():
+    h = Harness()
+    tool = EllipseTool(h.ctx)
+    tool.start()
+    assert tool.on_option("A")
+    tool.on_point((-10.0, 0.0))
+    tool.on_point((10.0, 0.0))
+    assert tool.on_option("5")
+    assert tool.on_option("P")                # parameter mode
+    assert tool.on_option("30")               # start param 30 deg exactly
+    assert tool.on_option("120")              # end param
+    e = h.msp.query("ELLIPSE")[0]
+    assert e.dxf.start_param == pytest.approx(math.radians(30))
+    assert e.dxf.end_param == pytest.approx(math.radians(120))
+
+
+# -- TEXT: Justify + Style -----------------------------------------------------
+
+def _type_text(tool, text):
+    for ch in text:
+        tool.on_char(ch)
+
+
+def test_text_justify_center():
+    from ezdxf.enums import TextEntityAlignment
+
+    h = Harness()
+    tool = TextTool(h.ctx)
+    tool.start()
+    assert tool.on_option("J")
+    assert tool.on_option("C")                # Center
+    tool.on_point((50.0, 20.0))
+    tool.on_enter()                           # height default
+    tool.on_enter()                           # rotation default
+    _type_text(tool, "EJE")
+    tool.finish_typing()
+    t = h.msp.query("TEXT")[0]
+    assert t.get_align_enum() == TextEntityAlignment.CENTER
+    p = t.get_placement()[1]
+    assert (p.x, p.y) == (pytest.approx(50.0), pytest.approx(20.0))
+
+
+def test_text_justify_keyword_direct_and_mc():
+    from ezdxf.enums import TextEntityAlignment
+
+    h = Harness()
+    tool = TextTool(h.ctx)
+    tool.start()
+    assert tool.on_option("MC")               # direct at the first prompt
+    tool.on_point((5.0, 5.0))
+    tool.on_enter()
+    tool.on_enter()
+    _type_text(tool, "X")
+    tool.finish_typing()
+    t = h.msp.query("TEXT")[0]
+    assert t.get_align_enum() == TextEntityAlignment.MIDDLE_CENTER
+
+
+def test_text_align_two_points_no_height_prompt():
+    from ezdxf.enums import TextEntityAlignment
+
+    h = Harness()
+    tool = TextTool(h.ctx)
+    tool.start()
+    assert tool.on_option("A")                # Align
+    tool.on_point((0.0, 0.0))
+    tool.on_point((30.0, 0.0))
+    assert tool.typing                        # straight to typing: no height
+    _type_text(tool, "LINDERO")
+    tool.finish_typing()
+    t = h.msp.query("TEXT")[0]
+    assert t.get_align_enum() == TextEntityAlignment.ALIGNED
+
+
+def test_text_style_option_and_fixed_height_skip():
+    h = Harness()
+    doc = h.document.doc
+    doc.styles.new("TITULO", dxfattribs={"height": 5.0})
+
+    class Window:
+        document = h.document
+
+    class Services:
+        window = Window()
+
+    h.ctx.services = Services()
+    tool = TextTool(h.ctx)
+    tool.start()
+    assert tool.on_option("S")
+    assert tool.on_option("TITULO")
+    assert doc.header["$TEXTSTYLE"] == "TITULO"
+    tool.on_point((0.0, 0.0))
+    # fixed-height style: the height prompt is skipped entirely
+    assert any("rotation angle" in p for p in h.prompts)
+    tool.on_enter()                           # rotation default -> typing
+    _type_text(tool, "PLANO")
+    tool.finish_typing()
+    t = h.msp.query("TEXT")[0]
+    assert t.dxf.style == "TITULO"
+    assert t.dxf.height == pytest.approx(5.0)
+
+
+def test_text_enter_repeats_below_previous():
+    h = Harness()
+    tool = TextTool(h.ctx)
+    tool.start()
+    tool.on_point((0.0, 10.0))
+    tool.on_enter()
+    tool.on_enter()
+    _type_text(tool, "uno")
+    tool.finish_typing()
+    tool2 = TextTool(h.ctx)
+    tool2.start()
+    tool2.on_enter()                          # documented: repeat below
+    assert tool2.typing
+    _type_text(tool2, "dos")
+    tool2.finish_typing()
+    texts = {t.dxf.text: t.dxf.insert.y for t in h.msp.query("TEXT")}
+    assert texts["dos"] == pytest.approx(
+        texts["uno"] - 1.5 * TextTool.default_height)
