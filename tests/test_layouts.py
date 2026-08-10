@@ -922,3 +922,44 @@ def test_page_setup_dialog_prefills_options(qapp):
     assert values["scale"] == (1.0, 50.0)
     assert values["style_sheet"] == "monochrome.ctb"
     win.close()
+
+
+# -- classic UI surfaces: MODEL/PAPER toggle + viewport scale combo ------------
+
+def test_space_button_reflects_state(qapp):
+    win, t, vp = _layout_window(qapp)
+    win._update_space_button()
+    assert win._space_btn.text() == "PAPER"     # layout tab, paper space
+    win._active_vp = vp
+    win._update_space_button()
+    assert win._space_btn.text() == "MODEL"     # inside the viewport
+    win._active_vp = None
+    win._active_layout = "Model"
+    win._update_space_button()
+    assert win._space_btn.text() == "MODEL"
+    win.close()
+
+
+def test_vp_scale_combo_applies_and_tracks(qapp):
+    win, t, vp = _layout_window(qapp)
+    t._pick_tolerance = 2.0
+    t.on_click(60.0, 100.0)                     # select the viewport
+    combo = win._vp_scale_combo
+    win._refresh_vp_scale_combo()
+    target = None
+    for i in range(combo.count()):
+        if combo.itemData(i) == (1, 50):
+            target = i
+            break
+    assert target is not None
+    win._on_vp_scale_combo(target)
+    assert layout_ops.viewport_scale(vp) == pytest.approx(1.0 / 50.0)
+    assert combo.currentIndex() == target       # refresh matched the ratio
+    # locked viewport: the combo refuses and re-syncs
+    win.history.execute(layout_ops.SetViewportLockCommand(vp, True))
+    for i in range(combo.count()):
+        if combo.itemData(i) == (1, 100):
+            win._on_vp_scale_combo(i)
+            break
+    assert layout_ops.viewport_scale(vp) == pytest.approx(1.0 / 50.0)
+    win.close()

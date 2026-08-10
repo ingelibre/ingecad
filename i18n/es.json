@@ -338,5 +338,21 @@
   "Hide paperspace objects": "Ocultar objetos de espacio papel",
   "Drawing orientation": "Orientación del dibujo",
   "Plot upside-down": "Trazar boca abajo",
-  "Custom": "Personalizada"
+  "Custom": "Personalizada",
+  "Viewports": "Ventanas gráficas",
+  "1 Viewport": "1 ventana gráfica",
+  "Lock/Unlock Viewport": "Bloquear/desbloquear ventana gráfica",
+  "Model space (MSPACE)": "Espacio modelo (MSPACE)",
+  "Paper space (PSPACE)": "Espacio papel (PSPACE)",
+  "New Layout": "Nueva presentación",
+  "Layout...": "Presentación...",
+  "New viewport": "Nueva ventana gráfica",
+  "Lock/unlock viewport": "Bloquear/desbloquear ventana gráfica",
+  "Page setup": "Configurar página",
+  "Viewport scale": "Escala de la ventana gráfica",
+  "PAPER": "PAPEL",
+  "MODEL": "MODELO",
+  "Toggle paper/model space in the layout (MSPACE/PSPACE)": "Alternar espacio papel/modelo en la presentación (MSPACE/PSPACE)",
+  "The Model tab is model space — the toggle works on a layout tab.": "La ficha Modelo es espacio modelo — el conmutador funciona en una presentación.",
+  "Select a viewport (border) or MSPACE first.": "Seleccione una ventana gráfica (su borde) o use MSPACE primero."
 }

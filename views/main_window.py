@@ -324,12 +324,27 @@ class MainWindow(QMainWindow):
         item(view_menu, tr("Pan"), lambda: self._invoke_command("PAN"))
         item(view_menu, tr("Regenerate"), self.regen_in_memory)
         view_menu.addSeparator()
+        # Classic AutoCAD: View > Viewports (paper-space floating viewports).
+        vp_menu = view_menu.addMenu(tr("Viewports"))
+        cmd_item(vp_menu, tr("1 Viewport"), "MVIEW")
+        cmd_item(vp_menu, tr("Lock/Unlock Viewport"), "VPLOCK")
+        vp_menu.addSeparator()
+        item(vp_menu, tr("Model space (MSPACE)"),
+             lambda: self._invoke_command("MSPACE"))
+        item(vp_menu, tr("Paper space (PSPACE)"),
+             lambda: self._invoke_command("PSPACE"))
+        view_menu.addSeparator()
         item(view_menu, tr("Layers panel"), self.toggle_layers_panel)
 
         # -- Insert -----------------------------------------------------------
         insert_menu = menu_bar.addMenu(tr("Insert"))
         cmd_item(insert_menu, tr("Block..."), "INSERT")
         cmd_item(insert_menu, tr("Create Block..."), "BLOCK", icon=False)
+        insert_menu.addSeparator()
+        # Classic AutoCAD: Insert > Layout.
+        layout_menu = insert_menu.addMenu(tr("Layout"))
+        item(layout_menu, tr("New Layout"), self._new_layout_tab)
+        cmd_item(layout_menu, tr("Layout..."), "LAYOUT")
 
         # -- Format -----------------------------------------------------------
         format_menu = menu_bar.addMenu(tr("Format"))
@@ -487,6 +502,17 @@ class MainWindow(QMainWindow):
         QToolButton:checked { color: #e8e8e8; background: #35424f;
             border-color: #4a5a6a; border-radius: 2px; }
         """
+        # Classic AutoCAD PAPER/MODEL toggle: on a layout tab it flips
+        # MSPACE/PSPACE; the Model tab always reads MODEL.
+        self._space_btn = QToolButton(self)
+        self._space_btn.setStyleSheet(style)
+        self._space_btn.setToolTip(
+            tr("Toggle paper/model space in the layout (MSPACE/PSPACE)"))
+        self._space_btn.setFocusPolicy(Qt.NoFocus)
+        self._space_btn.clicked.connect(self._toggle_space)
+        self.statusBar().addPermanentWidget(self._space_btn)
+        self._update_space_button()
+
         self._mode_buttons: dict[str, QToolButton] = {}
         for key, fkey, label, tip in self._MODES:
             b = QToolButton(self)
@@ -502,6 +528,25 @@ class MainWindow(QMainWindow):
                 QShortcut(QKeySequence(fkey), self,
                           lambda k=key: self._toggle_mode(k))
         self._update_mode_buttons()
+
+    def _toggle_space(self) -> None:
+        if self.document is None or self._active_layout == "Model":
+            self.command_line.echo(
+                tr("The Model tab is model space — the toggle works on a "
+                   "layout tab."))
+            return
+        if self._active_vp is not None:
+            self._cmd_pspace()
+        else:
+            self._cmd_mspace()
+
+    def _update_space_button(self) -> None:
+        btn = getattr(self, "_space_btn", None)
+        if btn is None:
+            return
+        in_paper = (self._active_layout != "Model"
+                    and getattr(self, "_active_vp", None) is None)
+        btn.setText(tr("PAPER") if in_paper else tr("MODEL"))
 
     def _mode_state(self, key: str) -> bool:
         if key == "grid":
@@ -537,6 +582,7 @@ class MainWindow(QMainWindow):
         self.document = Document.new()
         self._active_layout = "Model"
         self._deactivate_viewport()
+        self._update_space_button()
         self._refresh_layout_tabs()
         self.viewport.set_scene(None)
         self.tools.attach_document(self.document)
@@ -621,10 +667,106 @@ class MainWindow(QMainWindow):
         bar.addWidget(self._color_combo)
         self.addToolBar(Qt.TopToolBarArea, bar)
         self._props_toolbar = bar
+        self._build_viewports_toolbar()
         if self._layers_panel is not None:
             self._layers_panel.changed.connect(self._refresh_props_toolbar)
         self.tools.changed.connect(self._refresh_props_toolbar)
         self._refresh_props_toolbar()
+
+    # Viewport scale list (the classic Viewports toolbar combo). Unitless
+    # like AutoCAD: a meters drawing on a mm sheet uses 10:1 for real 1:100.
+    _VP_SCALES = [(1000, 1), (100, 1), (10, 1), (4, 1), (2, 1), (1, 1),
+                  (1, 2), (1, 4), (1, 5), (1, 8), (1, 10), (1, 16), (1, 20),
+                  (1, 25), (1, 30), (1, 40), (1, 50), (1, 100), (1, 200),
+                  (1, 500), (1, 1000)]
+
+    def _build_viewports_toolbar(self) -> None:
+        """Classic AutoCAD "Viewports" toolbar: viewport buttons + the
+        viewport scale combo, docked next to Modify/Properties."""
+        from PySide6.QtWidgets import QComboBox, QToolBar
+
+        from views.icons import command_icon
+
+        bar = QToolBar(tr("Viewports"), self)
+        bar.setObjectName("viewports_toolbar")
+        for name, label in (("MVIEW", tr("New viewport")),
+                            ("VPLOCK", tr("Lock/unlock viewport")),
+                            ("PAGESETUP", tr("Page setup"))):
+            act = QAction(command_icon(name), label, self)
+            act.setToolTip(f"{label} ({name})")
+            act.triggered.connect(lambda _=False, n=name: self._invoke_command(n))
+            bar.addAction(act)
+        self._vp_scale_combo = QComboBox(self)
+        self._vp_scale_combo.setToolTip(tr("Viewport scale"))
+        self._vp_scale_combo.setMinimumWidth(84)
+        self._vp_scale_combo.setStyleSheet(
+            "QComboBox { font-size: 11px; combobox-popup: 0; }")
+        self._vp_scale_combo.setMaxVisibleItems(16)
+        self._vp_scale_combo.addItem("", None)     # slot 0: current/none
+        for num, den in self._VP_SCALES:
+            self._vp_scale_combo.addItem(f"{num:g}:{den:g}", (num, den))
+        self._vp_scale_combo.activated.connect(self._on_vp_scale_combo)
+        bar.addSeparator()
+        bar.addWidget(self._vp_scale_combo)
+        self.addToolBar(Qt.TopToolBarArea, bar)
+        self.tools.changed.connect(self._refresh_vp_scale_combo)
+        self._refresh_vp_scale_combo()
+
+    def _scale_target_vp(self):
+        """The viewport the scale combo / VPLOCK act on: MSPACE first,
+        then the border-selected one."""
+        vp = getattr(self, "_active_vp", None)
+        if vp is not None and vp.is_alive:
+            return vp
+        vp = self.tools.paper_vp if getattr(self, "tools", None) else None
+        return vp if vp is not None and vp.is_alive else None
+
+    def _on_vp_scale_combo(self, index: int) -> None:
+        from core import layouts as layout_ops
+
+        data = self._vp_scale_combo.itemData(index)
+        if data is None:
+            return
+        vp = self._scale_target_vp()
+        if vp is None:
+            self.command_line.echo(
+                tr("Select a viewport (border) or MSPACE first."))
+            self._refresh_vp_scale_combo()
+            return
+        if layout_ops.is_viewport_locked(vp):
+            self.command_line.echo(
+                tr("Viewport is view-locked — VPLOCK to unlock."))
+            self._refresh_vp_scale_combo()
+            return
+        num, den = data
+        self._vp_gesture_commit()
+        self.history.execute(layout_ops.xp_zoom_command(vp, num / den))
+        self.command_line.echo(tr("Viewport scale set to {scale}.",
+                                  scale=layout_ops.scale_label(num / den)))
+        self.regen_in_memory()
+        self._refresh_vp_scale_combo()
+
+    def _refresh_vp_scale_combo(self) -> None:
+        combo = getattr(self, "_vp_scale_combo", None)
+        if combo is None:
+            return
+        from core import layouts as layout_ops
+
+        vp = self._scale_target_vp()
+        if vp is None:
+            combo.setItemText(0, "")
+            combo.setCurrentIndex(0)
+            combo.setEnabled(self._active_layout != "Model")
+            return
+        combo.setEnabled(True)
+        factor = layout_ops.viewport_scale(vp)
+        for i in range(1, combo.count()):
+            num, den = combo.itemData(i)
+            if abs(factor - num / den) < 1e-9 * max(1.0, factor):
+                combo.setCurrentIndex(i)
+                return
+        combo.setItemText(0, layout_ops.scale_label(factor))
+        combo.setCurrentIndex(0)
 
     def _refresh_props_toolbar(self) -> None:
         from core import layers as layer_ops
@@ -923,6 +1065,8 @@ class MainWindow(QMainWindow):
             self.command_line.echo(
                 tr("Viewport active (scale {scale}). Z + nXP sets the exact "
                    "scale (e.g. 1/100XP); PSPACE returns to paper.", scale=label))
+        self._update_space_button()
+        self._refresh_vp_scale_combo()
 
     # -- wheel/pan navigation inside the active viewport ------------------------
     def vp_view_zoom(self, factor: float, anchor) -> bool:
@@ -997,6 +1141,8 @@ class MainWindow(QMainWindow):
             self.command_line.echo(
                 tr("Paper space.") if had
                 else tr("Already in paper space."))
+        self._update_space_button()
+        self._refresh_vp_scale_combo()
 
     def on_canvas_double_click(self, wx: float, wy: float) -> None:
         """AutoCAD: double-click inside a viewport enters it (MSPACE),
@@ -1221,6 +1367,7 @@ class MainWindow(QMainWindow):
         self._active_layout = name
         self.regen_in_memory(zoom_after=True)   # zooms when the scene lands
         self._refresh_layout_tabs()
+        self._update_space_button()
         if name != "Model":
             self.command_line.echo(
                 tr("Viewing layout \"{n}\" — editing in paper space arrives "
@@ -1436,6 +1583,7 @@ class MainWindow(QMainWindow):
         # the open may have fallen back to a paper layout (empty modelspace)
         self._active_layout = scene.layout_name or "Model"
         self._refresh_layout_tabs()
+        self._update_space_button()
         self.viewport.set_scene(scene)
         self.viewport.zoom_extents()
         self.tools.attach_document(document, flatten=scene.flatten)

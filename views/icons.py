@@ -247,6 +247,56 @@ def _fillet():
     return pm
 
 
+# -- layout / paper-space icons -------------------------------------------------
+
+def _mview():
+    pm, p = _canvas()
+    p.drawRect(QRectF(3, 4, 18, 16))                 # the sheet
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawRect(QRectF(7, 8, 10, 8))                  # the floating viewport
+    p.restore()
+    p.end()
+    return pm
+
+
+def _vplock():
+    pm, p = _canvas()
+    p.drawRect(QRectF(3, 6, 11, 11))                 # the viewport
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawRect(QRectF(13, 13, 8, 7))                 # padlock body
+    p.drawArc(QRectF(14.5, 9, 5, 7), 0, 180 * 16)    # shackle
+    p.restore()
+    p.end()
+    return pm
+
+
+def _pagesetup():
+    pm, p = _canvas()
+    p.drawRect(QRectF(5, 3, 14, 18))                 # the sheet
+    p.save()
+    pen = QPen(_ACCENT, 1.1)
+    pen.setStyle(Qt.DashLine)
+    p.setPen(pen)
+    p.drawRect(QRectF(7.5, 5.5, 9, 13))              # printable margin
+    p.restore()
+    p.end()
+    return pm
+
+
+def _layout():
+    pm, p = _canvas()
+    p.drawRect(QRectF(3, 3, 18, 13))                 # the sheet
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawRect(QRectF(4, 18, 6, 4))                  # the layout tabs
+    p.drawRect(QRectF(12, 18, 6, 4))
+    p.restore()
+    p.end()
+    return pm
+
+
 _PAINTERS = {
     "LINE": _line, "CIRCLE": _circle, "ARC": _arc, "PLINE": _pline,
     "RECTANG": _rectang, "POLYGON": _polygon, "ELLIPSE": _ellipse,
@@ -254,6 +304,8 @@ _PAINTERS = {
     "ERASE": _erase, "MOVE": _move, "COPY": _copy, "ROTATE": _rotate,
     "SCALE": _scale, "MIRROR": _mirror, "OFFSET": _offset, "TRIM": _trim,
     "EXTEND": _extend, "FILLET": _fillet,
+    "MVIEW": _mview, "VPLOCK": _vplock, "PAGESETUP": _pagesetup,
+    "LAYOUT": _layout,
 }
 
 
