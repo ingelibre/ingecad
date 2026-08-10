@@ -50,6 +50,12 @@ HATCH_DENSITY_REL = 1.0 / 64.0
 HATCHING_TIMEOUT = 5.0
 
 
+# Layout-tab canvas: the gray "desk" around the white paper sheet (AutoCAD's
+# paper background). Slightly lighter than the model-space dark so the two
+# spaces read differently at a glance.
+PAPER_SURROUND = (0.235, 0.255, 0.275, 1.0)
+
+
 # Entity types whose fills are text glyphs; they dominate label-heavy plans
 # (a cadastre: 43 M of 49 M vertices) and the viewport hides them when they
 # would be smaller than a few pixels.
@@ -203,14 +209,23 @@ def _ring_extent(ring: list[Vec2]) -> float:
 
 
 def pick_layout(document: Document):
-    """The layout worth showing: modelspace, or the fullest paper layout.
+    """The layout worth showing on open: the saved tab, or a sane fallback.
 
-    ArchiCAD-published sheets (and some AutoCAD workflows) leave modelspace
-    genuinely empty and compose everything in a paperspace layout (VIEWPORT +
-    INSERT). AutoCAD opens those showing the layout; a blank canvas here
-    would read as a converter bug. Returns (layout, name) — name is None for
-    plain modelspace.
+    ``$TILEMODE`` = 0 means the file was saved with a paperspace tab current;
+    AutoCAD reopens there and so do we. Otherwise modelspace — unless it is
+    genuinely empty and everything lives in a paper layout (ArchiCAD-published
+    sheets, some AutoCAD workflows): AutoCAD opens those showing the layout;
+    a blank canvas here would read as a converter bug. Returns (layout, name)
+    — name is None for plain modelspace.
     """
+    from core.layouts import startup_tab
+
+    saved = startup_tab(document)
+    if saved is not None:
+        try:
+            return document.doc.layouts.get(saved), saved
+        except Exception:
+            pass
     msp = document.modelspace()
     if len(msp) > 0:
         return msp, None
@@ -348,12 +363,14 @@ def build_scene_for_entities(document: Document, entities, flatten: float) -> Sc
 def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     """Run the ezdxf frontend over the drawing and pack the result ("regen").
 
-    ``layout_name`` selects a tab explicitly: None/"Model" renders modelspace
-    (with the empty-modelspace fallback to the fullest paper layout), any
-    other name renders that paperspace layout — the Model/Layout tabs.
+    ``layout_name`` selects a tab explicitly: "Model" renders modelspace with
+    no fallback (the user clicked that tab — an empty canvas is the truth),
+    any other name renders that paperspace layout, and None lets
+    :func:`pick_layout` choose (file open: saved tab / empty-model fallback).
     """
-    if layout_name and layout_name != "Model" \
-            and layout_name in document.doc.layouts:
+    if layout_name == "Model":
+        layout, layout_name = document.modelspace(), None
+    elif layout_name and layout_name in document.doc.layouts:
         layout = document.doc.layouts.get(layout_name)
     else:
         layout, layout_name = pick_layout(document)
@@ -367,12 +384,14 @@ def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     scene.layout_name = layout_name
     scene.flatten = flatten
     if layout_name is not None:
-        # Paper-white background like AutoCAD's layout tabs; the sheet's
-        # colors were resolved by ezdxf against this background already.
-        from render.batches import parse_color
+        # Layout tab look: gray desk around a white paper sheet (the viewport
+        # draws the sheet itself from scene.paper). Entity colors were already
+        # resolved by ezdxf against a white background, so ACI 7 reads black.
+        from core.layouts import paper_frame
 
-        scene.background = (
-            parse_color(backend.background) if backend.background
-            else (1.0, 1.0, 1.0, 1.0)
-        )
+        scene.background = PAPER_SURROUND
+        try:
+            scene.paper = paper_frame(layout)
+        except Exception:
+            scene.paper = None   # a broken page setup must not blank the tab
     return scene

@@ -166,6 +166,9 @@ class Scene:
     layout_name: Optional[str] = None
     # Canvas color for that layout (RGBA floats); None = viewport default.
     background: Optional[tuple[float, float, float, float]] = None
+    # Paper sheet of a paperspace layout, from core.layouts.paper_frame():
+    # {"sheet": (x0, y0, x1, y1), "printable": (...) | None} in layout units.
+    paper: Optional[dict] = None
     # Flattening distance used for the build (reused by overlay regens).
     flatten: float = 0.01
     # handle -> [(batch_name, first_vertex, count)] for surgical hiding.

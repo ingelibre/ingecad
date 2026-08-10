@@ -72,6 +72,72 @@ PX_PER_MM = 96.0 / 25.4
 MIN_TEXT_PX = 2.0
 
 
+# Paper sheet colors (layout tabs): white paper on the gray desk, soft drop
+# shadow, and the dashed printable-area margin AutoCAD draws inside it.
+PAPER_SHEET_RGBA = (255, 255, 255, 255)
+PAPER_SHADOW_RGBA = (0, 0, 0, 70)
+PAPER_BORDER_RGBA = (70, 74, 80, 255)
+PAPER_MARGIN_RGBA = (150, 154, 158, 255)
+
+
+def _paper_vertices(paper: dict, origin: tuple[float, float]) -> tuple:
+    """(triangles, lines) vertex arrays for the paper sheet of a layout.
+
+    World coordinates minus the scene origin, same convention as packed
+    batches, so the viewport reuses the scene MVP. Pure NumPy — testable
+    without a GL context.
+    """
+    ox, oy = origin
+    x0, y0, x1, y1 = paper["sheet"]
+    x0, y0, x1, y1 = x0 - ox, y0 - oy, x1 - ox, y1 - oy
+    w, h = x1 - x0, y1 - y0
+    d = 0.015 * max(w, h)                      # shadow offset, world units
+
+    def quad(ax, ay, bx, by, rgba):
+        v = np.zeros(6, dtype=VERTEX_DTYPE)
+        v["pos"] = [(ax, ay), (bx, ay), (bx, by),
+                    (ax, ay), (bx, by), (ax, by)]
+        v["rgba"] = rgba
+        return v
+
+    tris = np.concatenate((
+        quad(x0 + d, y0 - d, x1 + d, y1 - d, PAPER_SHADOW_RGBA),
+        quad(x0, y0, x1, y1, PAPER_SHEET_RGBA),
+    ))
+
+    segments: list[tuple[float, float, float, float, tuple]] = [
+        (x0, y0, x1, y0, PAPER_BORDER_RGBA),
+        (x1, y0, x1, y1, PAPER_BORDER_RGBA),
+        (x1, y1, x0, y1, PAPER_BORDER_RGBA),
+        (x0, y1, x0, y0, PAPER_BORDER_RGBA),
+    ]
+    printable = paper.get("printable")
+    if printable is not None:
+        px0, py0, px1, py1 = (printable[0] - ox, printable[1] - oy,
+                              printable[2] - ox, printable[3] - oy)
+        dash = max(w, h) / 90.0                # scales with the sheet
+        gap = dash * 0.6
+        for ax, ay, bx, by in ((px0, py0, px1, py0), (px1, py0, px1, py1),
+                               (px1, py1, px0, py1), (px0, py1, px0, py0)):
+            length = float(np.hypot(bx - ax, by - ay))
+            if length <= 0.0:
+                continue
+            ux, uy = (bx - ax) / length, (by - ay) / length
+            t = 0.0
+            while t < length:
+                e = min(t + dash, length)
+                segments.append((ax + ux * t, ay + uy * t,
+                                 ax + ux * e, ay + uy * e, PAPER_MARGIN_RGBA))
+                t = e + gap
+
+    lines = np.zeros(2 * len(segments), dtype=VERTEX_DTYPE)
+    for i, (ax, ay, bx, by, rgba) in enumerate(segments):
+        lines["pos"][2 * i] = (ax, ay)
+        lines["pos"][2 * i + 1] = (bx, by)
+        lines["rgba"][2 * i] = lines["rgba"][2 * i + 1] = rgba
+    return tris, lines
+
+
 def _axes_vertices() -> np.ndarray:
     """X and Y world axes through the origin in the standard vertex format."""
     data = np.zeros(4, dtype=VERTEX_DTYPE)
@@ -103,6 +169,9 @@ class Viewport(QOpenGLWidget):
         self._scene_dirty = False
         # Per-primitive GPU buffers: name -> (vao, vbo, vertex_count)
         self._scene_bufs: dict[str, tuple] = {}
+        # Paper sheet of a layout tab (shadow + white sheet + margin dashes),
+        # drawn under the geometry. Rebuilt with the scene buffers.
+        self._paper_bufs: dict[str, tuple] = {}
         # Vertex runs whose rgba was zeroed (surgical hide): flushed to the
         # existing VBOs with partial writes — never a full scene re-upload.
         self._pending_hide: list[tuple[str, int, int]] = []
@@ -288,13 +357,23 @@ class Viewport(QOpenGLWidget):
     def scene_bounds(self) -> tuple[float, float, float, float]:
         """World bounds to fit on Zoom Extents.
 
-        Without a document (or with an empty one) a human-scale frame around
-        the origin keeps the canvas navigable.
+        On a layout tab the paper sheet counts as content: Zoom Extents on an
+        empty layout frames the sheet (AutoCAD behavior), and geometry that
+        hangs off the paper widens the frame. Without a document (or with an
+        empty one) a human-scale frame around the origin keeps the canvas
+        navigable.
         """
-        if self._scene is not None and not self._scene.is_empty:
-            min_x, min_y, max_x, max_y = self._scene.extents
-            if max_x > min_x or max_y > min_y:
-                return (min_x, min_y, max_x, max_y)
+        boxes = []
+        if self._scene is not None:
+            if not self._scene.is_empty:
+                min_x, min_y, max_x, max_y = self._scene.extents
+                if max_x > min_x or max_y > min_y:
+                    boxes.append((min_x, min_y, max_x, max_y))
+            if self._scene.paper is not None:
+                boxes.append(self._scene.paper["sheet"])
+        if boxes:
+            return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                    max(b[2] for b in boxes), max(b[3] for b in boxes))
         return (-50.0, -50.0, 50.0, 50.0)
 
     def zoom_extents(self) -> None:
@@ -377,10 +456,19 @@ class Viewport(QOpenGLWidget):
             vbo.destroy()
             vao.destroy()
         self._scene_bufs.clear()
+        for vao, vbo, _count in self._paper_bufs.values():
+            vbo.destroy()
+            vao.destroy()
+        self._paper_bufs.clear()
         self._scene_dirty = False
         self._pending_hide.clear()  # a full upload carries any zeroed rgba
         if self._scene is None:
             return
+        if self._scene.paper is not None:
+            tris, lines = _paper_vertices(self._scene.paper, self._scene.origin)
+            self._paper_bufs["triangles"] = self._make_vao(tris)
+            if len(lines):
+                self._paper_bufs["lines"] = self._make_vao(lines)
         batches: dict[str, Batch] = {
             "triangles": self._scene.triangles,
             "lines": self._scene.lines,
@@ -471,13 +559,31 @@ class Viewport(QOpenGLWidget):
 
         self._program.bind()
 
+        on_paper = self._scene is not None and self._scene.paper is not None
+        if on_paper and self._paper_bufs:
+            # The sheet goes under everything: shadow + white paper, then the
+            # border and the dashed printable margin.
+            self._program.setUniformValue(self._loc_mvp,
+                                          self._mvp(*self._scene.origin))
+            for name, mode in (("triangles", GL_TRIANGLES), ("lines", GL_LINES)):
+                buf = self._paper_bufs.get(name)
+                if buf is None:
+                    continue
+                vao, _vbo, count = buf
+                vao.bind()
+                gl.glDrawArrays(mode, 0, count)
+                vao.release()
+
         if self.grid_on:
             self._draw_grid(gl)
 
-        self._program.setUniformValue(self._loc_mvp, self._mvp())
-        self._axes_vao.bind()
-        gl.glDrawArrays(GL_LINES, 0, self._axes_count)
-        self._axes_vao.release()
+        if not on_paper:
+            # World axes are a model-space reference; on a layout tab they
+            # would just streak across the sheet.
+            self._program.setUniformValue(self._loc_mvp, self._mvp())
+            self._axes_vao.bind()
+            gl.glDrawArrays(GL_LINES, 0, self._axes_count)
+            self._axes_vao.release()
 
         if self._scene is not None and self._scene_bufs:
             scene_mvp = self._mvp(*self._scene.origin)
@@ -917,7 +1023,13 @@ class Viewport(QOpenGLWidget):
         p.drawText(QPointF(ox - 4, oy - size - 6), "Y")
 
     def _light_background(self) -> bool:
-        if self._scene is None or self._scene.background is None:
+        if self._scene is None:
+            return False
+        if self._scene.paper is not None:
+            # Layout tab: the white sheet dominates the view — dark crosshair
+            # and previews, like AutoCAD's black crosshair over paper.
+            return True
+        if self._scene.background is None:
             return False
         r, g, b, _a = self._scene.background
         return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 0.5

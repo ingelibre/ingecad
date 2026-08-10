@@ -217,6 +217,16 @@ class MainWindow(QMainWindow):
             self.command_line.type_ahead(event)
             return True
         if (
+            event.type() == QEvent.MouseButtonDblClick
+            and event.button() == Qt.LeftButton
+            and obj in getattr(self, "_tab_buttons", {})
+        ):
+            # Double-click renames a layout tab (BricsCAD; Model is fixed).
+            name = self._tab_buttons[obj]
+            if name != "Model":
+                self._rename_layout_tab(name)
+                return True
+        if (
             event.type() == QEvent.MouseButtonPress
             and event.button() == Qt.LeftButton
             and isinstance(obj, QWidget)
@@ -815,6 +825,7 @@ class MainWindow(QMainWindow):
         d.register("PASTECLIP", lambda *a: self._cmd_paste())
         d.register("PLOT", lambda *a: self._plot_dialog())
         d.register("PRINT", lambda *a: self._plot_dialog())
+        d.register("LAYOUT", self._cmd_layout)
         # Phase 4 drawing + Phase 5 editing tools.
         for name in ("LINE", "CIRCLE", "ARC", "PLINE", "RECTANG", "POLYGON",
                      "ELLIPSE", "POINT", "TEXT", "MTEXT",
@@ -829,6 +840,20 @@ class MainWindow(QMainWindow):
             ("AREA", 7), ("LIST", 7),
         ):
             d.register_future(name, phase)
+
+    def _cmd_layout(self, *args) -> Prompt | None:
+        """LAYOUT — AutoCAD keywords, headless flow in core.layouts."""
+        if self.document is None:
+            self.new_document()
+        from core import layouts as layout_ops
+
+        return layout_ops.layout_command(
+            self.document, self.history,
+            switch=self.switch_layout,
+            echo=self.command_line.echo,
+            refresh=self._sync_layout_tabs,
+            current=lambda: self._active_layout,
+            args=args)
 
     # ZOOM [Extents/Window/Previous]
     def _cmd_zoom(self, *args) -> Prompt | None:
@@ -863,6 +888,7 @@ class MainWindow(QMainWindow):
             tr("Undo: {name}", name=command.name) if command else tr("Nothing to undo"))
         if command is not None:
             self.tools.after_history_change(command)
+            self._sync_layout_tabs()
 
     def _cmd_redo(self, *args) -> None:
         command = self.history.redo()
@@ -870,6 +896,7 @@ class MainWindow(QMainWindow):
             tr("Redo: {name}", name=command.name) if command else tr("Nothing to redo"))
         if command is not None:
             self.tools.after_history_change(command)
+            self._sync_layout_tabs()
 
     def _build_status_bar(self) -> None:
         from PySide6.QtWidgets import QHBoxLayout, QToolButton
@@ -906,11 +933,11 @@ class MainWindow(QMainWindow):
     """
 
     def _layout_names(self) -> list:
-        names = ["Model"]
-        if self.document is not None:
-            names += [l.name for l in self.document.doc.layouts
-                      if l.name != "Model"]
-        return names
+        if self.document is None:
+            return ["Model"]
+        from core import layouts as layout_ops
+
+        return layout_ops.layout_names(self.document)
 
     def _refresh_layout_tabs(self) -> None:
         from PySide6.QtWidgets import QToolButton
@@ -919,6 +946,7 @@ class MainWindow(QMainWindow):
             w = self._layout_tab_bar.takeAt(0).widget()
             if w is not None:
                 w.deleteLater()
+        self._tab_buttons: dict = {}
         for name in self._layout_names():
             b = QToolButton(self._layout_tab_host)
             b.setText(tr("Model") if name == "Model" else name)
@@ -927,14 +955,32 @@ class MainWindow(QMainWindow):
             b.setStyleSheet(self._TAB_STYLE)
             b.setFocusPolicy(Qt.NoFocus)
             b.clicked.connect(lambda _=False, n=name: self.switch_layout(n))
+            b.setContextMenuPolicy(Qt.CustomContextMenu)
+            b.customContextMenuRequested.connect(
+                lambda pos, n=name, btn=b: self._layout_tab_menu(
+                    n, btn.mapToGlobal(pos)))
+            self._tab_buttons[b] = name
             self._layout_tab_bar.addWidget(b)
+        plus = QToolButton(self._layout_tab_host)
+        plus.setText("+")
+        plus.setToolTip(tr("New layout"))
+        plus.setStyleSheet(self._TAB_STYLE)
+        plus.setFocusPolicy(Qt.NoFocus)
+        plus.clicked.connect(self._new_layout_tab)
+        self._layout_tab_bar.addWidget(plus)
 
     def switch_layout(self, name: str) -> None:
         """Model/Layout tabs: re-render the chosen space (AutoCAD tabs)."""
-        if self.document is None or name == self._active_layout:
+        if (self.document is None or name == self._active_layout
+                or name not in self._layout_names()):
             self._refresh_layout_tabs()   # re-sync checked states
             return
+        from core import layouts as layout_ops
+
         self.tools.cancel()               # drop tool/selection across spaces
+        # $TILEMODE + the *Paper_Space block dance, so the file reopens on
+        # this tab in AutoCAD too (ezdxf does not touch the header itself).
+        layout_ops.switch_active(self.document, name)
         self._active_layout = name
         self.regen_in_memory(zoom_after=True)   # zooms when the scene lands
         self._refresh_layout_tabs()
@@ -942,6 +988,90 @@ class MainWindow(QMainWindow):
             self.command_line.echo(
                 tr("Viewing layout \"{n}\" — editing in paper space arrives "
                    "in v0.2.", n=name))
+
+    # -- layout tab operations (right-click menu / + button) --------------------
+    def _layout_tab_menu(self, name: str, global_pos) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.addAction(tr("New layout"), self._new_layout_tab)
+        if name != "Model":   # AutoCAD: the Model tab is fixed
+            menu.addAction(tr("Delete"),
+                           lambda: self._delete_layout_tab(name))
+            menu.addAction(tr("Rename"),
+                           lambda: self._rename_layout_tab(name))
+        menu.exec(global_pos)
+
+    def _new_layout_tab(self) -> None:
+        if self.document is None:
+            self.new_document()
+        from core import layouts as layout_ops
+
+        name = layout_ops.default_new_name(self.document)
+        self.history.execute(layout_ops.NewLayoutCommand(name))
+        # AutoCAD adds the tab without activating it.
+        self._refresh_layout_tabs()
+        self.command_line.echo(tr('Layout "{name}" created.', name=name))
+
+    def _rename_layout_tab(self, name: str) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        from core import layouts as layout_ops
+
+        new, ok = QInputDialog.getText(
+            self, tr("Rename Layout"), tr("New layout name:"), text=name)
+        if not ok or not new.strip() or new.strip() == name:
+            return
+        new = new.strip()
+        problem = layout_ops.validate_new_name(self.document, new)
+        if problem:
+            self.command_line.echo(problem)
+            return
+        self.history.execute(layout_ops.RenameLayoutCommand(name, new))
+        if self._active_layout == name:
+            self._active_layout = new
+        self._refresh_layout_tabs()
+
+    def _delete_layout_tab(self, name: str) -> None:
+        from ezdxf.lldxf.const import DXFValueError
+
+        from core import layouts as layout_ops
+
+        # AutoCAD's own warning: layout deletion is permanent (not undoable —
+        # a faithful undo would need to snapshot every entity on the sheet).
+        answer = QMessageBox.question(
+            self, tr("Delete Layout"),
+            tr('Layout "{name}" and everything on it will be permanently '
+               "deleted. Continue?", name=name),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+        was_active = self._active_layout == name
+        try:
+            layout_ops.delete_layout(self.document, name)
+        except DXFValueError:
+            self.command_line.echo(tr("The last layout cannot be deleted."))
+            return
+        self.command_line.echo(tr('Layout "{name}" deleted.', name=name))
+        if was_active:
+            self._active_layout = ""      # force the switch to re-render
+            self.switch_layout("Model")
+        else:
+            self._refresh_layout_tabs()
+
+    def _sync_layout_tabs(self) -> None:
+        """After undo/redo: the tab set may have changed under the UI."""
+        if self.document is None:
+            return
+        names = self._layout_names()
+        if self._active_layout not in names:
+            from core import layouts as layout_ops
+
+            # Renamed or deleted: the document knows which paperspace is
+            # current; fall back to Model otherwise.
+            self._active_layout = layout_ops.startup_tab(self.document) or "Model"
+            self.regen_in_memory(zoom_after=True)
+        self._refresh_layout_tabs()
 
     def _set_busy(self, text: str) -> None:
         """Show (or clear, with "") a long operation on the coordinates line.
@@ -1067,8 +1197,9 @@ class MainWindow(QMainWindow):
             self._refresh_props_toolbar()
         self.setWindowTitle(f"IngeCAD — {document.name}")
         if scene.layout_name:
+            # Saved on a layout tab ($TILEMODE) or empty modelspace fallback.
             self.command_line.echo(
-                tr("Opened {name} — showing layout \"{layout}\" (model space is empty)",
+                tr("Opened {name} — showing layout \"{layout}\"",
                    name=document.name, layout=scene.layout_name))
         elif scene.skipped:
             self.command_line.echo(
