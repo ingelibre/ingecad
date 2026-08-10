@@ -259,6 +259,146 @@ def viewport_fit_printable(document, layout_name: str) -> AddViewportCommand:
                                  (rect[0], rect[1]), (rect[2], rect[3]))
 
 
+# -- viewport as a selectable paper-space entity --------------------------------
+
+def viewport_border_hit(layout, x: float, y: float, tol: float):
+    """The topmost visible viewport whose BORDER passes within ``tol`` of
+    (x, y) — AutoCAD selects viewports by their frame, not their interior."""
+    hit = None
+    for vp in visible_viewports(layout):        # stacking order: last on top
+        x0, y0, x1, y1 = viewport_rect(vp)
+        inside_outer = (x0 - tol <= x <= x1 + tol
+                        and y0 - tol <= y <= y1 + tol)
+        inside_inner = (x0 + tol < x < x1 - tol
+                        and y0 + tol < y < y1 - tol)
+        if inside_outer and not inside_inner:
+            hit = vp
+    return hit
+
+
+def viewport_grips(vp) -> list:
+    """Grip points of a viewport: 4 corners (resize) + center (move).
+
+    AutoCAD shows the 4 corner grips; the center grip is our concession so
+    a viewport can be moved without a MOVE-through-paper-space tool yet.
+    """
+    x0, y0, x1, y1 = viewport_rect(vp)
+    return [(x0, y0, "end"), (x1, y0, "end"), (x1, y1, "end"), (x0, y1, "end"),
+            ((x0 + x1) / 2.0, (y0 + y1) / 2.0, "center")]
+
+
+def viewport_drag_rect(vp, index: int, role: str, point) -> tuple:
+    """The rubber rectangle while a viewport grip follows the cursor."""
+    x0, y0, x1, y1 = viewport_rect(vp)
+    if role == "center":
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        dx, dy = point[0] - cx, point[1] - cy
+        return (x0 + dx, y0 + dy, x1 + dx, y1 + dy)
+    corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    ox, oy = corners[(index + 2) % 4]           # opposite corner stays put
+    return (min(ox, point[0]), min(oy, point[1]),
+            max(ox, point[0]), max(oy, point[1]))
+
+
+class SetViewportGeometryCommand(Command):
+    """Move/resize a floating viewport (grip edit). Undoable.
+
+    A resize keeps the SCALE and keeps the model pinned to the paper
+    (AutoCAD: the window reveals more model, nothing slides): the view
+    height scales with the paper height, and the view center shifts by the
+    paper-center displacement converted to model units.
+    """
+
+    needs_regen = True
+
+    def __init__(self, vp, center, size, view_center, view_height,
+                 name: str = "Viewport edit") -> None:
+        self.name = name
+        self.entity = vp
+        self._new = (center, size, view_center, view_height)
+        self._old = ((vp.dxf.center.x, vp.dxf.center.y),
+                     (float(vp.dxf.width), float(vp.dxf.height)),
+                     (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y),
+                     float(vp.dxf.view_height))
+
+    def _apply(self, state, document) -> None:
+        center, size, view_center, view_height = state
+        self.entity.dxf.center = center
+        self.entity.dxf.width, self.entity.dxf.height = size
+        self.entity.dxf.view_center_point = view_center
+        self.entity.dxf.view_height = view_height
+        document.dirty = True
+
+    def do(self, document) -> None:
+        self._apply(self._new, document)
+
+    def undo(self, document) -> None:
+        self._apply(self._old, document)
+
+
+def viewport_grip_command(vp, index: int, role: str, point):
+    """The Command a finished grip drag executes, or None for a no-op."""
+    x0, y0, x1, y1 = viewport_drag_rect(vp, index, role, point)
+    w, h = x1 - x0, y1 - y0
+    if w <= 1e-6 or h <= 1e-6:
+        return None
+    old_cx, old_cy = vp.dxf.center.x, vp.dxf.center.y
+    new_center = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+    if role == "center":
+        # move: the model travels with its window (view unchanged)
+        if abs(new_center[0] - old_cx) < 1e-9 \
+                and abs(new_center[1] - old_cy) < 1e-9:
+            return None
+        return SetViewportGeometryCommand(
+            vp, new_center, (float(vp.dxf.width), float(vp.dxf.height)),
+            (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y),
+            float(vp.dxf.view_height), name="MOVE viewport")
+    # resize: keep scale, keep model pinned to paper
+    scale = viewport_scale(vp)
+    view_center = (vp.dxf.view_center_point.x + (new_center[0] - old_cx) / scale,
+                   vp.dxf.view_center_point.y + (new_center[1] - old_cy) / scale)
+    return SetViewportGeometryCommand(
+        vp, new_center, (w, h), view_center, h / scale,
+        name="Resize viewport")
+
+
+class RemoveViewportCommand(Command):
+    """ERASE of a floating viewport; undo recreates it (same view, layer)."""
+
+    needs_regen = True
+
+    def __init__(self, vp, layout_name: str) -> None:
+        self.name = "ERASE viewport"
+        self.entity = vp
+        self.layout_name = layout_name
+
+    def do(self, document) -> None:
+        vp = self.entity
+        self._params = dict(
+            center=(vp.dxf.center.x, vp.dxf.center.y),
+            size=(float(vp.dxf.width), float(vp.dxf.height)),
+            view_center_point=(vp.dxf.view_center_point.x,
+                               vp.dxf.view_center_point.y),
+            view_height=float(vp.dxf.view_height),
+            layer=vp.dxf.layer,
+        )
+        self.removed_handles = [vp.dxf.handle]
+        psp = document.doc.layouts.get(self.layout_name)
+        psp.delete_entity(vp)
+        self.entity = None
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        psp = document.doc.layouts.get(self.layout_name)
+        p = self._params
+        self.entity = psp.add_viewport(
+            center=p["center"], size=p["size"],
+            view_center_point=p["view_center_point"],
+            view_height=p["view_height"])
+        self.entity.dxf.layer = p["layer"]
+        document.dirty = True
+
+
 # -- viewport scale (MSPACE + ZOOM nXP, the AutoCAD way) ------------------------
 
 def visible_viewports(layout) -> list:

@@ -209,6 +209,9 @@ class Viewport(QOpenGLWidget):
         # MSPACE-active viewport rect (paper world coords) — drawn with the
         # heavy border AutoCAD gives the active viewport. None = paper space.
         self.active_vp_rect = None
+        # Rubber rectangle while a selected viewport's grip follows the
+        # cursor (move/resize preview). Set by the ToolController.
+        self.vp_drag_rect = None
 
     # -- document hooks -------------------------------------------------------
     def set_scene(self, scene: Optional[Scene]) -> None:
@@ -807,6 +810,13 @@ class Viewport(QOpenGLWidget):
             sx0, sy0 = self.view.world_to_screen(x0, y1)   # top-left
             sx1, sy1 = self.view.world_to_screen(x1, y0)
             p.setPen(QPen(QColor(20, 20, 20), 3))
+            p.drawRect(sx0, sy0, sx1 - sx0, sy1 - sy0)
+        if self.vp_drag_rect is not None:
+            # move/resize preview of the selected viewport (grip drag)
+            x0, y0, x1, y1 = self.vp_drag_rect
+            sx0, sy0 = self.view.world_to_screen(x0, y1)
+            sx1, sy1 = self.view.world_to_screen(x1, y0)
+            p.setPen(QPen(self.HIGHLIGHT_COLOR, 1, Qt.DashLine))
             p.drawRect(sx0, sy0, sx1 - sx0, sy1 - sy0)
         self._draw_ucs_icon(p)
         if self.tool_delegate is not None:

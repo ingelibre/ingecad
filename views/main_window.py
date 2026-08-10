@@ -868,6 +868,7 @@ class MainWindow(QMainWindow):
     def _activate_viewport(self, vp) -> None:
         from core import layouts as layout_ops
 
+        self.tools.clear_selection()      # entering MSPACE deselects (AutoCAD)
         self._active_vp = vp
         self.viewport.active_vp_rect = layout_ops.viewport_rect(vp)
         self.viewport.update()

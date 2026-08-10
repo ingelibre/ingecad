@@ -15,6 +15,7 @@ import numpy as np
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 from core import actions
+from core import layouts as layout_ops
 from core.coords import CoordinateError, parse_point
 from core.i18n import tr
 from core.select import GeometryIndex, apply_grip_edit, entity_grips
@@ -83,6 +84,11 @@ class _GhostWorker(QThread):
 ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES,
                     **DIM_TOOL_CLASSES, **LAYOUT_TOOL_CLASSES}
 
+# Sentinel first element of _grip_drag while a VIEWPORT grip is hot — the
+# paper-space grip flow shares the widget's click-move-click plumbing but
+# none of the modelspace snapshot/overlay machinery.
+_VP_GRIP = "__viewport__"
+
 
 class ToolController(QObject):
     changed = Signal()  # something visual changed: repaint the viewport
@@ -117,6 +123,9 @@ class ToolController(QObject):
         # Selection state (idle noun set, or the set a tool is acquiring).
         self.index: Optional[GeometryIndex] = None
         self.selection: set[str] = set()
+        # Paper space has its own tiny selection: the one picked VIEWPORT
+        # entity (border click). Model selection machinery never sees it.
+        self.paper_vp = None
         self._selecting_for: Optional[Tool] = None
         self._window_anchor: Optional[tuple[float, float]] = None
         self._pick_tolerance = 1.0  # world units, refreshed on hover
@@ -314,6 +323,7 @@ class ToolController(QObject):
 
     def clear_selection(self) -> None:
         self.selection = set()
+        self.paper_vp = None
         self._window_anchor = None
         self.changed.emit()
 
@@ -322,6 +332,18 @@ class ToolController(QObject):
         """Supr/Delete: erase the selected objects (only when idle)."""
         if self.tool is not None:
             return False
+        if self._paper_select_mode():
+            vp = self.paper_vp
+            if vp is None or not vp.is_alive:
+                return False
+            self.paper_vp = None
+            # hide the border instantly (its vertices are owned by the vp
+            # handle); the content refreshes with the regen
+            self.window.viewport.hide_handles([vp.dxf.handle])
+            self._execute(layout_ops.RemoveViewportCommand(
+                vp, self.window._active_layout))
+            self.changed.emit()
+            return True
         entities = self._selection_entities()
         if not entities:
             return False
@@ -447,6 +469,13 @@ class ToolController(QObject):
         self.changed.emit()
 
     def cancel(self) -> None:
+        if self._grip_drag is not None and self._grip_drag[0] == _VP_GRIP:
+            # Esc mid-drag of a viewport grip: nothing was mutated yet
+            # (the drag only moves the rubber rectangle) — just drop it.
+            self._grip_drag = None
+            self.window.viewport.vp_drag_rect = None
+            self.changed.emit()
+            return
         if self._grip_drag is not None:
             # Esc mid-grip: revert the entity to its pre-drag snapshot. Its
             # base-scene copy was hidden at grab time, so ride the overlay
@@ -467,7 +496,7 @@ class ToolController(QObject):
             self.tool = None  # avoid re-entry via ctx.finish
             tool.on_cancel()
             self._finish()
-        elif self.selection or self._window_anchor:
+        elif self.selection or self._window_anchor or self.paper_vp is not None:
             self.clear_selection()
 
     # -- command execution and incremental render ------------------------------
@@ -1013,7 +1042,25 @@ class ToolController(QObject):
         self.tool.on_point(self.resolved_point(wx, wy))
         self.changed.emit()
 
+    def _paper_select_mode(self) -> bool:
+        """Paper-space selection is live: layout tab, not inside MSPACE."""
+        return (getattr(self.window, "_active_layout", "Model") != "Model"
+                and getattr(self.window, "_active_vp", None) is None
+                and self.window.document is not None)
+
     def _selection_click(self, wx: float, wy: float, shift: bool) -> None:
+        if self._paper_select_mode():
+            # Paper space: the only selectable entity (v0.1) is a viewport,
+            # picked by its border like AutoCAD. No selection windows here.
+            self._window_anchor = None
+            layout = self.window.document.doc.layouts.get(
+                self.window._active_layout)
+            vp = layout_ops.viewport_border_hit(
+                layout, wx, wy, self._pick_tolerance)
+            self.paper_vp = vp
+            if vp is not None:
+                self.window.command_line.echo(tr("{count} selected.", count=1))
+            return
         if self.index is None:
             if self.window.document is None:
                 return
@@ -1149,6 +1196,12 @@ class ToolController(QObject):
         # inserted vertex before the user drops it.
         if self._grip_drag is not None:
             return []
+        if self._paper_select_mode():
+            vp = self.paper_vp
+            if self.tool is not None or vp is None or not vp.is_alive:
+                return []
+            return [(x, y, role, vp.dxf.handle, i)
+                    for i, (x, y, role) in enumerate(layout_ops.viewport_grips(vp))]
         if self.tool is not None or not self.selection or self.index is None:
             return []
         # per-frame AND per-hover (grip_at): cache per (version, selection)
@@ -1177,6 +1230,12 @@ class ToolController(QObject):
         from core.select import entity_grips
 
         gx, gy, role, handle, index = grip
+        if self._paper_select_mode() and self.paper_vp is not None:
+            # viewport grip: only the rubber rectangle moves until the drop
+            self._grip_drag = (_VP_GRIP, index, role, None)
+            self.window.viewport.vp_drag_rect = layout_ops.viewport_rect(
+                self.paper_vp)
+            return
         entity = self.index.entity(handle)
         if entity is None:
             return
@@ -1196,6 +1255,13 @@ class ToolController(QObject):
     def update_grip_drag(self, wx: float, wy: float) -> None:
         if self._grip_drag is None:
             return
+        if self._grip_drag[0] == _VP_GRIP:
+            _m, index, role, _ = self._grip_drag
+            if self.paper_vp is not None and self.paper_vp.is_alive:
+                self.window.viewport.vp_drag_rect = layout_ops.viewport_drag_rect(
+                    self.paper_vp, index, role, (wx, wy))
+                self.window.viewport.update()
+            return
         handle, index, role, _snap = self._grip_drag
         entity = self.index.entity(handle)
         if entity is not None:
@@ -1206,6 +1272,18 @@ class ToolController(QObject):
 
     def finish_grip_drag(self, wx: float, wy: float) -> None:
         if self._grip_drag is None:
+            return
+        if self._grip_drag[0] == _VP_GRIP:
+            _m, index, role, _ = self._grip_drag
+            self._grip_drag = None
+            self.window.viewport.vp_drag_rect = None
+            vp = self.paper_vp
+            if vp is not None and vp.is_alive:
+                command = layout_ops.viewport_grip_command(
+                    vp, index, role, (wx, wy))
+                if command is not None:
+                    self._execute(command)   # needs_regen shows the result
+            self.changed.emit()
             return
         handle, index, role, snap = self._grip_drag
         self._grip_drag = None
@@ -1240,6 +1318,12 @@ class ToolController(QObject):
         the isin sweep over a cadastre's 1.35 M rows costs ~40 ms and must
         not run per frame.
         """
+        if self._paper_select_mode():
+            empty = np.empty((0, 4))
+            vp = self.paper_vp
+            if vp is None or not vp.is_alive:
+                return empty, empty, empty
+            return empty, empty, np.array([layout_ops.viewport_rect(vp)])
         if not self.selection or self.index is None:
             empty = np.empty((0, 4))
             return empty, empty, empty

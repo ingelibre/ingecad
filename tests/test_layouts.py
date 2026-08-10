@@ -456,3 +456,175 @@ def test_mspace_pspace_aliases():
 
     assert resolve("MS", DEFAULT_ALIASES) == "MSPACE"
     assert resolve("PS", DEFAULT_ALIASES) == "PSPACE"
+
+
+# -- viewport as selectable entity ---------------------------------------------
+
+def test_viewport_border_hit_edge_only():
+    doc = _doc_with_model_content()
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=70)
+    # on the left border (x=60), inside (center), outside
+    assert layout_ops.viewport_border_hit(psp, 60.0, 100.0, 2.0) is vp
+    assert layout_ops.viewport_border_hit(psp, 100.0, 100.0, 2.0) is None
+    assert layout_ops.viewport_border_hit(psp, 10.0, 10.0, 2.0) is None
+    # corner within tolerance
+    assert layout_ops.viewport_border_hit(psp, 61.0, 71.0, 2.0) is vp
+
+
+def test_viewport_grips_layout():
+    doc = _doc_with_model_content()
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=70)
+    grips = layout_ops.viewport_grips(vp)
+    assert grips[0] == (60.0, 70.0, "end")
+    assert grips[2] == (140.0, 130.0, "end")
+    assert grips[4] == (100.0, 100.0, "center")
+
+
+def test_viewport_move_keeps_view():
+    doc = _doc_with_model_content()
+    history = History(doc)
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=70)
+    command = layout_ops.viewport_grip_command(vp, 4, "center", (130.0, 90.0))
+    history.execute(command)
+    assert (vp.dxf.center.x, vp.dxf.center.y) == (130.0, 90.0)
+    assert (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y) == (50.0, 25.0)
+    assert float(vp.dxf.view_height) == 70.0
+    history.undo()
+    assert (vp.dxf.center.x, vp.dxf.center.y) == (100.0, 100.0)
+
+
+def test_viewport_resize_keeps_scale_and_pins_model():
+    doc = _doc_with_model_content()
+    history = History(doc)
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=30)
+    scale = layout_ops.viewport_scale(vp)          # 60/30 = 2.0
+    # drag the top-right corner (index 2) outward: opposite corner fixed
+    command = layout_ops.viewport_grip_command(vp, 2, "end", (180.0, 150.0))
+    history.execute(command)
+    assert (vp.dxf.width, vp.dxf.height) == (120.0, 80.0)
+    assert layout_ops.viewport_scale(vp) == pytest.approx(scale)
+    # model pinned: view center shifted by the paper-center delta / scale
+    # old center (100,100) -> new center (120,110): delta (20,10) -> (10,5)
+    assert (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y) \
+        == (pytest.approx(60.0), pytest.approx(30.0))
+    history.undo()
+    assert (vp.dxf.width, vp.dxf.height) == (80.0, 60.0)
+    assert (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y) \
+        == (50.0, 25.0)
+
+
+def test_viewport_grip_command_degenerate_is_none():
+    doc = _doc_with_model_content()
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=70)
+    # dropping the corner on the opposite corner -> zero-size -> no-op
+    assert layout_ops.viewport_grip_command(vp, 2, "end", (60.0, 70.0)) is None
+    # dropping the center where it was -> no-op
+    assert layout_ops.viewport_grip_command(vp, 4, "center", (100.0, 100.0)) is None
+
+
+def test_remove_viewport_command_undo():
+    doc = _doc_with_model_content()
+    history = History(doc)
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=70)
+    vp.dxf.layer = "0"
+    command = layout_ops.RemoveViewportCommand(vp, "Layout1")
+    history.execute(command)
+    assert not [e for e in psp if e.dxftype() == "VIEWPORT"]
+    assert command.removed_handles
+    history.undo()
+    vps = [e for e in psp if e.dxftype() == "VIEWPORT"]
+    assert len(vps) == 1
+    assert (vps[0].dxf.center.x, vps[0].dxf.center.y) == (100.0, 100.0)
+    assert float(vps[0].dxf.view_height) == 70.0
+    assert vps[0].dxf.layer == "0"
+    history.redo()
+    assert not [e for e in psp if e.dxftype() == "VIEWPORT"]
+
+
+# -- paper-space selection through the real controller -------------------------
+
+def _layout_window(qapp):
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    win.new_document()
+    win.document.modelspace().add_circle((10, 5), 3)
+    psp = win.document.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(10, 5), view_height=20)
+    win._active_layout = "Layout1"     # tab state without waiting for regen
+    return win, win.tools, vp
+
+
+def test_paper_click_selects_viewport_border(qapp):
+    win, t, vp = _layout_window(qapp)
+    t._pick_tolerance = 2.0
+    t.on_click(60.0, 100.0)            # left border
+    assert t.paper_vp is vp
+    segs, circles, boxes = t.highlight_geometry()
+    assert boxes.shape == (1, 4)
+    grips = t.grip_points()
+    assert len(grips) == 5
+    t.on_click(10.0, 10.0)             # empty paper: deselect
+    assert t.paper_vp is None
+    win.close()
+
+
+def test_paper_grip_resize_executes_command(qapp):
+    win, t, vp = _layout_window(qapp)
+    t._pick_tolerance = 2.0
+    t.on_click(60.0, 100.0)
+    grip = t.grip_at(140.0, 130.0, 3.0)          # top-right corner grip
+    assert grip is not None and grip[2] == "end"
+    t.begin_grip_drag(grip)
+    assert t._grip_drag is not None
+    t.update_grip_drag(180.0, 150.0)
+    assert win.viewport.vp_drag_rect is not None
+    t.finish_grip_drag(180.0, 150.0)
+    assert win.viewport.vp_drag_rect is None
+    assert (vp.dxf.width, vp.dxf.height) == (120.0, 80.0)
+    win._cmd_undo()
+    assert (vp.dxf.width, vp.dxf.height) == (80.0, 60.0)
+    win.close()
+
+
+def test_paper_grip_cancel_reverts_nothing(qapp):
+    win, t, vp = _layout_window(qapp)
+    t._pick_tolerance = 2.0
+    t.on_click(60.0, 100.0)
+    grip = t.grip_at(100.0, 100.0, 3.0)          # center grip
+    t.begin_grip_drag(grip)
+    t.update_grip_drag(130.0, 90.0)
+    t.cancel()                                    # Esc mid-drag
+    assert t._grip_drag is None
+    assert win.viewport.vp_drag_rect is None
+    assert (vp.dxf.center.x, vp.dxf.center.y) == (100.0, 100.0)
+    assert t.paper_vp is vp                       # still selected
+    t.cancel()                                    # Esc again: deselect
+    assert t.paper_vp is None
+    win.close()
+
+
+def test_paper_delete_selection_removes_viewport(qapp):
+    win, t, vp = _layout_window(qapp)
+    t._pick_tolerance = 2.0
+    t.on_click(60.0, 100.0)
+    assert t.delete_selection()
+    psp = win.document.doc.layouts.get("Layout1")
+    assert not [e for e in psp if e.dxftype() == "VIEWPORT"]
+    win._cmd_undo()
+    assert len([e for e in psp if e.dxftype() == "VIEWPORT"]) == 1
+    win.close()
