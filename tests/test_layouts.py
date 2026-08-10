@@ -844,7 +844,81 @@ def test_page_setup_dialog_roundtrip(qapp):
             dialog.paper.setCurrentIndex(i)
             break
     dialog.orientation.setCurrentIndex(1)      # portrait
-    w, h, margins, name = dialog.values()
-    assert (w, h) == (297.0, 420.0)
-    assert name == "ISO A3"
+    values = dialog.values()
+    assert (values["width"], values["height"]) == (297.0, 420.0)
+    assert values["size_name"] == "ISO A3"
+    win.close()
+
+
+def test_page_setup_full_options_roundtrip():
+    doc = _doc_with_model_content()
+    history = History(doc)
+    psp = doc.doc.layouts.get("Layout1")
+    vp = psp.add_viewport(center=(100, 100), size=(80, 60),
+                          view_center_point=(50, 25), view_height=30)
+    history.execute(layout_ops.page_setup_command(
+        psp, 297.0, 210.0, (5.0, 5.0, 5.0, 5.0), "ISO A4",
+        device="DWG To PDF.pc3",
+        plot_type=layout_ops.PLOT_TYPE_EXTENTS,
+        offset=(10.0, 4.0), centered=True,
+        scale=(1, 1), scale_lineweights=True,
+        style_sheet="monochrome.ctb",
+        plot_lineweights=True, plot_styles=True,
+        paperspace_last=False, hide_paperspace=False,
+        shade_plot=0, shade_quality=2, shade_dpi=300))
+    dxf = psp.dxf
+    assert dxf.plot_configuration_file == "DWG To PDF.pc3"
+    assert dxf.plot_type == layout_ops.PLOT_TYPE_EXTENTS
+    assert (dxf.plot_origin_x_offset, dxf.plot_origin_y_offset) == (10.0, 4.0)
+    assert dxf.current_style_sheet == "monochrome.ctb"
+    assert dxf.standard_scale_type == 16       # 1:1 from the standard list
+    flags = int(dxf.plot_layout_flags)
+    assert flags & layout_ops.FLAG_PLOT_CENTERED
+    assert flags & layout_ops.FLAG_SCALE_LINEWEIGHTS
+    assert flags & layout_ops.FLAG_PRINT_LINEWEIGHTS
+    assert not (flags & layout_ops.FLAG_USE_STANDARD_SCALE)
+    # limits account for the plot offset
+    assert tuple(dxf.limmin)[:2] == (-15.0, -9.0)
+    # the viewport still survives the full write
+    assert [e for e in psp if e.dxftype() == "VIEWPORT"] == [vp]
+    history.undo()
+    assert int(dxf.plot_type) == 5             # back to schema default
+
+
+def test_page_setup_fit_to_paper_and_upside_down():
+    doc = _doc_with_model_content()
+    history = History(doc)
+    psp = doc.doc.layouts.get("Layout1")
+    history.execute(layout_ops.page_setup_command(
+        psp, 297.0, 210.0, (1.0, 2.0, 3.0, 4.0), "ISO A4",
+        upside_down=True, fit_to_paper=True))
+    dxf = psp.dxf
+    assert dxf.plot_rotation == 2
+    assert dxf.standard_scale_type == 0        # scaled to fit
+    assert int(dxf.plot_layout_flags) & layout_ops.FLAG_USE_STANDARD_SCALE
+    # displayed margins come back exactly as the user typed them
+    page = layout_ops.effective_page(psp)
+    assert page["margins"] == (1.0, 2.0, 3.0, 4.0)
+    assert (page["width"], page["height"]) == (297.0, 210.0)
+
+
+def test_page_setup_dialog_prefills_options(qapp):
+    from views.page_setup_dialog import PageSetupDialog
+
+    win, t, vp = _layout_window(qapp)
+    layout = win.document.doc.layouts.get("Layout1")
+    win.history.execute(layout_ops.page_setup_command(
+        layout, 297.0, 210.0, (5.0, 5.0, 5.0, 5.0), "ISO A4",
+        device="DWG To PDF.pc3", style_sheet="monochrome.ctb",
+        scale=(1, 50), plot_lineweights=True))
+    dialog = PageSetupDialog(win, layout)
+    assert dialog.device.currentData() == "DWG To PDF.pc3"
+    assert dialog.style_sheet.currentData() == "monochrome.ctb"
+    assert dialog.scale.currentData() == (1, 50)
+    assert dialog.plot_lineweights.isChecked()
+    assert not dialog.fit_to_paper.isChecked()
+    assert dialog.landscape.isChecked()
+    values = dialog.values()
+    assert values["scale"] == (1.0, 50.0)
+    assert values["style_sheet"] == "monochrome.ctb"
     win.close()

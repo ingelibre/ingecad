@@ -1028,9 +1028,11 @@ class MainWindow(QMainWindow):
         dialog = PageSetupDialog(self, layout)
         if not dialog.exec():
             return
-        width, height, margins, size_name = dialog.values()
+        values = dialog.values()
+        width, height = values.pop("width"), values.pop("height")
         self.history.execute(layout_ops.page_setup_command(
-            layout, width, height, margins, size_name))
+            layout, width, height, values.pop("margins"),
+            values.pop("size_name"), **values))
         self.regen_in_memory(zoom_after=True)   # the sheet changed size
         self.command_line.echo(
             tr("Page setup applied to \"{name}\": {w:g} × {h:g} mm.",

@@ -655,37 +655,132 @@ class PageSetupCommand(Command):
         self._apply(self._old, document)
 
 
-def page_setup_command(layout, width: float, height: float,
-                       margins, size_name: str = "") -> PageSetupCommand:
-    """PAGESETUP: paper ``width`` x ``height`` mm (as displayed — rotation
-    is normalized to 0), ``margins`` = (top, right, bottom, left) mm.
+# plot_layout_flags bits (AcDbPlotSettings group 70) used by the dialog.
+FLAG_PLOT_CENTERED = 4
+FLAG_PLOT_HIDDEN = 8               # "Hide paperspace objects"
+FLAG_USE_STANDARD_SCALE = 16
+FLAG_PLOT_PLOTSTYLES = 32          # "Plot with plot styles"
+FLAG_SCALE_LINEWEIGHTS = 64
+FLAG_PRINT_LINEWEIGHTS = 128       # "Plot object lineweights"
+FLAG_DRAW_VIEWPORTS_FIRST = 512    # = "Plot paperspace last"
 
-    Keeps the existing plot-origin offset and recomputes the paper limits
-    the way AutoCAD stores them (sheet rect relative to the printable-area
-    corner) — the equivalent of ezdxf's reset_paper_limits, minus the
-    viewport destruction.
+# AutoCAD's standard-scale list (code 75). Ratios missing here (1:5, 1:25,
+# 1:200...) are stored as a custom numerator/denominator, like AutoCAD does.
+STD_SCALE_CODES = {
+    (1, 1): 16, (1, 2): 17, (1, 4): 18, (1, 8): 19, (1, 10): 20,
+    (1, 16): 21, (1, 20): 22, (1, 30): 23, (1, 40): 24, (1, 50): 25,
+    (1, 100): 26, (2, 1): 27, (4, 1): 28, (8, 1): 29, (10, 1): 30,
+    (100, 1): 31, (1000, 1): 32,
+}
+
+# Plot area (plot_type, code 74) choices shown on a layout tab.
+PLOT_TYPE_DISPLAY = 0
+PLOT_TYPE_EXTENTS = 1
+PLOT_TYPE_LAYOUT = 5
+
+
+def page_setup_command(layout, width: float, height: float,
+                       margins, size_name: str = "", *,
+                       upside_down: bool = False,
+                       device=None, plot_type=None,
+                       offset=None, centered=None,
+                       fit_to_paper=None, scale=None,
+                       scale_lineweights=None, style_sheet=None,
+                       plot_lineweights=None, plot_styles=None,
+                       paperspace_last=None, hide_paperspace=None,
+                       shade_plot=None, shade_quality=None,
+                       shade_dpi=None) -> PageSetupCommand:
+    """PAGESETUP: the full AutoCAD page-setup surface as one Command.
+
+    ``width``/``height``/``margins`` are what the user SEES (orientation
+    already applied; margins = top/right/bottom/left). "Plot upside-down"
+    stores rotation 2 with the margins inverse-rotated so the display math
+    (paper_frame) shows them back where the user put them. Every keyword
+    left as None keeps the layout's current value for that field.
+
+    Recomputes the paper limits the way AutoCAD stores them (sheet rect
+    relative to the printable-area corner) — the equivalent of ezdxf's
+    reset_paper_limits, minus its viewport destruction.
     """
     m_top, m_right, m_bottom, m_left = (float(m) for m in margins)
-    try:
-        ox = float(layout.dxf.get("plot_origin_x_offset", 0.0)) or 0.0
-        oy = float(layout.dxf.get("plot_origin_y_offset", 0.0)) or 0.0
-    except (TypeError, ValueError):
-        ox = oy = 0.0
+    if offset is not None:
+        ox, oy = float(offset[0]), float(offset[1])
+    else:
+        try:
+            ox = float(layout.dxf.get("plot_origin_x_offset", 0.0)) or 0.0
+            oy = float(layout.dxf.get("plot_origin_y_offset", 0.0)) or 0.0
+        except (TypeError, ValueError):
+            ox = oy = 0.0
     label = size_name.replace(" ", "_") if size_name else "User"
+    if upside_down:
+        # rotation 2 (180°): stored margins = displayed rotated back
+        rotation = 2
+        s_top, s_right, s_bottom, s_left = m_bottom, m_left, m_top, m_right
+    else:
+        rotation = 0
+        s_top, s_right, s_bottom, s_left = m_top, m_right, m_bottom, m_left
     fields = {
         "paper_width": float(width),
         "paper_height": float(height),
-        "top_margin": m_top,
-        "right_margin": m_right,
-        "bottom_margin": m_bottom,
-        "left_margin": m_left,
-        "plot_rotation": 0,
+        "top_margin": s_top,
+        "right_margin": s_right,
+        "bottom_margin": s_bottom,
+        "left_margin": s_left,
+        "plot_rotation": rotation,
         "plot_paper_units": 1,          # mm (all lengths stored in mm anyway)
         "unit_factor": 1.0,
         "paper_size": f"{label}_({width:.2f}_x_{height:.2f}_MM)",
-        "limmin": (-(m_left + ox), -(m_bottom + oy)),
-        "limmax": (width - m_left - ox, height - m_bottom - oy),
+        "limmin": (-(s_left + ox), -(s_bottom + oy)),
+        "limmax": (width - s_left - ox, height - s_bottom - oy),
     }
+    if device is not None:
+        fields["plot_configuration_file"] = device
+    if plot_type is not None:
+        fields["plot_type"] = int(plot_type)
+    if offset is not None:
+        fields["plot_origin_x_offset"] = ox
+        fields["plot_origin_y_offset"] = oy
+    if style_sheet is not None:
+        fields["current_style_sheet"] = style_sheet
+    if shade_plot is not None:
+        fields["shade_plot_mode"] = int(shade_plot)
+    if shade_quality is not None:
+        fields["shade_plot_resolution_level"] = int(shade_quality)
+    if shade_dpi is not None:
+        fields["shade_plot_custom_dpi"] = int(shade_dpi)
+
+    # -- plot scale (fit / standard list / custom ratio) ---------------------
+    flag_bits: dict[int, bool] = {}
+    if fit_to_paper:
+        fields["standard_scale_type"] = 0       # "scaled to fit"
+        flag_bits[FLAG_USE_STANDARD_SCALE] = True
+    elif scale is not None:
+        num, den = float(scale[0]), float(scale[1])
+        fields["scale_numerator"] = num
+        fields["scale_denominator"] = den
+        fields["standard_scale_type"] = STD_SCALE_CODES.get(
+            (int(num), int(den)), 16)
+        # AutoCAD honors 142/143 when the standard-scale flag is off
+        # (and ezdxf's own page_setup does the same: "works best").
+        flag_bits[FLAG_USE_STANDARD_SCALE] = False
+
+    for bit, value in ((FLAG_PLOT_CENTERED, centered),
+                       (FLAG_SCALE_LINEWEIGHTS, scale_lineweights),
+                       (FLAG_PRINT_LINEWEIGHTS, plot_lineweights),
+                       (FLAG_PLOT_PLOTSTYLES, plot_styles),
+                       (FLAG_DRAW_VIEWPORTS_FIRST, paperspace_last),
+                       (FLAG_PLOT_HIDDEN, hide_paperspace)):
+        if value is not None:
+            flag_bits[bit] = bool(value)
+    if flag_bits:
+        try:
+            flags = int(layout.dxf.get_default("plot_layout_flags"))
+        except Exception:
+            flags = int(layout.dxf.get("plot_layout_flags", 0) or 0)
+        for bit, value in flag_bits.items():
+            flags = (flags | bit) if value else (flags & ~bit)
+        fields["plot_layout_flags"] = flags
+
     return PageSetupCommand(layout, fields)
 
 
