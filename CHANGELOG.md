@@ -1,5 +1,93 @@
 # Changelog
 
+## v0.2.0 — 2026-08-10
+
+Paper space and the complete dimension family. Everything in this release was
+built the same way: fetch the official AutoCAD documentation first (BricsCAD
+cross-checked — its option lists match AutoCAD's in every command we compared),
+then implement the exact prompt tree, then verify the result live against the
+reference. If AutoCAD prints `Specify dimension line location or
+[Mtext/Text/Angle/Horizontal/Vertical/Rotated]:`, so does IngeCAD.
+
+### Added — paper space (Model/Layout, the AutoCAD idiom end-to-end)
+- **Layout tabs** under the canvas (Model / Layout1 / …) with the LAYOUT
+  command (New/Copy/Rename/Delete/Set), the paper sheet drawn with its
+  printable-area margin, and the classic right-click tab menu.
+- **MVIEW floating viewports**: model content renders inside viewports on the
+  sheet; viewports are real selectable paper-space entities with grips
+  (move/resize/erase, undo like everything else).
+- **Exact viewport scale**: MSPACE/PSPACE (double-click too) and **ZOOM nXP**
+  (`1/50xp` = 1:50), a Viewports toolbar with the standard-scale dropdown,
+  wheel zoom + middle-drag pan inside the active viewport, and **VPLOCK** so
+  a set scale can't be nudged by a stray wheel tick.
+- **PAGESETUP** rebuilt as AutoCAD's Page Setup dialog, group by group
+  (printer/paper/area/offset/scale/orientation/options), stored per layout in
+  the DXF plot settings like AutoCAD stores them.
+- **PLOT of a layout**: the sheet maps to paper at 1:1 (viewports carry the
+  scale), pens in physical millimetres (0.25 mm default), viewport frames
+  plotted only when their flag says so. Verified with a ruler on the PDF.
+
+### Added — the dimension family, complete
+- **DIMANGULAR** (`DAN`): all four official paths — arc, circle, two lines,
+  Enter-for-vertex. The location pick chooses *which* angle (90° or its 270°
+  explement), and **Quadrant** locks the region.
+- **DIMARC** (`DAR`): arc-length dimension of an arc or a polyline arc
+  segment, with **Partial**.
+- **DIMORDINATE** (`DOR`): X/Y datum with the official auto rule (leader
+  direction picks the axis) and Xdatum/Ydatum forcing.
+- **DIMCENTER** (`DCE`): center mark or center lines per DIMCEN, the exact
+  AutoCAD geometry.
+- **DIMCONTINUE / DIMBASELINE** (`DCO`/`DBA`): chain from the session's last
+  linear dimension (or Select a base); continue keeps the base's dimension
+  line, baseline stacks each line DIMDLI beyond the previous; Undo inside the
+  command drops the last link; the chained dims inherit the base's style.
+- **DIMTEDIT** (`DIMTED`): move a dimension's text to any point, or
+  Left/Right/Center/Home/Angle.
+- **Every dim tool** (linear/aligned/radius/diameter included) now offers
+  **Mtext/Text/Angle** at the location prompt — `<>` stands for the measured
+  value ("`<> m`" renders as "12.50 m", radius keeps its R prefix), a space
+  suppresses the text, Angle rotates it. DIMLINEAR adds
+  **Horizontal/Vertical/Rotated** and select-object now handles circles (the
+  official quadrant rule) and polyline segments.
+
+### Added — construction commands
+- **XLINE** (`XL`) with the full option tree (Hor/Ver/Ang+Reference/Bisect/
+  Offset+Through) and **RAY**: real construction-line entities.
+- **DIVIDE / MEASURE** (`DIV`/`ME`): points or aligned blocks along any curve
+  (MEASURE steps from the end nearest the pick, official rule); each command
+  is ONE undo step.
+- **REVCLOUD**: Rectangular/Polygonal/Freehand/Object (+Reverse), sticky arc
+  length, Normal/Calligraphy styles — the scalloped cloud AutoCAD draws.
+
+### Changed — drawing commands brought to prompt-tree parity
+- **ARC**: the full 11-way construction matrix (3P, S-C-E, S-C-Angle,
+  S-C-chord Length, S-E-Angle, S-E-Radius, S-E-Direction, center-first forms,
+  Continue from last). **CIRCLE**: 2P/3P/TTR and Diameter with sticky radius.
+  **LINE**: Continue chain, tangent lock after an arc, real mid-command Undo.
+  **PLINE**: arc mode with tangent chaining, Width/Halfwidth taper, Close in
+  both modes. **RECTANG**: Chamfer/Fillet/Width/Elevation/Thickness, Area,
+  Dimensions, Rotation. **POLYGON**: Edge, Inscribed/Circumscribed with the
+  AutoCAD drag semantics. **ELLIPSE**: Arc (parametric, like AutoCAD) and
+  Rotation; the axis-swap rule fixed to match the spec. **TEXT**: the 14
+  justification anchors, Style, Align/Fit. **-HATCH**: the command-line hatch
+  with Properties/Solid/User-defined/draW/Advanced/COlor.
+- Session-sticky defaults where AutoCAD has them (CIRCLERAD, PLINEWID,
+  POLYSIDES, rectangle modes, hatch pattern), and new toolbar icons for every
+  new command.
+
+### Changed — DWG engine
+- `vendor/libredwg` re-based to release **0.14.8578 + 17 patches** (upstream
+  absorbed 10 of our earlier fixes in the window). Exact read parity verified
+  against the previous vendor over the full real-file bench: 0 worse.
+- **Save as DWG stays r2000 on purpose.** The planned switch to r2004 hit a
+  real LibreDWG encoder bug (object streams truncate on DXF-imported models,
+  on stock and patched trees alike); documented upstream-ready in
+  `tools/libredwg-patches/README.md` rather than shipping a broken writer.
+  ODA File Converter (optional, one click) still covers r2013/r2018 export.
+
+341 tests pass. The suite grew by ~90 tests across the four waves, all
+headless, all runnable in CI.
+
 ## v0.1.3 — 2026-08-07
 
 Erasing now erases on screen too. Marco reported that cutting a big selection

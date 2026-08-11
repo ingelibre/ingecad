@@ -31,9 +31,9 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature AutoCAD clone.
 
-## Status — v0.1
+## Status — v0.2
 
-First usable release. What works today:
+What works today:
 
 - **Faithful viewer** for real-world DWG/DXF: nested blocks, MTEXT, hatches
   (patterns + solids), linetypes, dimensions, OCS, paperspace layouts —
@@ -42,20 +42,31 @@ First usable release. What works today:
   DWG r2000 (LibreDWG) or r2018 (ODA File Converter, if installed), with a
   silent verified-save check.
 - **Classic interface**: command line at the bottom with AutoCAD aliases
-  (`L`, `C`, `M`, `TR`, `Z`+`E` …), dark model space, Model/Layout tabs,
-  dockable Layers / Properties / Styles panels.
-- **Drawing & editing**: lines, circles, arcs, polylines, rectangles,
-  polygons, text, hatches, dimensions; ERASE / MOVE / COPY / ROTATE /
-  SCALE / MIRROR / OFFSET / TRIM / EXTEND / FILLET / EXPLODE, grips,
-  window/crossing selection, clipboard copy/paste.
+  (`L`, `C`, `M`, `TR`, `Z`+`E` …), dark model space, dockable Layers /
+  Properties / Styles panels.
+- **Paper space like AutoCAD**: Model/Layout tabs, MVIEW floating viewports
+  with grips, exact scales via `ZOOM nXP` or the scale dropdown, MSPACE /
+  PSPACE, viewport lock, PAGESETUP per layout, and PLOT of the sheet at 1:1.
+- **Drawing with the real prompt trees**: lines, circles (2P/3P/TTR), the
+  full 11-way ARC matrix, polylines with arcs and width, rectangles
+  (chamfer/fillet/area/rotation), polygons, ellipses and elliptical arcs,
+  text with all 14 justifications, hatches; construction lines (XLINE/RAY),
+  DIVIDE/MEASURE with aligned blocks, REVCLOUD.
+- **Dimensions, complete**: linear, aligned, angular, arc length, ordinate,
+  radius, diameter, center marks, continue/baseline chains and DIMTEDIT —
+  every command with AutoCAD's own options (`Text` with `<>`, `Angle`,
+  `Rotated`, `Quadrant`, `Partial`…) and the official prompts.
+- **Editing**: ERASE / MOVE / COPY / ROTATE / SCALE / MIRROR / OFFSET /
+  TRIM / EXTEND / FILLET / EXPLODE, grips, window/crossing selection,
+  clipboard copy/paste.
 - **The AutoCAD feel**: object snaps with AutoSnap markers (END, MID, CEN,
   NOD, INT, PER, NEA), ORTHO / POLAR, absolute / relative / polar
   coordinate input, blocks (`B` / `I`), undo/redo of everything.
-- **Output**: print / export PDF and PNG to exact scale.
+- **Output**: print / export PDF and PNG to exact scale, from model or
+  layout.
 
-Planned next (v0.2): survey-point import with elevations, coordinate
-tables, elevation profiles, paper-space editing. See `CLAUDE.md` for the
-roadmap.
+Planned next (v0.3): survey-point import with elevations, coordinate
+tables, elevation profiles. See `CLAUDE.md` for the roadmap.
 
 ## Install (Linux, x86_64)
 
