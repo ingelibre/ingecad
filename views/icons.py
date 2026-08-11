@@ -13,14 +13,16 @@ import math
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
 
-_STROKE = QColor(210, 210, 210)
-_ACCENT = QColor(90, 170, 255)
-# AutoCAD's modify glyphs mark the ACTION in red over the geometry; ours use
-# the same three roles so a toolbar reads at a glance:
-#   grey   the object as it is now
-#   blue   what the command leaves behind
-#   red    the action itself (the arrows, the cut, the axis)
-_ACTION = QColor(232, 100, 88)
+# Sampled from AutoCAD's own dark-theme ribbon (2026-08-11 screenshot):
+# the primary geometry is near-white and the SECOND object — the copies, the
+# mirrored twin, the smaller scale, the array — is a light steel blue.
+# There is no red anywhere in the modify glyphs; the only warm colour in the
+# whole panel is the eraser's rubber.
+_STROKE = QColor(0xF0, 0xF4, 0xF6)
+_ACCENT = QColor(0x8F, 0xB8, 0xD8)
+_ACTION = _ACCENT          # kept for the icons that used it; no red
+_RUBBER = QColor(0xE3, 0xC2, 0x6E)
+_RUBBER_TIP = QColor(0xD8, 0x6B, 0x62)
 SIZE = 24
 
 
@@ -191,261 +193,251 @@ def _arrow(p: QPainter, x: float, y: float, ang: float) -> None:
 
 
 def _erase():
-    """The eraser rubbing a line out, as AutoCAD draws it."""
+    """AutoCAD's eraser: a tilted rubber with its red tip on a blue line."""
     pm, p = _canvas()
-    _pen(p, _STROKE)
-    p.drawLine(3, 18, 12, 18)                       # what is left of the line
-    _pen(p, _STROKE, 1.4, Qt.DotLine)
-    p.drawLine(12, 18, 21, 18)                      # what is being erased
-    p.save()                                        # the rubber, tilted
-    p.translate(15, 12)
-    p.rotate(-35)
-    _pen(p, _ACTION, 1.3)
-    p.setBrush(QBrush(QColor(232, 100, 88, 70)))
-    p.drawRect(QRectF(-4, -6, 8, 11))
-    p.drawLine(QPointF(-4, 1), QPointF(4, 1))
+    _pen(p, _ACCENT, 1.4)
+    p.drawLine(3, 21, 19, 21)                       # the line being erased
+    p.save()
+    p.translate(12, 11)
+    p.rotate(-45)
+    _pen(p, _STROKE, 1.1)
+    p.setBrush(QBrush(_RUBBER))                     # the body, tapered
+    p.drawPolygon(QPolygonF([QPointF(-3.4, -10), QPointF(3.4, -10),
+                             QPointF(3.4, 3), QPointF(-3.4, 3)]))
+    p.setBrush(QBrush(_RUBBER_TIP))                 # and the rubber tip
+    p.drawPolygon(QPolygonF([QPointF(-3.4, 3), QPointF(3.4, 3),
+                             QPointF(2.2, 8), QPointF(-2.2, 8)]))
     p.restore()
     p.end()
     return pm
 
 
 def _move():
+    """Just the four-way arrow — AutoCAD draws no object here."""
     pm, p = _canvas()
-    _pen(p, _STROKE)
-    p.drawRect(QRectF(6, 6, 12, 12))                # the object
-    _pen(p, _ACTION, 1.2)                           # and where it goes
+    _pen(p, _STROKE, 1.3)
     p.drawLine(12, 5, 12, 19)
     p.drawLine(5, 12, 19, 12)
-    for x, y, ang in ((12, 3.5, -90), (12, 20.5, 90),
-                      (3.5, 12, 180), (20.5, 12, 0)):
-        _tip(p, x, y, ang, 3.6)
+    for x, y, ang in ((12, 3, -90), (12, 21, 90), (3, 12, 180), (21, 12, 0)):
+        _tip(p, x, y, ang, 4.0, _STROKE)
     p.end()
     return pm
 
 
 def _copy():
+    """The source above with its arrow, the copies below in blue."""
     pm, p = _canvas()
-    _pen(p, _STROKE)
-    p.drawRect(QRectF(2, 12, 9, 9))                 # the original stays
-    _pen(p, _ACCENT)
-    p.drawRect(QRectF(13, 3, 9, 9))                 # the copy
-    _shaft(p, 11, 13, 15, 9)                        # from one to the other
+    _pen(p, _STROKE, 1.3)
+    p.drawEllipse(QPointF(7, 7), 3.6, 3.6)          # the object
+    p.drawLine(11, 5, 17, 5)                        # and where it goes
+    _tip(p, 17, 8.5, 90, 3.6, _STROKE)
+    p.drawLine(17, 5, 17, 7)
+    _pen(p, _ACCENT, 1.3)
+    p.drawEllipse(QPointF(9, 17), 4.0, 4.0)         # the copies
+    p.drawEllipse(QPointF(16, 17), 4.0, 4.0)
     p.end()
     return pm
 
 
 def _rotate():
+    """An open circular arrow, nothing else."""
     pm, p = _canvas()
-    _pen(p, _STROKE)
-    p.drawRect(QRectF(4, 12, 8, 8))                 # the object
-    _pen(p, _ACTION, 1.3)
-    p.drawArc(QRectF(5, 4, 15, 15), 20 * 16, 200 * 16)
-    _tip(p, 19, 13, 80)
-    _node(p, 8, 16)                                 # the base point
-    p.end()
-    return pm
-
-
-def _scale():
-    pm, p = _canvas()
-    _pen(p, _ACCENT)
-    p.drawRect(QRectF(3, 4, 17, 17))                # after: same corner, bigger
-    _pen(p, _STROKE)
-    p.drawRect(QRectF(6, 13, 6, 6))                 # before, clear of the edges
-    _shaft(p, 12, 13, 18, 7)
+    _pen(p, _STROKE, 1.5)
+    p.drawArc(QRectF(4, 5, 16, 16), -40 * 16, 305 * 16)
+    _tip(p, 20.1, 8.2, -5, 4.8, _STROKE)
     p.end()
     return pm
 
 
 def _mirror():
-    """A shape and its reflection — an L, so the flip is unmistakable."""
+    """A shape and its reflection: the twin is the blue one."""
     pm, p = _canvas()
-    shape = [(3, 4), (3, 20), (10, 20)]
-    _pen(p, _STROKE)
-    p.drawPolyline(QPolygonF([QPointF(*xy) for xy in shape]))
-    _pen(p, _ACCENT)
-    p.drawPolyline(QPolygonF([QPointF(24 - x, y) for x, y in shape]))
-    _pen(p, _ACTION, 1.2, Qt.DashLine)              # the mirror line
-    p.drawLine(12, 2, 12, 22)
+    _pen(p, _STROKE, 1.3)
+    p.drawPolygon(QPolygonF([QPointF(11, 4), QPointF(11, 19), QPointF(4, 19)]))
+    _pen(p, _ACCENT, 1.3)
+    p.drawPolygon(QPolygonF([QPointF(13, 4), QPointF(13, 19), QPointF(20, 19)]))
     p.end()
     return pm
 
 
-def _offset():
+def _scale():
+    """The big outline in white, what it scales to in blue."""
     pm, p = _canvas()
-    _pen(p, _STROKE)                                # the source shape
-    p.drawPolyline(QPolygonF([QPointF(*xy) for xy in
-                              ((7, 19), (7, 9), (13, 9), (13, 4))]))
-    _pen(p, _ACCENT)                                # its parallel
-    p.drawPolyline(QPolygonF([QPointF(*xy) for xy in
-                              ((12, 19), (12, 14), (18, 14), (18, 4))]))
-    _pen(p, _ACTION, 1.2)
-    p.drawLine(7, 21, 12, 21)                       # the distance
-    _tip(p, 12, 21, 0, 3.4)
-    _tip(p, 7, 21, 180, 3.4)
+    _pen(p, _STROKE, 1.3)
+    p.drawRect(QRectF(4, 4, 16, 16))
+    _pen(p, _ACCENT, 1.3)
+    p.drawRect(QRectF(4, 12, 8, 8))
     p.end()
     return pm
 
 
 def _trim():
-    """Two cutting edges, and the piece between them gone."""
+    """Scissors cutting a line — AutoCAD's own glyph for TRIM."""
     pm, p = _canvas()
-    _pen(p, _ACCENT)
-    p.drawLine(8, 3, 8, 21)                         # the cutting edges
-    p.drawLine(16, 3, 16, 21)
-    _pen(p, _STROKE)
-    p.drawLine(2, 12, 8, 12)                        # what survives
-    p.drawLine(16, 12, 22, 12)
-    _pen(p, _ACTION, 1.4)                           # and what is cut away
-    p.drawLine(10, 10, 14, 14)
-    p.drawLine(14, 10, 10, 14)
+    _pen(p, _STROKE, 1.2, Qt.DashLine)
+    p.drawLine(6, 4, 20, 4)                         # the line being cut
+    _pen(p, _STROKE, 1.3)
+    p.drawLine(9, 6, 16, 16)                        # the blades
+    p.drawLine(16, 6, 9, 16)
+    p.drawEllipse(QPointF(8.5, 18), 2.4, 2.4)       # the handles
+    p.drawEllipse(QPointF(16.5, 18), 2.4, 2.4)
     p.end()
     return pm
 
 
 def _extend():
+    """An arrow reaching the boundary it stops at."""
     pm, p = _canvas()
-    _pen(p, _ACCENT)
-    p.drawLine(19, 3, 19, 21)                       # the boundary
-    _pen(p, _STROKE)
-    p.drawLine(3, 12, 11, 12)                       # the object
-    _shaft(p, 11, 12, 18, 12)                       # and where it reaches
+    _pen(p, _ACCENT, 1.3)
+    p.drawLine(19, 4, 19, 20)                       # the boundary
+    _pen(p, _STROKE, 1.3)
+    p.drawLine(4, 12, 16, 12)
+    _tip(p, 18, 12, 0, 4.2, _STROKE)
     p.end()
     return pm
 
 
 def _fillet():
+    """The rounded corner, with the stub of the corner it replaced."""
     pm, p = _canvas()
-    _pen(p, _STROKE, 1.4, Qt.DotLine)               # the corner it replaces
-    p.drawLine(6, 6, 18, 6)
-    p.drawLine(6, 6, 6, 18)
-    _pen(p, _STROKE)
-    p.drawLine(6, 19, 6, 12)
-    p.drawLine(12, 6, 19, 6)
-    _pen(p, _ACCENT, 1.6)
-    p.drawArc(QRectF(6, 6, 12, 12), 90 * 16, 90 * 16)
+    _pen(p, _STROKE, 1.4)
+    p.drawArc(QRectF(6, 5, 16, 16), 90 * 16, 90 * 16)
+    p.drawLine(6, 13, 6, 20)
+    p.drawLine(14, 5, 20, 5)
+    _pen(p, _ACCENT, 1.2)
+    p.drawLine(16, 8, 20, 8)                        # the trimmed corner
     p.end()
     return pm
 
 
 def _chamfer():
+    """Same idea as the fillet, cut straight."""
     pm, p = _canvas()
-    _pen(p, _STROKE, 1.4, Qt.DotLine)
-    p.drawLine(6, 6, 18, 6)
-    p.drawLine(6, 6, 6, 18)
-    _pen(p, _STROKE)
-    p.drawLine(6, 19, 6, 13)
-    p.drawLine(13, 6, 19, 6)
-    _pen(p, _ACCENT, 1.6)
-    p.drawLine(6, 13, 13, 6)                        # the bevel
+    _pen(p, _STROKE, 1.4)
+    p.drawLine(6, 20, 6, 12)
+    p.drawLine(6, 12, 14, 5)                        # the bevel
+    p.drawLine(14, 5, 20, 5)
+    _pen(p, _ACCENT, 1.2)
+    p.drawLine(16, 8, 20, 8)
     p.end()
     return pm
 
 
-def _explode():
-    """A block coming apart — the pieces fly out of the middle."""
+def _array():
+    """A grid of copies: the first one white, the rest blue."""
     pm, p = _canvas()
-    _pen(p, _STROKE)
-    for x, y in ((3, 3), (14, 3), (3, 14), (14, 14)):
-        p.drawRect(QRectF(x, y, 7, 7))
-    _pen(p, _ACTION, 1.2)
-    for ang in (-135, -45, 135, 45):
-        a = math.radians(ang)
-        x0, y0 = 12 + 2.5 * math.cos(a), 12 + 2.5 * math.sin(a)
-        x1, y1 = 12 + 5.5 * math.cos(a), 12 + 5.5 * math.sin(a)
-        p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
-        _tip(p, x1, y1, ang, 3.2)
+    for row in range(2):
+        for col in range(2):
+            # The original is the first one; the rest are its copies.
+            _pen(p, _STROKE if (row, col) == (0, 0) else _ACCENT, 1.3)
+            p.drawRect(QRectF(4 + col * 9, 4 + row * 9, 7, 7))
     p.end()
     return pm
 
 
 def _stretch():
-    """A rectangle with one side pulled out — the crossing window included."""
+    """A shape with one side pulled out of true, and the arrow that did it."""
     pm, p = _canvas()
-    _pen(p, _STROKE, 1.2, Qt.DotLine)               # the shape as it was
-    p.drawRect(QRectF(3, 9, 11, 11))
-    _pen(p, _STROKE)                                # the part that holds
+    _pen(p, _STROKE, 1.3)
     p.drawPolyline(QPolygonF([QPointF(*xy) for xy in
-                              ((14, 9), (3, 9), (3, 20), (14, 20))]))
-    _pen(p, _ACCENT)                                # the corner pulled away
+                              ((5, 20), (5, 4), (15, 4), (19, 20))]))
+    _pen(p, _ACCENT, 1.3)
+    p.drawLine(5, 20, 19, 20)                       # the edge that moved
+    p.drawLine(12, 16, 17, 16)
+    _tip(p, 19, 16, 0, 3.6, _ACCENT)
+    p.end()
+    return pm
+
+
+def _offset():
+    """Nested parallels — the offset copy inside, in blue."""
+    pm, p = _canvas()
+    _pen(p, _STROKE, 1.3)
     p.drawPolyline(QPolygonF([QPointF(*xy) for xy in
-                              ((14, 9), (21, 3), (21, 14), (14, 20))]))
-    _shaft(p, 13, 8, 19, 4)
+                              ((19, 4), (5, 4), (5, 20), (19, 20))]))
+    _pen(p, _ACCENT, 1.3)
+    p.drawPolyline(QPolygonF([QPointF(*xy) for xy in
+                              ((19, 9), (10, 9), (10, 15), (19, 15))]))
+    p.end()
+    return pm
+
+
+def _explode():
+    """A block whose pieces have come apart."""
+    pm, p = _canvas()
+    _pen(p, _STROKE, 1.3)
+    p.drawRect(QRectF(3, 3, 8, 8))
+    p.drawRect(QRectF(3, 13, 8, 8))
+    _pen(p, _ACCENT, 1.3)
+    p.drawRect(QRectF(13, 3, 8, 8))
+    p.drawRect(QRectF(13, 13, 8, 8))
     p.end()
     return pm
 
 
 def _break():
+    """One object, now two, with the gap between them."""
     pm, p = _canvas()
-    _pen(p, _STROKE)
-    p.drawLine(3, 12, 9, 12)                        # the two pieces
+    _pen(p, _STROKE, 1.4)
+    p.drawLine(3, 12, 9, 12)
+    _pen(p, _ACCENT, 1.4)
     p.drawLine(15, 12, 21, 12)
-    _pen(p, _ACTION, 1.3)                           # the break points
-    p.drawLine(9, 7, 9, 17)
+    _pen(p, _STROKE, 1.1)
+    p.drawLine(9, 7, 9, 17)                         # where it was cut
     p.drawLine(15, 7, 15, 17)
     p.end()
     return pm
 
 
 def _join():
-    """Two pieces closing the gap between them."""
+    """Two pieces below, the single object they become above."""
     pm, p = _canvas()
-    _pen(p, _STROKE, 1.6)
-    p.drawLine(2, 16, 9, 16)                        # the two pieces, apart
-    p.drawLine(15, 16, 22, 16)
-    _pen(p, _ACCENT, 1.6)                           # and joined, above
-    p.drawLine(2, 8, 22, 8)
-    _shaft(p, 7, 12, 11, 12)                        # coming together
-    _shaft(p, 17, 12, 13, 12)
-    p.end()
-    return pm
-
-
-def _array():
-    pm, p = _canvas()
-    for row in range(3):
-        for col in range(3):
-            x, y = 3 + col * 7, 3 + row * 7
-            if row == 0 and col == 0:
-                _pen(p, _STROKE)                    # the original
-            else:
-                _pen(p, _ACCENT, 1.2)               # the copies
-            p.drawRect(QRectF(x, y, 5, 5))
+    _pen(p, _STROKE, 1.4)
+    p.drawLine(3, 17, 10, 17)
+    p.drawLine(14, 17, 21, 17)
+    _pen(p, _ACCENT, 1.4)
+    p.drawLine(3, 8, 21, 8)
+    _pen(p, _STROKE, 1.1)
+    p.drawLine(12, 15, 12, 10)
+    _tip(p, 12, 8.5, -90, 3.4, _STROKE)
     p.end()
     return pm
 
 
 def _matchprop():
-    """The brush that carries one object's properties onto another."""
+    """The brush that carries one object's look onto another."""
     pm, p = _canvas()
-    _pen(p, _STROKE)
+    _pen(p, _STROKE, 1.3)
     p.drawRect(QRectF(2, 14, 7, 7))                 # the source
-    _pen(p, _ACCENT)
+    _pen(p, _ACCENT, 1.3)
     p.drawRect(QRectF(15, 14, 7, 7))                # the destination
-    p.save()                                        # the brush
+    p.save()
     p.translate(12, 8)
-    p.rotate(35)
-    _pen(p, _ACTION, 1.3)
-    p.setBrush(QBrush(QColor(232, 100, 88, 70)))
-    p.drawRect(QRectF(-3, -7, 6, 8))
-    p.drawLine(QPointF(0, 1), QPointF(0, 5))
+    p.rotate(30)
+    _pen(p, _STROKE, 1.2)
+    p.setBrush(QBrush(_RUBBER))
+    p.drawRect(QRectF(-3, -8, 6, 8))                # the handle
+    p.setBrush(QBrush(_ACCENT))
+    p.drawRect(QRectF(-3, 0, 6, 4))                 # the bristles
     p.restore()
-    _shaft(p, 9, 19, 14, 19)
     p.end()
     return pm
 
 
 def _pedit():
+    """A polyline with its vertices, one of them picked up."""
     pm, p = _canvas()
-    _pen(p, _STROKE)
+    _pen(p, _STROKE, 1.3)
     p.drawPolyline(QPolygonF([QPointF(*xy) for xy in
                               ((3, 18), (9, 8), (15, 15), (21, 5))]))
+    p.save()
+    p.setPen(QPen(_STROKE, 1.0))
+    p.setBrush(Qt.NoBrush)
     for x, y in ((3, 18), (15, 15), (21, 5)):
-        _node(p, x, y)
-    p.save()                                        # the vertex being moved
-    p.setPen(QPen(_ACTION, 1.0))
-    p.setBrush(QBrush(_ACTION))
-    p.drawRect(QRectF(9 - 1.8, 8 - 1.8, 3.6, 3.6))
+        p.drawRect(QRectF(x - 1.8, y - 1.8, 3.6, 3.6))
+    p.setPen(QPen(_ACCENT, 1.0))
+    p.setBrush(QBrush(_ACCENT))
+    p.drawRect(QRectF(9 - 2.1, 8 - 2.1, 4.2, 4.2))  # the one being edited
     p.restore()
     p.end()
     return pm
