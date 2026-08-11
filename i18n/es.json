@@ -892,5 +892,6 @@
   "Offset distance = {d}": "Distancia de desfase = {d}",
   "Source": "Origen",
   "{kind} cannot be offset.": "{kind} no se puede desfasar.",
-  "The offset does not fit that polyline.": "El desfase no cabe en esa polilínea."
+  "The offset does not fit that polyline.": "El desfase no cabe en esa polilínea.",
+  "Explode": "Descomponer"
 }

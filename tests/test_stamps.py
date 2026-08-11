@@ -198,3 +198,22 @@ def test_editing_stamped_entity_retires_the_stamp(qapp):
     assert not win.viewport._stamps
     assert t._pending_render                  # surviving copies re-shown
     win.close()
+
+
+def test_every_modify_command_has_a_real_icon():
+    """EXPLODE shipped with an empty one for months — nothing was watching.
+
+    An icon that fails to paint is a blank square on the toolbar, which is
+    invisible in code review and obvious to the user.
+    """
+    from views.icons import SIZE, command_icon
+
+    for name in ("ERASE", "MOVE", "COPY", "ROTATE", "SCALE", "MIRROR",
+                 "OFFSET", "TRIM", "EXTEND", "FILLET", "CHAMFER", "EXPLODE",
+                 "STRETCH", "BREAK", "JOIN", "ARRAY", "MATCHPROP", "PEDIT"):
+        icon = command_icon(name)
+        assert not icon.isNull(), f"{name} has no icon"
+        image = icon.pixmap(SIZE, SIZE).toImage()
+        painted = sum(1 for x in range(SIZE) for y in range(SIZE)
+                      if image.pixelColor(x, y).alpha() > 0)
+        assert painted > 20, f"{name} paints almost nothing ({painted} px)"

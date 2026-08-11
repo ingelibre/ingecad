@@ -521,18 +521,18 @@ class MainWindow(QMainWindow):
         for label, name in ((tr("Trim"), "TRIM"), (tr("Extend"), "EXTEND"),
                             (tr("Fillet"), "FILLET"), (tr("Erase"), "ERASE")):
             cmd_item(modify_menu, label, name)
-        cmd_item(modify_menu, tr("Chamfer"), "CHAMFER", icon=False)
-        cmd_item(modify_menu, tr("Array"), "ARRAY", icon=False)
+        cmd_item(modify_menu, tr("Chamfer"), "CHAMFER")
+        cmd_item(modify_menu, tr("Array"), "ARRAY")
         modify_menu.addSeparator()
         for label, name in ((tr("Stretch"), "STRETCH"), (tr("Break"), "BREAK"),
                             (tr("Join"), "JOIN")):
-            cmd_item(modify_menu, label, name, icon=False)
+            cmd_item(modify_menu, label, name)
         modify_menu.addSeparator()
-        cmd_item(modify_menu, tr("Match Properties"), "MATCHPROP", icon=False)
+        cmd_item(modify_menu, tr("Match Properties"), "MATCHPROP")
         object_menu = QMenu(tr("Object"), self)
         modify_menu.addMenu(object_menu)
-        cmd_item(object_menu, tr("Polyline"), "PEDIT", icon=False)
-        cmd_item(modify_menu, tr("Explode"), "EXPLODE", icon=False)
+        cmd_item(object_menu, tr("Polyline"), "PEDIT")
+        cmd_item(modify_menu, tr("Explode"), "EXPLODE")
 
         # -- Tools ------------------------------------------------------------
         tools_menu = menu_bar.addMenu(tr("Tools"))
@@ -895,11 +895,19 @@ class MainWindow(QMainWindow):
                 ("POLYGON", tr("Polygon")), ("POINT", tr("Point")),
                 ("TEXT", tr("Text")), ("MTEXT", tr("Multiline text")),
                 ("HATCH", tr("Hatch"))]
-        modify = [("ERASE", tr("Erase")), ("MOVE", tr("Move")),
-                  ("COPY", tr("Copy")), ("ROTATE", tr("Rotate")),
-                  ("SCALE", tr("Scale")), ("MIRROR", tr("Mirror")),
-                  ("OFFSET", tr("Offset")), ("TRIM", tr("Trim")),
-                  ("EXTEND", tr("Extend")), ("FILLET", tr("Fillet"))]
+        # AutoCAD's own Modify toolbar order, so the hand finds them where
+        # it expects: erase, copy, mirror, offset, array, move, rotate,
+        # scale, stretch, trim, extend, break, join, chamfer, fillet,
+        # explode.
+        modify = [("ERASE", tr("Erase")), ("COPY", tr("Copy")),
+                  ("MIRROR", tr("Mirror")), ("OFFSET", tr("Offset")),
+                  ("ARRAY", tr("Array")), ("MOVE", tr("Move")),
+                  ("ROTATE", tr("Rotate")), ("SCALE", tr("Scale")),
+                  ("STRETCH", tr("Stretch")), ("TRIM", tr("Trim")),
+                  ("EXTEND", tr("Extend")), ("BREAK", tr("Break")),
+                  ("JOIN", tr("Join")), ("CHAMFER", tr("Chamfer")),
+                  ("FILLET", tr("Fillet")), ("MATCHPROP", tr("Match Properties")),
+                  ("EXPLODE", tr("Explode"))]
 
         self._draw_toolbar = QToolBar(tr("Draw"), self)
         self._draw_toolbar.setObjectName("draw_toolbar")
