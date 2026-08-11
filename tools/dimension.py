@@ -395,9 +395,352 @@ class DimDiameterTool(_CurvedDim):
                                     text_rotation=self._text_rotation)
 
 
+class DimAngularTool(_DimTextMixin, Tool):
+    """DIMANGULAR: arc / circle / two lines / Enter-for-vertex, then the
+    dimension arc location (which picks the dimensioned angle region)."""
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "DIMANGULAR"
+        self._reset_text_state()
+        self._mode = "select"
+        self._vertex: Point | None = None
+        self._p1: Point | None = None
+        self._p2: Point | None = None
+        self._line1 = None
+        self._line2 = None
+        self._region_free = True    # arc path keeps its own included angle
+        self._quadrant: Point | None = None
+        self.ctx.prompt(tr("Select arc, circle, line, or <specify vertex>:"))
+
+    def _location_prompt(self) -> str:
+        return tr("Specify dimension arc line location or "
+                  "[Mtext/Text/Angle/Quadrant]:")
+
+    def _measured(self) -> float:
+        if self._line1 and self._line2:
+            region = self._quadrant
+            if region is not None:
+                res = actions.angular_from_lines(self._line1, self._line2,
+                                                 region)
+                if res is not None:
+                    return actions.angular_measurement(*res)
+            a1 = math.atan2(self._line1[1][1] - self._line1[0][1],
+                            self._line1[1][0] - self._line1[0][0])
+            a2 = math.atan2(self._line2[1][1] - self._line2[0][1],
+                            self._line2[1][0] - self._line2[0][0])
+            return abs(math.degrees(a2 - a1)) % 180.0
+        if self._vertex and self._p1 and self._p2:
+            p1, p2 = self._p1, self._p2
+            if self._region_free and self._quadrant is not None:
+                p1, p2 = actions.angular_points(self._vertex, p1, p2,
+                                                self._quadrant)
+            return actions.angular_measurement(self._vertex, p1, p2)
+        return 0.0
+
+    def on_enter(self) -> None:
+        if self._text_enter():
+            return
+        if self._mode == "select":
+            self._mode = "vertex"
+            self.entity_picker = False
+            self.ctx.prompt(tr("Specify angle vertex:"))
+            return
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        if self._text_options(text, ready=self._mode == "locate"):
+            return True
+        if self._mode == "locate" and text.upper() in ("Q", "QUADRANT"):
+            self._pending = "quadrant"
+            self.ctx.prompt(tr("Specify quadrant:"))
+            return True
+        return False
+
+    def on_point(self, point: Point) -> None:
+        if self._pending == "quadrant":
+            self._quadrant = point
+            self._pending = None
+            self.ctx.prompt(self._location_prompt())
+            return
+        if self._pending is not None:
+            return
+        mode = self._mode
+        if mode == "select":
+            e = self.ctx.services.pick_entity(point) if self.ctx.services else None
+            t = e.dxftype() if e is not None else None
+            if t == "ARC":
+                c, r = e.dxf.center, e.dxf.radius
+                a0 = math.radians(e.dxf.start_angle)
+                a1 = math.radians(e.dxf.end_angle)
+                self._vertex = (c.x, c.y)
+                self._p1 = (c.x + r * math.cos(a0), c.y + r * math.sin(a0))
+                self._p2 = (c.x + r * math.cos(a1), c.y + r * math.sin(a1))
+                self._region_free = False
+                self._to_locate()
+            elif t == "CIRCLE":
+                c, r = e.dxf.center, e.dxf.radius
+                a = math.atan2(point[1] - c.y, point[0] - c.x)
+                self._vertex = (c.x, c.y)
+                self._p1 = (c.x + r * math.cos(a), c.y + r * math.sin(a))
+                self._mode = "circle2"
+                self.entity_picker = False
+                self.ctx.prompt(tr("Specify second angle endpoint:"))
+            elif t == "LINE":
+                s, w = e.dxf.start, e.dxf.end
+                self._line1 = ((s.x, s.y), (w.x, w.y))
+                self._mode = "line2"
+                self.ctx.prompt(tr("Select second line:"))
+            else:
+                self.ctx.echo(tr("Select an arc, circle, or line."))
+        elif mode == "line2":
+            e = self.ctx.services.pick_entity(point) if self.ctx.services else None
+            if e is None or e.dxftype() != "LINE":
+                self.ctx.echo(tr("Select second line:"))
+                return
+            s, w = e.dxf.start, e.dxf.end
+            line2 = ((s.x, s.y), (w.x, w.y))
+            if actions.line_intersection(self._line1, line2) is None:
+                self.ctx.echo(tr("Lines are parallel."))
+                return
+            self._line2 = line2
+            self._to_locate()
+        elif mode == "vertex":
+            self._vertex = point
+            self.last_point = point
+            self._mode = "vp1"
+            self.ctx.prompt(tr("Specify first angle endpoint:"))
+        elif mode == "vp1":
+            self._p1 = point
+            self._mode = "vp2"
+            self.ctx.prompt(tr("Specify second angle endpoint:"))
+        elif mode == "vp2":
+            self._p2 = point
+            self._to_locate()
+        else:   # locate
+            region = self._quadrant if self._quadrant is not None else point
+            if self._line2 is not None:
+                res = actions.angular_from_lines(self._line1, self._line2,
+                                                 region)
+                if res is None:
+                    self.ctx.echo(tr("Lines are parallel."))
+                    return
+                vertex, p1, p2 = res
+                cmd = actions.dim_angular(vertex, p1, p2, point,
+                                          text=self._text,
+                                          text_rotation=self._text_rotation)
+            else:
+                cmd = actions.dim_angular(
+                    self._vertex, self._p1, self._p2, point,
+                    region=region if self._region_free else None,
+                    text=self._text, text_rotation=self._text_rotation)
+            self.ctx.execute(cmd)
+            self.ctx.finish()
+
+    def _to_locate(self) -> None:
+        self._mode = "locate"
+        self.entity_picker = False
+        self.ctx.prompt(self._location_prompt())
+
+    def preview_segments(self, cursor: Point):
+        if self._mode == "locate" and self._vertex is not None:
+            return [(self._vertex, cursor)]
+        if self._mode == "vp1" and self._vertex is not None:
+            return [(self._vertex, cursor)]
+        if self._mode == "vp2" and self._vertex is not None:
+            return [(self._vertex, self._p1), (self._vertex, cursor)]
+        return []
+
+
+class DimArcTool(_DimTextMixin, Tool):
+    """DIMARC: arc-length dimension of an arc or polyline arc segment."""
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "DIMARC"
+        self._reset_text_state()
+        self._arc = None            # (center, radius, start_deg, end_deg)
+        self._partial_first: float | None = None
+        self.ctx.prompt(tr("Select arc or polyline arc segment:"))
+
+    def _location_prompt(self) -> str:
+        return tr("Specify arc length dimension location or "
+                  "[Mtext/Text/Angle/Partial]:")
+
+    def _measured(self) -> float:
+        if self._arc is None:
+            return 0.0
+        _c, r, a0, a1 = self._arc
+        return r * math.radians((a1 - a0) % 360.0 or 360.0)
+
+    def on_option(self, text: str) -> bool:
+        if self._text_options(text, ready=self._arc is not None):
+            return True
+        if self._arc is not None and text.upper() in ("P", "PARTIAL"):
+            self._pending = "partial1"
+            self.ctx.prompt(tr("Specify first point for arc length dimension:"))
+            return True
+        return False
+
+    def on_point(self, point: Point) -> None:
+        if self._pending == "partial1":
+            c, _r, a0, a1 = self._arc
+            self._partial_first = actions.clamp_angle_to_arc(point, c, a0, a1)
+            self._pending = "partial2"
+            self.ctx.prompt(tr("Specify second point for arc length dimension:"))
+            return
+        if self._pending == "partial2":
+            c, r, a0, a1 = self._arc
+            first = self._partial_first
+            second = actions.clamp_angle_to_arc(point, c, a0, a1)
+            # order the two along the CCW sweep from the arc's start
+            rel1 = (first - a0) % 360.0
+            rel2 = (second - a0) % 360.0
+            if rel1 > rel2:
+                first, second = second, first
+            self._arc = (c, r, first, second)
+            self._pending = None
+            self.ctx.prompt(self._location_prompt())
+            return
+        if self._pending is not None:
+            return
+        if self._arc is None:
+            e = self.ctx.services.pick_entity(point) if self.ctx.services else None
+            arc = self._arc_params(e, point) if e is not None else None
+            if arc is None:
+                self.ctx.echo(tr("Select arc or polyline arc segment:"))
+                return
+            self._arc = arc
+            self.entity_picker = False
+            self.ctx.prompt(self._location_prompt())
+        else:
+            c, r, a0, a1 = self._arc
+            self.ctx.execute(actions.dim_arc(
+                c, r, a0, a1, point,
+                text=self._text, text_rotation=self._text_rotation))
+            self.ctx.finish()
+
+    @staticmethod
+    def _arc_params(entity, pick: Point):
+        t = entity.dxftype()
+        if t == "ARC":
+            c = entity.dxf.center
+            return ((c.x, c.y), float(entity.dxf.radius),
+                    float(entity.dxf.start_angle), float(entity.dxf.end_angle))
+        if t == "LWPOLYLINE":
+            from ezdxf.math import bulge_to_arc
+            pts = list(entity.get_points("xyb"))
+            segs = list(zip(pts, pts[1:]))
+            if entity.closed and len(pts) > 1:
+                segs.append((pts[-1], (*pts[0][:2], 0.0)))
+            if not segs:
+                return None
+            a, b = min(segs, key=lambda s: _segment_distance(
+                pick, (s[0][0], s[0][1]), (s[1][0], s[1][1])))
+            if not a[2]:
+                return None            # a straight segment, not an arc
+            center, sa, ea, radius = bulge_to_arc(
+                (a[0], a[1]), (b[0], b[1]), a[2])
+            return ((center.x, center.y), float(radius),
+                    math.degrees(sa) % 360.0, math.degrees(ea) % 360.0)
+        return None
+
+    def preview_segments(self, cursor: Point):
+        if self._arc is None:
+            return []
+        return [(self._arc[0], cursor)]
+
+
+class DimOrdinateTool(_DimTextMixin, Tool):
+    """DIMORDINATE: X/Y datum of a feature, leader drag picks the axis."""
+
+    def start(self) -> None:
+        self.name = "DIMORDINATE"
+        self._reset_text_state()
+        self._feature: Point | None = None
+        self._dtype: str | None = None
+        self.ctx.prompt(tr("Specify feature location:"))
+
+    def _location_prompt(self) -> str:
+        return tr("Specify leader endpoint or "
+                  "[Xdatum/Ydatum/Mtext/Text/Angle]:")
+
+    def _measured(self) -> float:
+        if self._feature is None:
+            return 0.0
+        return self._feature[1] if self._dtype == "Y" else self._feature[0]
+
+    def on_option(self, text: str) -> bool:
+        if self._text_options(text, ready=self._feature is not None):
+            return True
+        if self._feature is None:
+            return False
+        key = text.upper()
+        if key in ("X", "XDATUM"):
+            self._dtype = "X"
+            self.ctx.prompt(self._location_prompt())
+            return True
+        if key in ("Y", "YDATUM"):
+            self._dtype = "Y"
+            self.ctx.prompt(self._location_prompt())
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        if self._text_enter():
+            return
+        self.ctx.finish()
+
+    def on_point(self, point: Point) -> None:
+        if self._pending is not None:
+            return
+        if self._feature is None:
+            self._feature = point
+            self.last_point = point
+            self.ctx.prompt(self._location_prompt())
+            return
+        self.ctx.execute(actions.dim_ordinate(
+            self._feature, point, dtype=self._dtype,
+            text=self._text, text_rotation=self._text_rotation))
+        self.ctx.finish()
+
+    def preview_segments(self, cursor: Point):
+        if self._feature is None:
+            return []
+        return [(self._feature, cursor)]
+
+
+class DimCenterTool(Tool):
+    """DIMCENTER: center mark / center lines per DIMCEN. Plain LINEs."""
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "DIMCENTER"
+        self.ctx.prompt(tr("Select arc or circle:"))
+
+    def on_point(self, point: Point) -> None:
+        e = self.ctx.services.pick_entity(point) if self.ctx.services else None
+        if e is None or e.dxftype() not in ("CIRCLE", "ARC"):
+            self.ctx.echo(tr("Select an arc or circle."))
+            return
+        cmd = actions.center_mark(e)
+        if cmd is None:
+            self.ctx.echo(tr("DIMCEN is 0 — no center mark drawn."))
+        else:
+            self.ctx.execute(cmd)
+        self.ctx.finish()
+
+
 DIM_TOOL_CLASSES = {
     "DIMLINEAR": DimLinearTool,
     "DIMALIGNED": DimAlignedTool,
     "DIMRADIUS": DimRadiusTool,
     "DIMDIAMETER": DimDiameterTool,
+    "DIMANGULAR": DimAngularTool,
+    "DIMARC": DimArcTool,
+    "DIMORDINATE": DimOrdinateTool,
+    "DIMCENTER": DimCenterTool,
 }

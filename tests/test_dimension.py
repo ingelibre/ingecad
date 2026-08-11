@@ -313,6 +313,204 @@ def test_preview_text_substitutes_placeholder():
     assert tool.preview_dimension((5, 4))["text"] == "10.00 m"
 
 
+# -- wave C: DIMANGULAR / DIMARC / DIMORDINATE / DIMCENTER ---------------------
+
+from tools.dimension import (   # noqa: E402
+    DimAngularTool,
+    DimArcTool,
+    DimCenterTool,
+    DimOrdinateTool,
+)
+
+
+def test_angular_vertex_flow():
+    h = Harness()
+    tool = DimAngularTool(h.ctx)
+    tool.start()
+    tool.on_enter()                       # <specify vertex>
+    tool.on_point((0, 0))                 # vertex
+    tool.on_point((10, 0))                # first endpoint
+    tool.on_point((0, 10))                # second endpoint
+    tool.on_point((3, 3))                 # location inside the 90-deg region
+    dims = h.msp.query("DIMENSION")
+    assert len(dims) == 1
+    assert dims[0].get_measurement() == pytest.approx(90.0)   # degrees
+    assert h.finished
+
+
+def test_angular_location_picks_the_other_angle():
+    # Same three points, location in the OUTER region -> 270 degrees.
+    h = Harness()
+    tool = DimAngularTool(h.ctx)
+    tool.start()
+    tool.on_enter()
+    tool.on_point((0, 0))
+    tool.on_point((10, 0))
+    tool.on_point((0, 10))
+    tool.on_point((-4, -4))               # explement side
+    m = h.msp.query("DIMENSION")[0].get_measurement()
+    assert m == pytest.approx(270.0)
+
+
+def test_angular_two_lines():
+    h = Harness()
+    l1 = h.msp.add_line((0, 0), (10, 0))
+    l2 = h.msp.add_line((0, 0), (10, 10))
+    picks = iter([l1, l2])
+
+    class TwoPicks:
+        def pick_entity(self, point):
+            return next(picks)
+
+    h.ctx.services = TwoPicks()
+    tool = DimAngularTool(h.ctx)
+    tool.start()
+    tool.on_point((5, 0))                 # first line
+    tool.on_point((5, 5))                 # second line
+    tool.on_point((6, 2))                 # inside the 45-deg wedge
+    m = h.msp.query("DIMENSION")[0].get_measurement()
+    assert m == pytest.approx(45.0)
+
+
+def test_angular_arc_uses_included_angle():
+    h = Harness()
+    arc = h.msp.add_arc((0, 0), 5, start_angle=0, end_angle=120)
+    h.ctx.services = FixedPick(arc)
+    tool = DimAngularTool(h.ctx)
+    tool.start()
+    tool.on_point((5, 1))                 # select the arc
+    tool.on_point((-6, -6))               # location outside the included angle
+    m = h.msp.query("DIMENSION")[0].get_measurement()
+    assert m == pytest.approx(120.0)   # NOT flipped by location
+
+
+def test_angular_quadrant_locks_region():
+    h = Harness()
+    tool = DimAngularTool(h.ctx)
+    tool.start()
+    tool.on_enter()
+    tool.on_point((0, 0))
+    tool.on_point((10, 0))
+    tool.on_point((0, 10))
+    assert tool.on_option("Q")
+    tool.on_point((3, 3))                 # quadrant: the 90-deg wedge
+    tool.on_point((-4, -4))               # location elsewhere — angle stays 90
+    m = h.msp.query("DIMENSION")[0].get_measurement()
+    assert m == pytest.approx(90.0)
+
+
+
+def _arc_dim_value(h):
+    """ezdxf's ARC_DIMENSION has no get_measurement — read the rendered
+    text (ISO-25 writes a comma decimal separator)."""
+    dim = h.msp.query("ARC_DIMENSION")[0]
+    blk = h.document.doc.blocks[dim.dxf.geometry]
+    texts = [e.text for e in blk if e.dxftype() == "MTEXT"]
+    texts += [e.dxf.text for e in blk if e.dxftype() == "TEXT"]
+    return float(texts[0].replace(",", "."))
+
+def test_arc_length_dimension():
+    h = Harness()
+    arc = h.msp.add_arc((0, 0), 10, start_angle=0, end_angle=90)
+    h.ctx.services = FixedPick(arc)
+    tool = DimArcTool(h.ctx)
+    tool.start()
+    tool.on_point((7, 7))                 # select the arc
+    tool.on_point((11, 11))               # location
+    assert len(h.msp.query("ARC_DIMENSION")) == 1
+    # arc length = r * sweep = 10 * pi/2 = 15.71
+    assert _arc_dim_value(h) == pytest.approx(10 * math.pi / 2, abs=0.01)
+
+
+def test_arc_partial():
+    h = Harness()
+    arc = h.msp.add_arc((0, 0), 10, start_angle=0, end_angle=180)
+    h.ctx.services = FixedPick(arc)
+    tool = DimArcTool(h.ctx)
+    tool.start()
+    tool.on_point((7, 7))
+    assert tool.on_option("P")
+    tool.on_point((10, 0))                # first partial point (0 deg)
+    tool.on_point((0, 10))                # second partial point (90 deg)
+    tool.on_point((8, 8))
+    assert _arc_dim_value(h) == pytest.approx(10 * math.pi / 2, abs=0.01)
+
+
+def test_arc_on_polyline_bulge_segment():
+    h = Harness()
+    # semicircle bulge segment from (0,0) to (10,0), radius 5
+    pl = h.msp.add_lwpolyline([(0, 0, 1.0), (10, 0, 0.0)], format="xyb")
+    h.ctx.services = FixedPick(pl)
+    tool = DimArcTool(h.ctx)
+    tool.start()
+    tool.on_point((5, 5))
+    tool.on_point((5, 7))
+    assert _arc_dim_value(h) == pytest.approx(5 * math.pi, abs=0.01)
+
+
+def test_ordinate_auto_and_forced_datum():
+    h = Harness()
+    tool = DimOrdinateTool(h.ctx)
+    tool.start()
+    tool.on_point((7, 3))                 # feature
+    tool.on_point((7.5, 9))               # mostly-vertical leader -> X datum
+    dim = h.msp.query("DIMENSION")[0]
+    assert dim.dxf.dimtype & 64            # the X-datum flag
+    assert dim.get_measurement().x == pytest.approx(7.0)
+
+    h2 = Harness()
+    tool2 = DimOrdinateTool(h2.ctx)
+    tool2.start()
+    tool2.on_point((7, 3))
+    assert tool2.on_option("Y")           # force the Y datum
+    tool2.on_point((7.5, 9))
+    dim2 = h2.msp.query("DIMENSION")[0]
+    assert not dim2.dxf.dimtype & 64       # Y datum
+    assert dim2.get_measurement().y == pytest.approx(3.0)
+
+
+def test_center_mark_and_center_lines():
+    h = Harness()
+    circle = h.msp.add_circle((10, 10), 6)
+    h.ctx.services = FixedPick(circle)
+    tool = DimCenterTool(h.ctx)
+    tool.start()
+    tool.on_point((16, 10))
+    lines = h.msp.query("LINE")
+    assert len(lines) == 2                # ISO default DIMCEN=2.5: plain mark
+    xs = sorted((ln.dxf.start.x, ln.dxf.end.x) for ln in lines)
+    assert xs[0] == (7.5, 12.5)           # the horizontal mark, +-2.5
+    h.history.undo()                      # ONE undo removes the whole mark
+    assert len(h.msp.query("LINE")) == 0
+
+    # negative DIMCEN -> mark + 4 center lines out to r + |DIMCEN|
+    h2 = Harness()
+    h2.document.doc.dimstyles.get("ISO-25").dxf.dimcen = -2.5
+    circle2 = h2.msp.add_circle((0, 0), 6)
+    h2.ctx.services = FixedPick(circle2)
+    tool2 = DimCenterTool(h2.ctx)
+    tool2.start()
+    tool2.on_point((6, 0))
+    lines2 = h2.msp.query("LINE")
+    assert len(lines2) == 6
+    reach = max(max(abs(ln.dxf.start.x), abs(ln.dxf.end.x)) for ln in lines2)
+    assert reach == pytest.approx(8.5)    # r + |dimcen|
+
+
+def test_angular_text_option():
+    h = Harness()
+    tool = DimAngularTool(h.ctx)
+    tool.start()
+    tool.on_enter()
+    tool.on_point((0, 0))
+    tool.on_point((10, 0))
+    tool.on_point((0, 10))
+    assert tool.on_option("T")
+    assert tool.on_option("<> approx")
+    tool.on_point((3, 3))
+    assert h.msp.query("DIMENSION")[0].dxf.text == "<> approx"
+
+
 def test_dimension_uses_current_style():
     h = Harness()
     h.document.doc.header["$DIMSTYLE"] = "Acot-100"

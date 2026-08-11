@@ -986,6 +986,168 @@ def dim_diameter(center, radius: float, location, *, text: str = "<>",
     return AddDimensionCommand(factory)
 
 
+# -- angular / arc-length / ordinate / center mark (v0.2 wave C) ---------------
+
+def _ccw_contains(a_from: float, a_to: float, a: float) -> bool:
+    """Is angle ``a`` inside the CCW sweep a_from -> a_to (radians)?"""
+    two_pi = 2.0 * math.pi
+    return (a - a_from) % two_pi <= (a_to - a_from) % two_pi
+
+
+def angular_points(vertex, p1, p2, region):
+    """Order (p1, p2) so the CCW angle from p1 to p2 contains ``region`` —
+    AutoCAD's rule: the location (or Quadrant) pick chooses WHICH of the two
+    possible angles is dimensioned."""
+    a1 = math.atan2(p1[1] - vertex[1], p1[0] - vertex[0])
+    a2 = math.atan2(p2[1] - vertex[1], p2[0] - vertex[0])
+    ar = math.atan2(region[1] - vertex[1], region[0] - vertex[0])
+    if _ccw_contains(a1, a2, ar):
+        return p1, p2
+    return p2, p1
+
+
+def angular_measurement(vertex, p1, p2) -> float:
+    """CCW sweep p1 -> p2 around vertex, in degrees."""
+    a1 = math.atan2(p1[1] - vertex[1], p1[0] - vertex[0])
+    a2 = math.atan2(p2[1] - vertex[1], p2[0] - vertex[0])
+    return math.degrees((a2 - a1) % (2.0 * math.pi))
+
+
+def line_intersection(l1, l2):
+    """Intersection of two infinite lines ((p, q) tuples), or None."""
+    (x1, y1), (x2, y2) = l1
+    (x3, y3), (x4, y4) = l2
+    d1 = (x2 - x1, y2 - y1)
+    d2 = (x4 - x3, y4 - y3)
+    denom = d1[0] * d2[1] - d1[1] * d2[0]
+    if abs(denom) < 1e-12:
+        return None
+    t = ((x3 - x1) * d2[1] - (y3 - y1) * d2[0]) / denom
+    return (x1 + t * d1[0], y1 + t * d1[1])
+
+
+def angular_from_lines(l1, l2, region):
+    """(vertex, p1, p2) for DIMANGULAR between two lines, or None if
+    parallel. Of the four regions the two lines form, the one containing
+    ``region`` is dimensioned (official behavior); p1/p2 lie on the
+    bounding rays at the region-pick's distance."""
+    vertex = line_intersection(l1, l2)
+    if vertex is None:
+        return None
+    radius = math.dist(region, vertex) or 1.0
+    ang1 = math.atan2(l1[1][1] - l1[0][1], l1[1][0] - l1[0][0])
+    ang2 = math.atan2(l2[1][1] - l2[0][1], l2[1][0] - l2[0][0])
+    ar = math.atan2(region[1] - vertex[1], region[0] - vertex[0])
+    for a in (ang1, ang1 + math.pi):
+        for b in (ang2, ang2 + math.pi):
+            lo, hi = (a, b) if _ccw_contains(a, b, ar) else (b, a)
+            if not _ccw_contains(lo, hi, ar):
+                continue
+            if (hi - lo) % (2.0 * math.pi) <= math.pi + 1e-9:
+                return (vertex,
+                        (vertex[0] + radius * math.cos(lo),
+                         vertex[1] + radius * math.sin(lo)),
+                        (vertex[0] + radius * math.cos(hi),
+                         vertex[1] + radius * math.sin(hi)))
+    return None
+
+
+def dim_angular(vertex, p1, p2, location, *, region=None, text: str = "<>",
+                text_rotation: float | None = None) -> AddDimensionCommand:
+    """DIMANGULAR: the CCW angle p1 -> p2 around ``vertex``. When ``region``
+    is given (the location or the Quadrant pick), the points are reordered so
+    the dimensioned angle is the one containing it; None keeps the order
+    (the arc path always dimensions the arc's own included angle)."""
+    if region is not None:
+        p1, p2 = angular_points(vertex, p1, p2, region)
+    q1, q2 = p1, p2
+
+    def factory(msp, document):
+        return msp.add_angular_dim_3p(
+            base=(location[0], location[1]), center=(vertex[0], vertex[1]),
+            p1=(q1[0], q1[1]), p2=(q2[0], q2[1]),
+            text=text, text_rotation=text_rotation,
+            dimstyle=_current_dimstyle(document))
+    return AddDimensionCommand(factory)
+
+
+def dim_arc(center, radius: float, start_angle: float, end_angle: float,
+            location, *, text: str = "<>",
+            text_rotation: float | None = None) -> AddDimensionCommand:
+    """DIMARC: arc-length dimension (angles in degrees, CCW start->end).
+    The dimension arc sits at the location pick's distance from the arc."""
+    distance = max(math.dist(location, center) - radius, 0.1 * radius)
+
+    def factory(msp, document):
+        return msp.add_arc_dim_cra(
+            center=(center[0], center[1]), radius=radius,
+            start_angle=start_angle, end_angle=end_angle, distance=distance,
+            text=text, text_rotation=text_rotation,
+            dimstyle=_current_dimstyle(document))
+    return AddDimensionCommand(factory)
+
+
+def clamp_angle_to_arc(pick, center, start_angle: float,
+                       end_angle: float) -> float:
+    """The pick's angle (degrees) clamped into the arc's CCW sweep — the
+    Partial option accepts points anywhere and uses the nearest arc point."""
+    two_pi = 360.0
+    a = math.degrees(math.atan2(pick[1] - center[1], pick[0] - center[0]))
+    sweep = (end_angle - start_angle) % two_pi or two_pi
+    rel = (a - start_angle) % two_pi
+    if rel <= sweep:
+        return start_angle + rel
+    # outside: clamp to the nearer endpoint
+    past_end = rel - sweep
+    before_start = two_pi - rel
+    return end_angle if past_end <= before_start else start_angle
+
+
+def dim_ordinate(feature, leader_end, *, dtype: str | None = None,
+                 text: str = "<>",
+                 text_rotation: float | None = None) -> AddDimensionCommand:
+    """DIMORDINATE: X or Y datum from the UCS origin. Auto choice (official
+    convention): a mostly-vertical leader writes the X datum, a mostly-
+    horizontal one the Y datum. ``dtype`` = "X"/"Y" forces it."""
+    dx, dy = leader_end[0] - feature[0], leader_end[1] - feature[1]
+    if dtype is None:
+        dtype = "X" if abs(dy) >= abs(dx) else "Y"
+
+    def factory(msp, document):
+        fn = msp.add_ordinate_x_dim if dtype == "X" else msp.add_ordinate_y_dim
+        return fn(feature_location=(feature[0], feature[1]), offset=(dx, dy),
+                  text=text, dimstyle=_current_dimstyle(document),
+                  dxfattribs=_text_rotation_attribs(text_rotation))
+    return AddDimensionCommand(factory)
+
+
+def center_mark(entity):
+    """DIMCENTER: center mark / center lines for an arc or circle, per the
+    current style's DIMCEN (0 = nothing -> None, >0 = mark of that size,
+    <0 = mark plus center lines extending |DIMCEN| outside — the exact
+    geometry AutoCAD and ezdxf's radius renderer draw). Plain LINEs."""
+    from core.commands import CompositeCommand
+
+    doc = entity.doc
+    name = doc.header.get("$DIMSTYLE", "Standard")
+    size = 2.5
+    if name in doc.dimstyles:
+        size = doc.dimstyles.get(name).dxf.get("dimcen", 2.5)
+    if not size:
+        return None
+    s = abs(size)
+    c = entity.dxf.center
+    cx, cy, r = c.x, c.y, float(entity.dxf.radius)
+    lines = [((cx - s, cy), (cx + s, cy)), ((cx, cy - s), (cx, cy + s))]
+    if size < 0 and r + s >= 2.0 * s:
+        far = r + s
+        lines += [((cx + 2 * s, cy), (cx + far, cy)),
+                  ((cx - 2 * s, cy), (cx - far, cy)),
+                  ((cx, cy + 2 * s), (cx, cy + far)),
+                  ((cx, cy - 2 * s), (cx, cy - far))]
+    return CompositeCommand("DIMCENTER", [add_line(a, b) for a, b in lines])
+
+
 class PasteCommand(Command):
     """Paste clipboard entities, translated so the base point lands on the
     target. Each paste makes fresh copies, so the clipboard stays reusable."""
