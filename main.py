@@ -186,8 +186,36 @@ def main() -> int:
             window.open_path(doc)
             opened = True
     if not opened:
+        # No file to open: ask which unit this drawing is in, and offer the
+        # recent ones — the two things BricsCAD asks at startup. A drawing
+        # double-clicked in the file manager never sees this window, and the
+        # user can retire it with its own checkbox.
+        opened = _startup_choice(window)
+    if not opened:
         window.new_document()
     return app.exec()
+
+
+def _startup_choice(window) -> bool:
+    """Show the startup window. True if it already produced a document."""
+    from views.startup_dialog import StartupDialog, should_show
+
+    if not should_show():
+        window.new_document(window.startup_template())
+        return True
+    dialog = StartupDialog(window)
+    dialog.exec()
+    choice = dialog.choice()
+    if choice is None:
+        return False
+    action, value = choice
+    if action == "open":
+        window.open_path(Path(value))
+    elif action == "template":
+        window.new_from_drawing(Path(value))
+    else:
+        window.new_document(value)
+    return True
 
 
 if __name__ == "__main__":

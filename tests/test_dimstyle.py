@@ -173,11 +173,15 @@ def test_manager_modify_executes_command(qapp, monkeypatch):
                 return {"dimtxt": 4.0}
 
         monkeypatch.setattr(mod, "DimStyleEditorDialog", FakeEditor)
-        dlg._modify()
+        # The seeded height depends on the drawing's template (a metres
+        # drawing carries 0.0025, a millimetre one 2.5), so undo is checked
+        # against what was there, not against a hard-coded number.
         style = win.document.doc.dimstyles.get("ISO-25")
+        seeded = style.dxf.dimtxt
+        dlg._modify()
         assert style.dxf.dimtxt == pytest.approx(4.0)
         win.history.undo()
-        assert style.dxf.dimtxt == pytest.approx(2.5)
+        assert style.dxf.dimtxt == pytest.approx(seeded)
         dlg.deleteLater()
     finally:
         win.close()

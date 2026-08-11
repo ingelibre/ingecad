@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMenuBar,
     QMessageBox,
     QVBoxLayout,
@@ -345,6 +346,22 @@ class MainWindow(QMainWindow):
              icon="NEW")
         item(file_menu, tr("Open..."), self._open_dialog, QKeySequence.Open,
              icon="OPEN")
+        # Owned by the window on the C++ side, not by Python: a QMenu that
+        # addMenu(title) hands back is Python-owned, and this one is reached
+        # later (every open and every save refresh it). Without a real parent
+        # it is collected as soon as the garbage collector runs on a window
+        # that has not been shown yet, and refreshing it raises "C++ object
+        # already deleted" in the middle of saving a drawing.
+        previous = getattr(self, "_recent_menu", None)
+        if previous is not None:
+            try:
+                previous.deleteLater()      # language switch: no leak
+            except RuntimeError:
+                pass
+        self._recent_menu = QMenu(tr("Recent drawings"), self)
+        file_menu.addMenu(self._recent_menu)
+        self._refresh_recent_menu()
+        file_menu.addSeparator()
         item(file_menu, tr("Save"), self.save_document, QKeySequence.Save,
              icon="SAVEAS")
         item(file_menu, tr("Save As..."), self._save_as_dialog,
@@ -787,8 +804,61 @@ class MainWindow(QMainWindow):
             b.setChecked(self._mode_state(key))
 
     # -- document plumbing for the tools ---------------------------------------
-    def new_document(self) -> None:
-        self.document = Document.new()
+    def _refresh_recent_menu(self) -> None:
+        """File > Recent drawings, newest first."""
+        from core import recent as recent_mod
+
+        menu = getattr(self, "_recent_menu", None)
+        if menu is None:
+            return
+        try:
+            menu.clear()
+        except RuntimeError:
+            # The menu bar was rebuilt (language switch) and this submenu's
+            # C++ side is gone. Saving a drawing must not die over a menu.
+            self._recent_menu = None
+            return
+        paths = recent_mod.load()
+        if not paths:
+            empty = menu.addAction(tr("(none yet)"))
+            empty.setEnabled(False)
+            return
+        for path in paths:
+            action = menu.addAction(path.name)
+            action.setToolTip(str(path))
+            action.triggered.connect(
+                lambda _=False, p=path: self.open_path(p))
+        menu.addSeparator()
+        menu.addAction(tr("Clear list"), self._clear_recent)
+
+    def _clear_recent(self) -> None:
+        from core import recent as recent_mod
+
+        recent_mod.clear()
+        self._refresh_recent_menu()
+
+    def startup_template(self) -> str:
+        """The template the user last started a drawing with."""
+        from core import templates as templates_mod
+        from views.startup_dialog import SETTING_TEMPLATE
+
+        return str(QSettings().value(SETTING_TEMPLATE,
+                                     templates_mod.DEFAULT_TEMPLATE))
+
+    def new_from_drawing(self, path: Path) -> None:
+        """Start from an existing drawing used as a template.
+
+        It opens like any other file and then forgets where it came from, so
+        the first Save asks for a name instead of overwriting the template —
+        which is the whole point of a template.
+        """
+        self.open_path(path, as_template=True)
+
+    def new_document(self, template: str | None = None) -> None:
+        from core import templates as templates_mod
+
+        self.document = templates_mod.new_document(
+            template or self.startup_template())
         self._active_layout = "Model"
         self._deactivate_viewport()
         self._update_space_button()
@@ -1961,6 +2031,10 @@ class MainWindow(QMainWindow):
                 tr("Cannot save {name}: {error}", name=path.name, error=str(exc)),
             )
             return
+        from core import recent as recent_mod
+
+        recent_mod.add(path)
+        self._refresh_recent_menu()
         self.setWindowTitle(f"IngeCAD — {self.document.name}")
         if engine == "libredwg":
             # r2000 opens in every AutoCAD/BricsCAD since 2000. Paperspace
@@ -1983,8 +2057,13 @@ class MainWindow(QMainWindow):
                    name=path.name, detail=detail),
             )
 
-    def open_path(self, path: Path) -> None:
-        """OS file associations, argv[1], and File > Open land here."""
+    def open_path(self, path: Path, as_template: bool = False) -> None:
+        """OS file associations, argv[1], and File > Open land here.
+
+        ``as_template`` keeps the content and drops the origin, so the drawing
+        becomes an unnamed new one.
+        """
+        self._open_as_template = bool(as_template)
         if path.suffix.lower() == ".dwg":
             from formats.dwg_bridge import have_dwg_support
 
@@ -2016,7 +2095,16 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def _on_open_done(self, document: Document, scene) -> None:
+        from core import recent as recent_mod
+
         self._set_busy("")
+        if getattr(self, "_open_as_template", False):
+            document.path = None          # a template has no file of its own
+            document.dirty = True
+        elif document.path is not None:
+            recent_mod.add(document.path)
+            self._refresh_recent_menu()
+        self._open_as_template = False
         self.document = document
         self._deactivate_viewport()
         # the open may have fallen back to a paper layout (empty modelspace)

@@ -46,6 +46,11 @@ def find_dxf2dwg() -> Optional[Path]:
     return _find_tool("dxf2dwg")
 
 
+def converter_path(name: str) -> Optional[Path]:
+    """Any LibreDWG tool we ship, by name (``dwgbmp`` for thumbnails)."""
+    return _find_tool(name)
+
+
 def have_dwg_support() -> bool:
     return find_dwg2dxf() is not None
 

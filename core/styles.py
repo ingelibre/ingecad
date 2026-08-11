@@ -39,21 +39,54 @@ ISO25_DIM = {
 DIM_SCALES = (50, 100, 200, 500)
 
 
-def install_default_styles(document) -> None:
+# The ISO-25 entries that are LENGTHS, and so have to be converted when the
+# drawing is not in millimetres. The rest (counts, flags, factors) do not.
+_DIM_LENGTHS = ("dimtxt", "dimasz", "dimexe", "dimexo", "dimgap")
+
+
+def iso25_for(unit_factor: float = 1.0) -> dict:
+    """ISO-25 expressed in the drawing's own unit.
+
+    ISO-25 is defined in millimetres. In a drawing whose unit is the metre,
+    2.5 mm of text is 0.0025 units — leaving it at 2.5 would put a text a
+    thousand times too big on the plan, which is the classic way a metric
+    drawing goes wrong.
+    """
+    attribs = dict(ISO25_DIM)
+    if unit_factor != 1.0:
+        for key in _DIM_LENGTHS:
+            attribs[key] = attribs[key] * unit_factor
+    return attribs
+
+
+def install_default_styles(document, unit_factor: float = 1.0,
+                           overwrite: bool = False) -> None:
     """Seed the standard styles a fresh AutoCAD drawing carries (idempotent).
 
     A metric ISO-25 dimension style plus one per common plot scale (1:50 …
     1:500), so the Dimension tab opens with a ready series to pick from.
+    ``unit_factor`` is drawing units per millimetre (see core.templates).
+    ``overwrite`` re-stamps entries that already exist, which is what
+    applying a template to a just-created document needs: Document.new()
+    seeds the millimetre sizes before the unit is known.
     """
     doc = document.doc
-    if "ISO-25" not in doc.dimstyles:
-        doc.dimstyles.new("ISO-25", dxfattribs=dict(ISO25_DIM))
+    base = iso25_for(unit_factor)
+
+    def put(name: str, attribs: dict) -> None:
+        if name not in doc.dimstyles:
+            doc.dimstyles.new(name, dxfattribs=attribs)
+        elif overwrite:
+            style = doc.dimstyles.get(name)
+            for key, value in attribs.items():
+                style.set_dxf_attrib(key, value)
+
+    put("ISO-25", base)
     for scale in DIM_SCALES:
         name = f"Acot-{scale}"        # ':' is not a valid DXF table name char
-        if name not in doc.dimstyles:
-            attribs = dict(ISO25_DIM)
-            attribs["dimscale"] = float(scale)
-            doc.dimstyles.new(name, dxfattribs=attribs)
+        attribs = dict(base)
+        attribs["dimscale"] = float(scale)
+        put(name, attribs)
     if doc.header.get("$DIMSTYLE", "Standard") not in doc.dimstyles:
         doc.header["$DIMSTYLE"] = "ISO-25"
 
