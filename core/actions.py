@@ -93,8 +93,29 @@ class Dispatcher:
             return
 
         tokens = text.split()
-        name = aliases_mod.resolve(tokens[0], self.aliases)
-        self._run(name, tokens[1:])
+        self._run(self.resolve_name(tokens[0]), tokens[1:])
+
+    def resolve_name(self, token: str) -> str:
+        """Alias, exact command, or the command a prefix completes to.
+
+        AutoCAD's AutoComplete finishes the name as you type, so ``OFF`` runs
+        OFFSET and ``REC`` runs RECTANG without spelling either out. Order
+        matters: an ALIAS always wins, or ``L`` would stop meaning LINE the
+        day a LAYER-ish command sorted ahead of it. Only then does a prefix
+        complete, and among several matches the first alphabetically — the
+        one AutoCAD appends, and the one the prompt has been showing inline
+        while the user typed.
+        """
+        name = aliases_mod.resolve(token, self.aliases)
+        if name in self._commands:
+            return name
+        prefix = token.strip().upper()
+        if prefix:
+            matches = sorted(n for n in self._commands
+                             if n.startswith(prefix))
+            if matches:
+                return matches[0]
+        return name
 
     def _run(self, name: str, args: list[str]) -> None:
         entry = self._commands.get(name)

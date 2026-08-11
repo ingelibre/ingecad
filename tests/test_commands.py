@@ -131,3 +131,81 @@ def test_history_undo_redo():
     h.undo()
     h.execute(_Toggle())   # new branch clears redo
     assert not h.can_redo
+
+
+# -- AutoComplete: a prefix runs the command it completes to --------------------
+
+def _autocomplete_dispatcher():
+    ran = []
+    d = Dispatcher(echo=lambda text: ran.append(("echo", text)))
+    for name in ("OFFSET", "OPEN", "LINE", "LAYER", "LAYOUT", "LIST",
+                 "RECTANG", "REDO", "REGEN", "MOVE", "MATCHPROP", "MEASURE",
+                 "MIRROR", "STRETCH", "SAVE", "SAVEAS"):
+        d.register(name, lambda *a, n=name: ran.append(n))
+    return d, ran
+
+
+def test_a_prefix_runs_the_command_it_completes_to():
+    """Typing OFF and Enter runs OFFSET, as AutoCAD's AutoComplete does."""
+    d, ran = _autocomplete_dispatcher()
+    for typed, expected in (("OFF", "OFFSET"), ("off", "OFFSET"),
+                            ("REC", "RECTANG"), ("MEA", "MEASURE"),
+                            ("STRE", "STRETCH"), ("LAYO", "LAYOUT")):
+        ran.clear()
+        d.submit(typed)
+        assert ran and ran[0] == expected, f"{typed} ran {ran}"
+
+
+def test_an_alias_always_beats_a_prefix():
+    """L must stay LINE even though LAYER, LAYOUT and LIST all start with L.
+
+    This is the one that would rot silently: add a command that sorts ahead
+    of LINE and the muscle memory of every AutoCAD user breaks.
+    """
+    d, ran = _autocomplete_dispatcher()
+    for typed, expected in (("L", "LINE"), ("M", "MOVE"), ("O", "OFFSET"),
+                            ("MA", "MATCHPROP"), ("RE", "REGEN")):
+        ran.clear()
+        d.submit(typed)
+        assert ran and ran[0] == expected, f"{typed} ran {ran}"
+
+
+def test_an_ambiguous_prefix_takes_the_first_alphabetically():
+    """The one AutoCAD appends — and the one the prompt showed inline."""
+    d, ran = _autocomplete_dispatcher()
+    d.submit("SAV")
+    assert ran and ran[0] == "SAVE"        # SAVE before SAVEAS
+
+
+def test_an_exact_command_name_still_wins_over_anything_shorter():
+    d, ran = _autocomplete_dispatcher()
+    d.submit("SAVEAS")
+    assert ran and ran[0] == "SAVEAS"
+
+
+def test_a_prefix_that_matches_nothing_is_still_unknown():
+    d, ran = _autocomplete_dispatcher()
+    d.submit("XYZZY")
+    assert ran and ran[0][0] == "echo" and "Unknown" in ran[0][1]
+
+
+def test_arguments_survive_the_completion():
+    d, ran = _autocomplete_dispatcher()
+    captured = []
+    d.register("LTSCALE", lambda *args: captured.append(args))
+    d.submit("LTS 25")
+    assert captured == [("25",)]
+    captured.clear()
+    d.submit("LTSC 0.5")               # completed from a prefix
+    assert captured == [("0.5",)]
+
+
+def test_the_completion_does_not_hijack_a_pending_prompt():
+    """Inside a command, "O" is that command's option, not OFFSET."""
+    d, ran = _autocomplete_dispatcher()
+    answers = []
+    d.register("ARRAY", lambda *a: Prompt("type?", lambda t: answers.append(t)))
+    d.submit("ARRAY")
+    d.submit("O")
+    assert answers == ["O"]
+    assert "OFFSET" not in ran
