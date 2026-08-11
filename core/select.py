@@ -3,9 +3,16 @@
 """Entity selection: pick box, window (fully inside), crossing (touching).
 
 A GeometryIndex extracts pickable geometry per entity into NumPy arrays
-(the same lazy strategy as the snap engine). Exotic entity types fall back
-to their bounding box, so everything on screen is selectable even when we
-do not understand its exact shape.
+(the same lazy strategy as the snap engine). Entity types we do not know how
+to trace fall back to their bounding box, so everything on screen stays
+selectable even when we do not understand its exact shape.
+
+That fallback is a last resort, not a shortcut: a boxed entity is picked by
+clicking anywhere inside its rectangle and is highlighted AS a rectangle, so
+a window over a busy drawing drags in things the user never crossed. Curves
+(ellipses, splines, polylines with bulges), the filled quads and the
+construction lines are therefore traced for real; what stays boxed is listed
+in ``BOXED_TYPES`` with the reason.
 
 Scale notes (a real 92k-entity cadastre = 1.35 M segment rows):
 - Owners are interned to int32 ids (``_owners`` list + per-row ``*_oidx``
@@ -26,6 +33,57 @@ import numpy as np
 
 from ezdxf import bbox as ezbbox
 
+# Types ezdxf can turn into a Path, which we flatten into pick segments.
+PATH_TYPES = frozenset(
+    {"ELLIPSE", "SPLINE", "POLYLINE", "SOLID", "TRACE", "3DFACE", "HELIX"})
+
+# What still falls back to its bounding box, and why:
+#   TEXT/MTEXT/ATTDEF/ATTRIB  a text IS picked by its box, in AutoCAD too
+#   INSERT                    tracing one means expanding its block: measured
+#                             on a real plan, 42 inserts expand to 75 718
+#                             entities in 1.2 s — the index would cost more
+#                             than the drawing. Blocks stay boxed on purpose.
+#   IMAGE/WIPEOUT/MLINE/...   rectangular by nature, or too rare to trace
+BOXED_TYPES = frozenset(
+    {"TEXT", "MTEXT", "ATTDEF", "ATTRIB", "INSERT", "IMAGE", "WIPEOUT",
+     "MLINE", "SHAPE", "VIEWPORT", "ACAD_PROXY_ENTITY"})
+
+# A pick index needs the shape, not the render: past this many segments a
+# curve is decimated evenly (an ellipse the size of a plan is still exact to
+# a fraction of a pixel at 512 chords).
+MAX_CURVE_SEGMENTS = 512
+
+# Half-length given to the infinite construction lines. Long enough to cross
+# any real drawing (1000 km), short enough to keep float64 arithmetic exact
+# next to UTM coordinates.
+CONSTRUCTION_REACH = 1.0e6
+
+
+def flatten_points(entity, max_segments: int = MAX_CURVE_SEGMENTS):
+    """Trace an entity into 2D points, or None if ezdxf cannot path it.
+
+    The sagitta scales with the entity so a fillet and a cadastre-sized
+    ellipse are both traced to the same *relative* accuracy — a fixed
+    tolerance would either shred the small one or square off the big one.
+    """
+    from ezdxf import path as ezpath
+
+    try:
+        path = ezpath.make_path(entity)
+    except Exception:
+        return None
+    box = ezbbox.extents([entity], fast=True)
+    size = max(box.size.x, box.size.y) if box.has_data else 1.0
+    distance = max(abs(size) / 500.0, 1e-9)
+    try:
+        points = [(v.x, v.y) for v in path.flattening(distance)]
+    except Exception:
+        return None
+    if len(points) > max_segments + 1:
+        keep = np.linspace(0, len(points) - 1, max_segments + 1).astype(int)
+        points = [points[i] for i in keep]
+    return points if len(points) > 1 else None
+
 
 class GeometryIndex:
     """Per-entity pick geometry over a Document's modelspace."""
@@ -44,6 +102,12 @@ class GeometryIndex:
         self._circle_oidx = np.empty(0, dtype=np.int32)
         self._boxes = np.empty((0, 4))          # min_x min_y max_x max_y
         self._box_oidx = np.empty(0, dtype=np.int32)
+        # Boxes that answer a CLICK but nothing else: the inside of a piece of
+        # text a user aims at (a dimension's number). They must stay out of
+        # window/crossing and out of the highlight, which is where a rectangle
+        # turns into selection garbage.
+        self._pick_boxes = np.empty((0, 4))
+        self._pick_box_oidx = np.empty(0, dtype=np.int32)
 
     def invalidate(self) -> None:
         self._dirty = True
@@ -67,7 +131,8 @@ class GeometryIndex:
 
     # -- extraction -------------------------------------------------------------
     @staticmethod
-    def _extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o) -> None:
+    def _extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
+                 pboxes=None, pbox_o=None) -> None:
         t = e.dxftype()
         try:
             if t == "LINE":
@@ -75,10 +140,18 @@ class GeometryIndex:
                 segs.append((s.x, s.y, w.x, w.y))
                 seg_o.append(oid)
             elif t == "LWPOLYLINE":
-                pts = e.get_points("xy")
-                pairs = list(zip(pts, pts[1:]))
-                if e.closed and len(pts) > 2:
-                    pairs.append((pts[-1], pts[0]))
+                if any(p[4] for p in e.get_points("xyseb")):
+                    # Arc segments: trace the arcs. Picking a curved lot
+                    # boundary by its chords misses the bulge exactly where
+                    # the user aims — at the curve.
+                    pts = flatten_points(e) or [
+                        (p[0], p[1]) for p in e.get_points("xy")]
+                    pairs = list(zip(pts, pts[1:]))
+                else:
+                    pts = e.get_points("xy")
+                    pairs = list(zip(pts, pts[1:]))
+                    if e.closed and len(pts) > 2:
+                        pairs.append((pts[-1], pts[0]))
                 for a, b in pairs:
                     segs.append((a[0], a[1], b[0], b[1]))
                     seg_o.append(oid)
@@ -98,14 +171,182 @@ class GeometryIndex:
                 l = e.dxf.location
                 segs.append((l.x, l.y, l.x, l.y))
                 seg_o.append(oid)
+            elif t in ("XLINE", "RAY"):
+                # Infinite by definition: a long chord through the base point
+                # picks and crosses correctly, and never sits "fully inside"
+                # a window — which is the right answer for an infinite line.
+                base = e.dxf.start
+                d = e.dxf.unit_vector
+                reach = CONSTRUCTION_REACH
+                back = 0.0 if t == "RAY" else reach
+                segs.append((base.x - d.x * back, base.y - d.y * back,
+                             base.x + d.x * reach, base.y + d.y * reach))
+                seg_o.append(oid)
+            elif t == "LEADER":
+                vertices = [(v[0], v[1]) for v in e.vertices]
+                for a, b in zip(vertices, vertices[1:]):
+                    segs.append((a[0], a[1], b[0], b[1]))
+                    seg_o.append(oid)
+            elif t in PATH_TYPES:
+                points = flatten_points(e)
+                if points:
+                    for a, b in zip(points, points[1:]):
+                        segs.append((a[0], a[1], b[0], b[1]))
+                        seg_o.append(oid)
+                else:
+                    GeometryIndex._box(e, oid, boxes, box_o)
+            elif t == "DIMENSION":
+                # A dimension's picture lives in its anonymous block. Tracing
+                # it is what makes a dimension pick like AutoCAD's — on its
+                # lines, arrows and text — instead of anywhere in a rectangle
+                # that usually spans the object being measured. Measured cheap:
+                # 317 dimensions expand to 3094 entities in under 10 ms.
+                if not GeometryIndex._dimension(e, oid, segs, seg_o,
+                                                circles, circle_o,
+                                                pboxes, pbox_o):
+                    GeometryIndex._box(e, oid, boxes, box_o)
+            elif t in ("MULTILEADER", "MLEADER"):
+                if not GeometryIndex._multileader(e, oid, segs, seg_o,
+                                                  circles, circle_o,
+                                                  pboxes, pbox_o):
+                    GeometryIndex._box(e, oid, boxes, box_o)
+            elif t == "HATCH":
+                if not GeometryIndex._hatch(e, oid, segs, seg_o):
+                    GeometryIndex._box(e, oid, boxes, box_o)
             else:
-                box = ezbbox.extents([e], fast=True)
-                if box.has_data:
-                    boxes.append((box.extmin.x, box.extmin.y,
-                                  box.extmax.x, box.extmax.y))
-                    box_o.append(oid)
+                GeometryIndex._box(e, oid, boxes, box_o)
         except Exception:
             pass
+
+    @staticmethod
+    def _text_box_segments(e, oid, segs, seg_o) -> bool:
+        """A closed rectangle around a text/arrow, as four real segments.
+
+        A text IS picked by its box, in AutoCAD too — but the box must be the
+        TEXT's, not the whole owner's.
+        """
+        box = ezbbox.extents([e], fast=True)
+        if not box.has_data:
+            return False
+        x0, y0 = box.extmin.x, box.extmin.y
+        x1, y1 = box.extmax.x, box.extmax.y
+        for a, b in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)),
+                     ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))):
+            segs.append((a[0], a[1], b[0], b[1]))
+            seg_o.append(oid)
+        return True
+
+    @staticmethod
+    def _dimension(e, oid, segs, seg_o, circles, circle_o,
+                   pboxes=None, pbox_o=None) -> bool:
+        """Trace the dimension's own geometry block. True if anything came out."""
+        try:
+            block = e.get_geometry_block()
+        except Exception:
+            block = None
+        if block is None:
+            return False
+        return GeometryIndex._children(block, oid, segs, seg_o,
+                                       circles, circle_o, pboxes, pbox_o)
+
+    @staticmethod
+    def _multileader(e, oid, segs, seg_o, circles, circle_o,
+                     pboxes=None, pbox_o=None) -> bool:
+        """Trace a MULTILEADER through its virtual entities.
+
+        A leader points AT something, so its bounding box always contains
+        what it points at — the worst possible pick rectangle. They are few
+        and expand to a handful of entities each, unlike block inserts.
+        """
+        try:
+            children = list(e.virtual_entities())
+        except Exception:
+            return False
+        return GeometryIndex._children(children, oid, segs, seg_o,
+                                       circles, circle_o, pboxes, pbox_o)
+
+    @staticmethod
+    def _children(children, oid, segs, seg_o, circles, circle_o,
+                  pboxes=None, pbox_o=None) -> bool:
+        """Trace the entities of a generated block into the owner's geometry."""
+        before = len(segs) + len(circles)
+        for child in children:
+            kind = child.dxftype()
+            if kind == "LINE":
+                s, w = child.dxf.start, child.dxf.end
+                segs.append((s.x, s.y, w.x, w.y))
+                seg_o.append(oid)
+            elif kind == "ARC":
+                c = child.dxf.center
+                a0 = math.radians(child.dxf.start_angle) % math.tau
+                a1 = math.radians(child.dxf.end_angle) % math.tau
+                if a1 <= a0:
+                    a1 += math.tau
+                circles.append((c.x, c.y, child.dxf.radius, 1.0, a0, a1))
+                circle_o.append(oid)
+            elif kind == "CIRCLE":
+                c = child.dxf.center
+                circles.append(
+                    (c.x, c.y, child.dxf.radius, 0.0, 0.0, math.tau))
+                circle_o.append(oid)
+            elif kind in ("LWPOLYLINE", "SOLID", "TRACE", "3DFACE", "SPLINE",
+                          "ELLIPSE", "POLYLINE"):
+                points = flatten_points(child)
+                if points:
+                    for a, b in zip(points, points[1:]):
+                        segs.append((a[0], a[1], b[0], b[1]))
+                        seg_o.append(oid)
+            elif kind in ("MTEXT", "TEXT", "INSERT"):
+                # The outline goes in as real geometry (window/crossing see
+                # the text where it is), and the inside answers a click:
+                # people select a dimension by clicking its number.
+                GeometryIndex._text_box_segments(child, oid, segs, seg_o)
+                if pboxes is not None:
+                    GeometryIndex._box(child, oid, pboxes, pbox_o)
+        return len(segs) + len(circles) > before
+
+    @staticmethod
+    def _hatch(e, oid, segs, seg_o) -> bool:
+        """Trace a hatch by its boundary paths.
+
+        Clicking INSIDE a hatch no longer selects it — the same rule AutoCAD
+        applies to a pattern hatch. The rectangle it replaces was worse: it
+        caught the hatch from anywhere in its bounding box, including a
+        crossing window that never touched it.
+        """
+        from ezdxf import path as ezpath
+
+        box = ezbbox.extents([e], fast=True)
+        size = max(box.size.x, box.size.y) if box.has_data else 1.0
+        distance = max(abs(size) / 500.0, 1e-9)
+        emitted = False
+        try:
+            paths = list(ezpath.from_hatch(e))
+        except Exception:
+            return False
+        for path in paths:
+            try:
+                points = [(v.x, v.y) for v in path.flattening(distance)]
+            except Exception:
+                continue
+            if len(points) > MAX_CURVE_SEGMENTS + 1:
+                keep = np.linspace(
+                    0, len(points) - 1, MAX_CURVE_SEGMENTS + 1).astype(int)
+                points = [points[i] for i in keep]
+            for a, b in zip(points, points[1:]):
+                segs.append((a[0], a[1], b[0], b[1]))
+                seg_o.append(oid)
+                emitted = True
+        return emitted
+
+    @staticmethod
+    def _box(e, oid, boxes, box_o) -> None:
+        """The last-resort bounding box (see BOXED_TYPES)."""
+        box = ezbbox.extents([e], fast=True)
+        if box.has_data:
+            boxes.append((box.extmin.x, box.extmin.y,
+                          box.extmax.x, box.extmax.y))
+            box_o.append(oid)
 
     @staticmethod
     def _seg_bounds_of(segs: np.ndarray) -> np.ndarray:
@@ -127,12 +368,15 @@ class GeometryIndex:
         circle_o: list = []
         boxes: list = []
         box_o: list = []
+        pboxes: list = []
+        pbox_o: list = []
         for e in self.document.modelspace():
             try:
                 oid = self._intern(e.dxf.handle)
             except Exception:
                 continue
-            self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o)
+            self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
+                          pboxes, pbox_o)
         self._segs = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
         self._seg_oidx = np.asarray(seg_o, dtype=np.int32)
         self._seg_bounds = self._seg_bounds_of(self._segs)
@@ -140,6 +384,8 @@ class GeometryIndex:
         self._circle_oidx = np.asarray(circle_o, dtype=np.int32)
         self._boxes = np.asarray(boxes, dtype=np.float64).reshape(-1, 4)
         self._box_oidx = np.asarray(box_o, dtype=np.int32)
+        self._pick_boxes = np.asarray(pboxes, dtype=np.float64).reshape(-1, 4)
+        self._pick_box_oidx = np.asarray(pbox_o, dtype=np.int32)
         self._dirty = False
         self.version += 1
 
@@ -159,12 +405,15 @@ class GeometryIndex:
         circle_o: list = []
         boxes: list = []
         box_o: list = []
+        pboxes: list = []
+        pbox_o: list = []
         for e in entities:
             try:
                 oid = self._intern(e.dxf.handle)
             except Exception:
                 continue
-            self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o)
+            self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
+                          pboxes, pbox_o)
         if segs:
             new = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
             self._segs = np.vstack([self._segs, new])
@@ -183,6 +432,12 @@ class GeometryIndex:
                 [self._boxes, np.asarray(boxes, dtype=np.float64).reshape(-1, 4)])
             self._box_oidx = np.concatenate(
                 [self._box_oidx, np.asarray(box_o, dtype=np.int32)])
+        if pboxes:
+            self._pick_boxes = np.vstack(
+                [self._pick_boxes,
+                 np.asarray(pboxes, dtype=np.float64).reshape(-1, 4)])
+            self._pick_box_oidx = np.concatenate(
+                [self._pick_box_oidx, np.asarray(pbox_o, dtype=np.int32)])
         self.version += 1
 
     def remove_handles(self, handles) -> None:
@@ -201,7 +456,8 @@ class GeometryIndex:
         for arr_name, oidx_name, bounds_name in (
                 ("_segs", "_seg_oidx", "_seg_bounds"),
                 ("_circles", "_circle_oidx", None),
-                ("_boxes", "_box_oidx", None)):
+                ("_boxes", "_box_oidx", None),
+                ("_pick_boxes", "_pick_box_oidx", None)):
             oidx = getattr(self, oidx_name)
             if not len(oidx):
                 continue
@@ -234,6 +490,9 @@ class GeometryIndex:
         mask = np.isin(self._box_oidx, ids)
         if mask.any():
             self._boxes[mask] += shift4
+        mask = np.isin(self._pick_box_oidx, ids)
+        if mask.any():
+            self._pick_boxes[mask] += shift4
         self.version += 1
 
     def add_translated(self, pairs, dx: float, dy: float) -> set:
@@ -263,7 +522,8 @@ class GeometryIndex:
         for arr_name, oidx_name, bounds_name, shift in (
                 ("_segs", "_seg_oidx", "_seg_bounds", shift4),
                 ("_circles", "_circle_oidx", None, None),
-                ("_boxes", "_box_oidx", None, shift4)):
+                ("_boxes", "_box_oidx", None, shift4),
+                ("_pick_boxes", "_pick_box_oidx", None, shift4)):
             oidx = getattr(self, oidx_name)
             if not len(oidx):
                 continue
@@ -332,6 +592,17 @@ class GeometryIndex:
                 areas = ((b[hits, 2] - b[hits, 0]) * (b[hits, 3] - b[hits, 1]))
                 best = (tolerance, self._owners[
                     self._box_oidx[hits[int(np.argmin(areas))]]])
+        if len(self._pick_boxes) and best is None:
+            # Click-only regions (a dimension's text): last resort, and
+            # deliberately absent from window/crossing and the highlight.
+            b = self._pick_boxes
+            inside = ((cx >= b[:, 0] - tolerance) & (cx <= b[:, 2] + tolerance)
+                      & (cy >= b[:, 1] - tolerance) & (cy <= b[:, 3] + tolerance))
+            hits = np.nonzero(inside)[0]
+            if len(hits):
+                areas = ((b[hits, 2] - b[hits, 0]) * (b[hits, 3] - b[hits, 1]))
+                best = (tolerance, self._owners[
+                    self._pick_box_oidx[hits[int(np.argmin(areas))]]])
         return best[1] if best else None
 
     def window(self, rect: tuple[float, float, float, float]) -> list[str]:
