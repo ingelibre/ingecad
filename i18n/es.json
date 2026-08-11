@@ -531,5 +531,16 @@
   "Angular": "Angular",
   "Arc Length": "Longitud de arco",
   "Ordinate": "Coordenada",
-  "Center Mark": "Marca de centro"
+  "Center Mark": "Marca de centro",
+  "Specify a second extension line origin or [Undo/Select] <Select>:": "Precise el origen de la segunda línea de referencia o [desHacer(U)/Seleccionar(S)] <Seleccionar>:",
+  "Select continued dimension:": "Seleccione la cota a continuar:",
+  "Select base dimension:": "Seleccione la cota base:",
+  "Select a linear or aligned dimension.": "Seleccione una cota lineal o alineada.",
+  "Nothing to undo.": "Nada que deshacer.",
+  "Select dimension:": "Seleccione la cota:",
+  "Specify new location for dimension text or [Left/Right/Center/Home/Angle]:": "Precise la nueva ubicación del texto de cota o [Izquierda(L)/Derecha(R)/Centro(C)/Inicial(H)/ángulo(A)]:",
+  "Specify angle for dimension text:": "Precise el ángulo del texto de cota:",
+  "Baseline": "Línea base",
+  "Continue": "Continuar",
+  "Align Text": "Alinear texto"
 }

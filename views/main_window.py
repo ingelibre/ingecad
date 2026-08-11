@@ -445,7 +445,11 @@ class MainWindow(QMainWindow):
         cmd_item(dim_menu, tr("Diameter"), "DIMDIAMETER", icon=False)
         cmd_item(dim_menu, tr("Angular"), "DIMANGULAR", icon=False)
         dim_menu.addSeparator()
+        cmd_item(dim_menu, tr("Baseline"), "DIMBASELINE", icon=False)
+        cmd_item(dim_menu, tr("Continue"), "DIMCONTINUE", icon=False)
+        dim_menu.addSeparator()
         cmd_item(dim_menu, tr("Center Mark"), "DIMCENTER", icon=False)
+        cmd_item(dim_menu, tr("Align Text"), "DIMTEDIT", icon=False)
         dim_menu.addSeparator()
         cmd_item(dim_menu, tr("Area"), "AREA", icon=False)
 
@@ -1067,6 +1071,7 @@ class MainWindow(QMainWindow):
                      "BLOCK", "INSERT", "EXPLODE", "HATCH", "-HATCH",
                      "DIMLINEAR", "DIMALIGNED", "DIMRADIUS", "DIMDIAMETER",
                      "DIMANGULAR", "DIMARC", "DIMORDINATE", "DIMCENTER",
+                     "DIMCONTINUE", "DIMBASELINE", "DIMTEDIT",
                      "MVIEW", "XLINE", "RAY", "DIVIDE", "MEASURE",
                      "REVCLOUD"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))

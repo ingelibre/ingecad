@@ -18,6 +18,23 @@ from core.i18n import tr
 from tools.base import Point, Tool
 
 
+# DIMCONTINUE/DIMBASELINE chain from the last linear/aligned dimension of
+# the session (official behavior); creation registers it here.
+_LAST_DIM: list = [None]
+
+
+def set_last_dimension(dim) -> None:
+    _LAST_DIM[0] = dim
+
+
+def last_dimension():
+    """The session's last linear-family dimension, if it still exists."""
+    d = _LAST_DIM[0]
+    if d is not None and d.is_alive and (d.dxf.dimtype & 15) in (0, 1):
+        return d
+    return None
+
+
 def _segment_distance(p: Point, a: Point, b: Point) -> float:
     dx, dy = b[0] - a[0], b[1] - a[1]
     length2 = dx * dx + dy * dy or 1.0
@@ -203,7 +220,10 @@ class _TwoPointDim(_DimTextMixin, Tool):
             self.last_point = point
             self.ctx.prompt(self._location_prompt())
         else:
-            self.ctx.execute(self._make(point))
+            cmd = self._make(point)
+            self.ctx.execute(cmd)
+            if cmd.dim is not None and (cmd.dim.dxf.dimtype & 15) in (0, 1):
+                set_last_dimension(cmd.dim)
             self.ctx.finish()
 
     def preview_segments(self, cursor: Point):
@@ -734,6 +754,211 @@ class DimCenterTool(Tool):
         self.ctx.finish()
 
 
+class _ChainDim(Tool):
+    """DIMCONTINUE/DIMBASELINE: chain new dimensions from a base linear or
+    aligned dimension. The session's last one is picked up automatically;
+    otherwise (or via the Select option) the user picks the base. Undo drops
+    the last chained dimension without leaving the command."""
+
+    BASELINE = False
+
+    def start(self) -> None:
+        self._base = last_dimension()
+        self._prev_location: Point | None = None
+        self._stack: list = []       # (base, prev_location) before each add
+        if self._base is None:
+            self._enter_select()
+        else:
+            self._prev_location = self._base_location(self._base)
+            self.ctx.prompt(self._chain_prompt())
+
+    def _chain_prompt(self) -> str:
+        return tr("Specify a second extension line origin or "
+                  "[Undo/Select] <Select>:")
+
+    def _select_prompt(self) -> str:
+        if self.BASELINE:
+            return tr("Select base dimension:")
+        return tr("Select continued dimension:")
+
+    def _enter_select(self) -> None:
+        self._selecting = True
+        self.entity_picker = True
+        self.ctx.prompt(self._select_prompt())
+
+    @staticmethod
+    def _base_location(base) -> Point:
+        p = base.dxf.defpoint
+        return (p.x, p.y)
+
+    def on_enter(self) -> None:
+        # Enter -> <Select> a new base; Enter at the select prompt ends.
+        if getattr(self, "_selecting", False):
+            self.ctx.finish()
+            return
+        self._enter_select()
+
+    def on_option(self, text: str) -> bool:
+        if getattr(self, "_selecting", False):
+            return False
+        key = text.upper()
+        if key in ("U", "UNDO"):
+            if not self._stack:
+                self.ctx.echo(tr("Nothing to undo."))
+                return True
+            self.ctx.undo_last()
+            self._base, self._prev_location = self._stack.pop()
+            self.ctx.prompt(self._chain_prompt())
+            return True
+        if key in ("S", "SELECT"):
+            self._enter_select()
+            return True
+        return False
+
+    def on_point(self, point: Point) -> None:
+        if getattr(self, "_selecting", False):
+            e = self.ctx.services.pick_entity(point) if self.ctx.services else None
+            if e is None or e.dxftype() != "DIMENSION" \
+                    or (e.dxf.dimtype & 15) not in (0, 1):
+                self.ctx.echo(tr("Select a linear or aligned dimension."))
+                return
+            self._base = e
+            self._prev_location = self._base_location(e)
+            self._selecting = False
+            self.entity_picker = False
+            self._stack.clear()
+            self.ctx.prompt(self._chain_prompt())
+            return
+        base = self._base
+        if base is None or not base.is_alive:
+            self._enter_select()
+            return
+        aligned = (base.dxf.dimtype & 15) == 1
+        b1 = base.dxf.defpoint2
+        b2 = base.dxf.defpoint3
+        p1 = (b1.x, b1.y) if self.BASELINE else (b2.x, b2.y)
+        style = base.dxf.get("dimstyle", None)
+        if self.BASELINE:
+            location = self._baseline_location(p1, point)
+        else:
+            location = self._prev_location
+        if aligned:
+            cmd = actions.dim_aligned(p1, point, location, dimstyle=style)
+        else:
+            cmd = actions.dim_linear(p1, point, location,
+                                     angle=base.dxf.get("angle", 0.0),
+                                     dimstyle=style)
+        self._stack.append((self._base, self._prev_location))
+        self.ctx.execute(cmd)
+        set_last_dimension(cmd.dim)
+        if self.BASELINE:
+            self._prev_location = location
+        else:
+            # the new dimension becomes the base: successive continuation
+            self._base = cmd.dim
+            self._prev_location = self._base_location(cmd.dim)
+        self.ctx.prompt(self._chain_prompt())
+
+    def _baseline_location(self, p1: Point, p2: Point) -> Point:
+        """The previous dimension line shifted DIMDLI away from the points."""
+        base = self._base
+        dli = 3.75
+        doc = base.doc
+        style = base.dxf.get("dimstyle", None)
+        if doc is not None and style and style in doc.dimstyles:
+            dli = doc.dimstyles.get(style).dxf.get("dimdli", 3.75) or 3.75
+        if (base.dxf.dimtype & 15) == 1:
+            dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+        else:
+            a = math.radians(base.dxf.get("angle", 0.0))
+            dx, dy = math.cos(a), math.sin(a)
+        length = math.hypot(dx, dy) or 1.0
+        nx, ny = -dy / length, dx / length
+        prev = self._prev_location
+        side = (prev[0] - p1[0]) * nx + (prev[1] - p1[1]) * ny
+        if side < 0:
+            nx, ny = -nx, -ny
+        return (prev[0] + nx * dli, prev[1] + ny * dli)
+
+    def preview_segments(self, cursor: Point):
+        if getattr(self, "_selecting", False) or self._base is None:
+            return []
+        b = self._base.dxf.defpoint2 if self.BASELINE \
+            else self._base.dxf.defpoint3
+        return [((b.x, b.y), cursor)]
+
+
+class DimContinueTool(_ChainDim):
+    def start(self) -> None:
+        self.name = "DIMCONTINUE"
+        super().start()
+
+
+class DimBaselineTool(_ChainDim):
+    BASELINE = True
+
+    def start(self) -> None:
+        self.name = "DIMBASELINE"
+        super().start()
+
+
+class DimTextEditTool(Tool):
+    """DIMTEDIT: move or realign an existing dimension's text."""
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "DIMTEDIT"
+        self._dim = None
+        self._pending_angle = False
+        self.ctx.prompt(tr("Select dimension:"))
+
+    def on_option(self, text: str) -> bool:
+        if self._pending_angle:
+            try:
+                angle = float(text)
+            except ValueError:
+                self.ctx.echo(tr("Requires a numeric angle."))
+                return True
+            self.ctx.execute(actions.dim_text_edit(self._dim, angle=angle))
+            self.ctx.finish()
+            return True
+        if self._dim is None:
+            return False
+        key = text.upper()
+        halign = {"L": "left", "LEFT": "left", "R": "right", "RIGHT": "right",
+                  "C": "center", "CENTER": "center"}.get(key)
+        if halign:
+            self.ctx.execute(actions.dim_text_edit(self._dim, halign=halign))
+            self.ctx.finish()
+            return True
+        if key in ("H", "HOME"):
+            self.ctx.execute(actions.dim_text_edit(self._dim, home=True))
+            self.ctx.finish()
+            return True
+        if key in ("A", "ANGLE"):
+            self._pending_angle = True
+            self.ctx.prompt(tr("Specify angle for dimension text:"))
+            return True
+        return False
+
+    def on_point(self, point: Point) -> None:
+        if self._pending_angle:
+            return
+        if self._dim is None:
+            e = self.ctx.services.pick_entity(point) if self.ctx.services else None
+            if e is None or e.dxftype() not in ("DIMENSION", "ARC_DIMENSION"):
+                self.ctx.echo(tr("Select dimension:"))
+                return
+            self._dim = e
+            self.entity_picker = False
+            self.ctx.prompt(tr("Specify new location for dimension text or "
+                               "[Left/Right/Center/Home/Angle]:"))
+            return
+        self.ctx.execute(actions.dim_text_edit(self._dim, location=point))
+        self.ctx.finish()
+
+
 DIM_TOOL_CLASSES = {
     "DIMLINEAR": DimLinearTool,
     "DIMALIGNED": DimAlignedTool,
@@ -743,4 +968,7 @@ DIM_TOOL_CLASSES = {
     "DIMARC": DimArcTool,
     "DIMORDINATE": DimOrdinateTool,
     "DIMCENTER": DimCenterTool,
+    "DIMCONTINUE": DimContinueTool,
+    "DIMBASELINE": DimBaselineTool,
+    "DIMTEDIT": DimTextEditTool,
 }

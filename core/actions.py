@@ -896,12 +896,16 @@ class AddDimensionCommand(Command):
 
     def undo(self, document) -> None:
         msp = document.modelspace()
+        block = self._block_name
         if self.dim is not None and self.dim.is_alive:
+            # DIMTEDIT re-renders into a fresh *D block: trust the entity's
+            # current geometry attribute over the name captured at creation.
+            block = self.dim.dxf.get("geometry", block)
             self.removed_handles = [self.dim.dxf.handle]
             msp.delete_entity(self.dim)
-        if self._block_name and self._block_name in document.doc.blocks:
+        if block and block in document.doc.blocks:
             try:
-                document.doc.blocks.delete_block(self._block_name, safe=False)
+                document.doc.blocks.delete_block(block, safe=False)
             except Exception:
                 pass
         self.dim = None
@@ -914,8 +918,8 @@ def _current_dimstyle(document) -> str:
 
 
 def dim_linear(p1, p2, location, *, angle: float | None = None,
-               text: str = "<>",
-               text_rotation: float | None = None) -> AddDimensionCommand:
+               text: str = "<>", text_rotation: float | None = None,
+               dimstyle: str | None = None) -> AddDimensionCommand:
     """DIMLINEAR: horizontal/vertical chosen by the dimension-line pick, or a
     forced angle (Horizontal=0 / Vertical=90 / Rotated=any). ``text`` follows
     AutoCAD's Text option: "<>" is the measurement, " " suppresses it, any
@@ -931,8 +935,15 @@ def dim_linear(p1, p2, location, *, angle: float | None = None,
             base=(location[0], location[1]),
             p1=(p1[0], p1[1]), p2=(p2[0], p2[1]),
             angle=angle, text=text, text_rotation=text_rotation,
-            dimstyle=_current_dimstyle(document))
+            dimstyle=_chained_dimstyle(dimstyle, document))
     return AddDimensionCommand(factory)
+
+
+def _chained_dimstyle(dimstyle: str | None, document) -> str:
+    """DIMCONTINUE/DIMBASELINE inherit the base dimension's style."""
+    if dimstyle and dimstyle in document.doc.dimstyles:
+        return dimstyle
+    return _current_dimstyle(document)
 
 
 def _text_rotation_attribs(text_rotation: float | None) -> dict:
@@ -944,7 +955,8 @@ def _text_rotation_attribs(text_rotation: float | None) -> dict:
 
 
 def dim_aligned(p1, p2, location, *, text: str = "<>",
-                text_rotation: float | None = None) -> AddDimensionCommand:
+                text_rotation: float | None = None,
+                dimstyle: str | None = None) -> AddDimensionCommand:
     """DIMALIGNED: dimension parallel to p1->p2, offset to the picked side."""
     dx, dy = p2[0] - p1[0], p2[1] - p1[1]
     length = math.hypot(dx, dy) or 1.0
@@ -955,7 +967,7 @@ def dim_aligned(p1, p2, location, *, text: str = "<>",
         return msp.add_aligned_dim(
             p1=(p1[0], p1[1]), p2=(p2[0], p2[1]),
             distance=distance, text=text,
-            dimstyle=_current_dimstyle(document),
+            dimstyle=_chained_dimstyle(dimstyle, document),
             dxfattribs=_text_rotation_attribs(text_rotation))
     return AddDimensionCommand(factory)
 
@@ -984,6 +996,97 @@ def dim_diameter(center, radius: float, location, *, text: str = "<>",
             text=text, dimstyle=_current_dimstyle(document),
             dxfattribs=_text_rotation_attribs(text_rotation))
     return AddDimensionCommand(factory)
+
+
+def _dim_block_shared(document, name: str) -> bool:
+    """Is the anonymous *D block still referenced by any dimension?"""
+    for e in document.doc.entitydb.values():
+        if e.is_alive and e.dxftype() in ("DIMENSION", "ARC_DIMENSION") \
+                and e.dxf.get("geometry", None) == name:
+            return True
+    return False
+
+
+def _drop_dim_block(document, name) -> None:
+    if name and name in document.doc.blocks \
+            and not _dim_block_shared(document, name):
+        try:
+            document.doc.blocks.delete_block(name, safe=False)
+        except Exception:
+            pass
+
+
+class DimTextEditCommand(Command):
+    """DIMTEDIT: reposition the text of an existing dimension and re-render
+    its geometry block. Exactly one operation per invocation: a new text
+    location, a horizontal alignment (left/center/right), Home (back to the
+    style's default position) or a text angle. Undo restores the snapshot
+    and re-renders, so the document never keeps stale *D blocks."""
+
+    name = "DIMTEDIT"
+    needs_regen = True
+
+    def __init__(self, dim, *, location=None, halign: str | None = None,
+                 home: bool = False, angle: float | None = None) -> None:
+        self.dim = dim
+        self.location = location
+        self.halign = halign
+        self.home = home
+        self.angle = angle
+        self._snapshot = None
+
+    def do(self, document) -> None:
+        d = self.dim
+        if self._snapshot is None:
+            self._snapshot = (
+                d.dxf.dimtype,
+                d.dxf.get("text_midpoint", None),
+                d.dxf.get("text_rotation", None),
+                list(d.get_xdata("ACAD")) if d.has_xdata("ACAD") else None)
+        old_block = d.dxf.get("geometry", None)
+        if self.location is not None:
+            override = d.override()
+            override.set_location(
+                (self.location[0], self.location[1]),
+                leader=False, relative=False)
+            override.render()
+        elif self.halign is not None:
+            override = d.override()
+            override.set_text_align(halign=self.halign)
+            override.render()
+        elif self.home:
+            d.dxf.dimtype = d.dxf.dimtype & ~128    # drop user text position
+            d.dxf.discard("text_midpoint")
+            d.render()
+        elif self.angle is not None:
+            d.dxf.text_rotation = float(self.angle)
+            d.render()
+        _drop_dim_block(document, old_block)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        d = self.dim
+        dimtype, midpoint, text_rotation, xdata = self._snapshot
+        edited_block = d.dxf.get("geometry", None)
+        d.dxf.dimtype = dimtype
+        if midpoint is None:
+            d.dxf.discard("text_midpoint")
+        else:
+            d.dxf.text_midpoint = midpoint
+        if text_rotation is None:
+            d.dxf.discard("text_rotation")
+        else:
+            d.dxf.text_rotation = text_rotation
+        d.discard_xdata("ACAD")
+        if xdata is not None:
+            d.set_xdata("ACAD", xdata)
+        d.render()
+        _drop_dim_block(document, edited_block)
+        document.dirty = True
+
+
+def dim_text_edit(dim, **kwargs) -> DimTextEditCommand:
+    return DimTextEditCommand(dim, **kwargs)
 
 
 # -- angular / arc-length / ordinate / center mark (v0.2 wave C) ---------------

@@ -55,6 +55,7 @@ class Harness:
             prompt=lambda *_a: None,
             echo=lambda *_a: None,
             finish=lambda: setattr(self, "finished", True),
+            undo_last=self.history.undo,
             services=Services(self.document),
         )
 
@@ -509,6 +510,134 @@ def test_angular_text_option():
     assert tool.on_option("<> approx")
     tool.on_point((3, 3))
     assert h.msp.query("DIMENSION")[0].dxf.text == "<> approx"
+
+
+# -- wave D: DIMCONTINUE / DIMBASELINE / DIMTEDIT ------------------------------
+
+import tools.dimension as _dimmod  # noqa: E402
+from tools.dimension import (   # noqa: E402
+    DimBaselineTool,
+    DimContinueTool,
+    DimTextEditTool,
+)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_chain_state():
+    _dimmod._LAST_DIM[0] = None
+    yield
+    _dimmod._LAST_DIM[0] = None
+
+
+def _make_base(h, p1=(0, 0), p2=(10, 0), loc=(5, 4)):
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    for p in (p1, p2, loc):
+        tool.on_point(p)
+    return h.msp.query("DIMENSION")[0]
+
+
+def test_continue_chains_from_last_dimension():
+    h = Harness()
+    _make_base(h)                          # dim line at y=4
+    tool = DimContinueTool(h.ctx)
+    tool.start()
+    assert not getattr(tool, "_selecting", False)   # auto base: the last dim
+    tool.on_point((20, 0))
+    tool.on_point((35, 0))                 # chains from the PREVIOUS new dim
+    dims = h.msp.query("DIMENSION")
+    assert len(dims) == 3
+    assert dims[1].get_measurement() == pytest.approx(10.0)   # 10 -> 20
+    assert dims[2].get_measurement() == pytest.approx(15.0)   # 20 -> 35
+    # both stay aligned with the base dimension line
+    assert dims[1].dxf.defpoint.y == pytest.approx(4.0)
+    assert dims[2].dxf.defpoint.y == pytest.approx(4.0)
+    tool.on_enter()                        # -> <Select>
+    tool.on_enter()                        # second Enter ends
+    assert h.finished
+
+
+def test_baseline_stacks_by_dimdli():
+    h = Harness()
+    _make_base(h)
+    tool = DimBaselineTool(h.ctx)
+    tool.start()
+    tool.on_point((20, 0))
+    tool.on_point((30, 0))
+    dims = h.msp.query("DIMENSION")
+    assert len(dims) == 3
+    # first origin reused: measurements from x=0
+    assert dims[1].get_measurement() == pytest.approx(20.0)
+    assert dims[2].get_measurement() == pytest.approx(30.0)
+    # each line DIMDLI (3.75 default) above the previous
+    assert dims[1].dxf.defpoint.y == pytest.approx(4.0 + 3.75)
+    assert dims[2].dxf.defpoint.y == pytest.approx(4.0 + 7.5)
+
+
+def test_continue_undo_option():
+    h = Harness()
+    _make_base(h)
+    tool = DimContinueTool(h.ctx)
+    tool.start()
+    tool.on_point((20, 0))
+    assert len(h.msp.query("DIMENSION")) == 2
+    assert tool.on_option("U")
+    assert len(h.msp.query("DIMENSION")) == 1
+    tool.on_point((25, 0))                 # chains from the base again
+    assert h.msp.query("DIMENSION")[1].get_measurement() == pytest.approx(15.0)
+
+
+def test_continue_select_base():
+    h = Harness()
+    base = _make_base(h)
+    _dimmod._LAST_DIM[0] = None            # a fresh session: no last dim
+    h.ctx.services = FixedPick(base)
+    tool = DimContinueTool(h.ctx)
+    tool.start()
+    assert tool._selecting                 # asks for the base
+    tool.on_point((5, 4))                  # pick it
+    tool.on_point((22, 0))
+    assert h.msp.query("DIMENSION")[1].get_measurement() == pytest.approx(12.0)
+
+
+def test_dimtedit_move_and_undo():
+    h = Harness()
+    base = _make_base(h)
+    h.ctx.services = FixedPick(base)
+    tool = DimTextEditTool(h.ctx)
+    tool.start()
+    tool.on_point((5, 4))                  # select the dimension
+    tool.on_point((2, 9))                  # new text location
+    assert base.dxf.dimtype & 128          # user text position
+    assert base.dxf.text_midpoint.x == pytest.approx(2.0)
+    blocks = [b.name for b in h.document.doc.blocks if b.name.startswith("*D")]
+    assert len(blocks) == 1                # the old *D block was dropped
+    h.history.undo()
+    assert not base.dxf.dimtype & 128
+    blocks = [b.name for b in h.document.doc.blocks if b.name.startswith("*D")]
+    assert len(blocks) == 1                # still exactly one
+
+
+def test_dimtedit_angle_and_home():
+    h = Harness()
+    base = _make_base(h)
+    h.ctx.services = FixedPick(base)
+    tool = DimTextEditTool(h.ctx)
+    tool.start()
+    tool.on_point((5, 4))
+    assert tool.on_option("A")
+    assert tool.on_option("30")
+    assert base.dxf.text_rotation == pytest.approx(30.0)
+
+    tool2 = DimTextEditTool(h.ctx)
+    tool2.start()
+    tool2.on_point((5, 4))
+    tool2.on_point((1, 12))                # move it away...
+    tool3 = DimTextEditTool(h.ctx)
+    tool3.start()
+    tool3.on_point((5, 4))
+    assert tool3.on_option("H")            # ...and Home restores the default
+    assert not base.dxf.dimtype & 128
 
 
 def test_dimension_uses_current_style():
