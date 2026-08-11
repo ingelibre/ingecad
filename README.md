@@ -55,7 +55,11 @@ What works today:
 - **Dimensions, complete**: linear, aligned, angular, arc length, ordinate,
   radius, diameter, center marks, continue/baseline chains and DIMTEDIT —
   every command with AutoCAD's own options (`Text` with `<>`, `Angle`,
-  `Rotated`, `Quadrant`, `Partial`…) and the official prompts.
+  `Rotated`, `Quadrant`, `Partial`…) and the official prompts, plus the
+  **Dimension Style Manager** with its five tabs and a live preview.
+- **Layers like AutoCAD's**: the properties table (status, on, freeze, lock,
+  colour, linetype, lineweight, plot, description) with live search, and the
+  `-LAYER` command line with wildcards for the keyboard-only flow.
 - **Editing**: ERASE / MOVE / COPY / ROTATE / SCALE / MIRROR / OFFSET /
   TRIM / EXTEND / FILLET / EXPLODE, grips, window/crossing selection,
   clipboard copy/paste.

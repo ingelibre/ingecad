@@ -75,6 +75,52 @@ reference. If AutoCAD prints `Specify dimension line location or
   POLYSIDES, rectangle modes, hatch pattern), and new toolbar icons for every
   new command.
 
+### Added — the Dimension Style Manager (DIMSTYLE)
+- `DIMSTYLE` (`D`) opens **AutoCAD's Dimension Style Manager**: styles list
+  with the current one in bold, All styles / Styles in use filter, a live
+  **preview that is a real render** (a sample drawing dimensioned with the
+  selected style), description against the current style, Set Current / New /
+  Modify, and the right-click Set current / Rename / Delete (guarded for the
+  current and in-use styles).
+- **Create New Dimension Style** (name + Start With) leads into the
+  **New/Modify dialog with its five real tabs** — Lines, Symbols and Arrows,
+  Text, Fit, Primary Units — every control mapped to its DIMVAR, including
+  the ones that hide behind a sign or a flag (center-mark type = DIMCEN sign,
+  frame-around-text = negative DIMGAP, prefix/suffix = DIMPOST around `<>`,
+  the three text alignments = DIMTIH/DIMTOH). Alternate Units, Tolerances,
+  Override and Compare are recorded gaps, not silent omissions.
+- **Modifying a style re-renders every dimension drawn with it**, undo
+  included — AutoCAD's own semantics.
+
+### Added — layers, audited against the manual
+- **`-LAYER` (`-LA`)**, the command-line variant with the official option
+  loop (`?/Make/Set/New/Rename/ON/OFF/Color/Ltype/LWeight/Plot/Freeze/Thaw/
+  LOck/Unlock/Description`), comma name lists, `*` wildcards, and the rules
+  that make it feel right: a frozen layer cannot be made current, the current
+  layer cannot be frozen, `Set` switches an off layer back on, a negative
+  color assigns *and* turns off, an invalid lineweight snaps to the nearest
+  fixed value. Each round is one undo step.
+- The layer panel gains the **Status** column (current / in use / empty),
+  a **Plot** toggle, an editable **Description**, and a live
+  **Search for layer** box. A new layer inherits the selected layer's
+  properties, and the delete guard now counts references in every layout and
+  inside block definitions.
+- **The Plot column reaches the plotter**: layers with plotting off still
+  display but never print (rendered through ezdxf's export mode).
+
+### Added — command line and menus
+- **Transparent commands**: `'ZOOM` (`'Z`), `'PAN`, `'REDRAW` run in the
+  middle of another command and print `>> Resuming LINE command.`
+- **F2 opens the classic text window** (the full command history), and the
+  command line's right-click menu offers Recent Commands / Copy / Copy
+  History / Paste.
+- **Space stays a space in text prompts** — typing `<> m` at
+  `Enter dimension text <>:` works; before, Space executed the command and
+  cut the override short.
+- **Icons everywhere they were missing**: the whole Dimension menu plus a
+  classic **Dimension toolbar** (with the current-style combo), and the
+  File / Edit / View / Insert / Format menus.
+
 ### Changed — DWG engine
 - `vendor/libredwg` re-based to release **0.14.8578 + 17 patches** (upstream
   absorbed 10 of our earlier fixes in the window). Exact read parity verified
@@ -85,7 +131,12 @@ reference. If AutoCAD prints `Specify dimension line location or
   `tools/libredwg-patches/README.md` rather than shipping a broken writer.
   ODA File Converter (optional, one click) still covers r2013/r2018 export.
 
-341 tests pass. The suite grew by ~90 tests across the four waves, all
+### Fixed
+- Menus could vanish under memory pressure: the Qt menus were Python-owned
+  with no live reference, so a garbage collection deleted them. Found by the
+  new menu-icon test.
+
+362 tests pass. The suite grew by ~110 tests across this release, all
 headless, all runnable in CI.
 
 ## v0.1.3 — 2026-08-07
