@@ -166,8 +166,6 @@
   "PDF saved: {p}": "PDF guardado: {p}",
   "Nothing to plot.": "Nada que imprimir.",
   "Model": "Modelo",
-  "Viewing layout \"{n}\" — editing in paper space arrives in v0.2.": "Viendo la presentación \"{n}\" — la edición en espacio papel llega en v0.2.",
-  "Editing in paper space arrives in v0.2 — switch to the Model tab to draw.": "La edición en espacio papel llega en v0.2 — cambie a la pestaña Modelo para dibujar.",
   "GRID": "REJILLA",
   "ORTHO": "ORTO",
   "POLAR": "POLAR",
@@ -702,5 +700,7 @@
   "ZOOM Window is not available transparently.": "ZOOM Ventana no está disponible de forma transparente.",
   "Pan with the middle mouse button — it works during any command.": "Encuadre con el botón central del ratón — funciona durante cualquier comando.",
   "{name} cannot be used transparently.": "{name} no se puede usar de forma transparente.",
-  ">> Resuming {name} command.": ">> Reanudando el comando {name}."
+  ">> Resuming {name} command.": ">> Reanudando el comando {name}.",
+  "Layout \"{n}\" — MVIEW adds a viewport, MSPACE works inside it, PSPACE returns to the sheet.": "Presentación \"{n}\" — MVIEW agrega una ventana, MSPACE trabaja dentro de ella, PSPACE vuelve a la hoja.",
+  "Drawing on the sheet itself is not available yet — MSPACE to draw inside a viewport, or use the Model tab.": "Dibujar sobre la hoja todavía no está disponible — use MSPACE para dibujar dentro de una ventana, o la pestaña Modelo."
 }

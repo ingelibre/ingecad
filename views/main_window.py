@@ -1680,8 +1680,8 @@ class MainWindow(QMainWindow):
         self._update_space_button()
         if name != "Model":
             self.command_line.echo(
-                tr("Viewing layout \"{n}\" — editing in paper space arrives "
-                   "in v0.2.", n=name))
+                tr("Layout \"{n}\" — MVIEW adds a viewport, MSPACE works "
+                   "inside it, PSPACE returns to the sheet.", n=name))
 
     # -- layout tab operations (right-click menu / + button) --------------------
     def _layout_tab_menu(self, name: str, global_pos) -> None:

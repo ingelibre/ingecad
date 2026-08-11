@@ -229,8 +229,8 @@ class ToolController(QObject):
         if in_paper and name not in LAYOUT_TOOL_CLASSES:
             # Model-space editing from a layout tab arrives with MSPACE.
             self.window.command_line.echo(
-                tr("Editing in paper space arrives in v0.2 — switch to the "
-                   "Model tab to draw."))
+                tr("Drawing on the sheet itself is not available yet — "
+                   "MSPACE to draw inside a viewport, or use the Model tab."))
             return
         if self.window.document is None:
             self.window.new_document()
