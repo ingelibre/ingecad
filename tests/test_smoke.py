@@ -521,3 +521,38 @@ def test_ctrl_z_and_ctrl_y_really_undo_and_redo(qapp):
         assert count() == 2
     finally:
         win.close()
+
+
+def test_the_cursor_follows_autocads_three_states(qapp):
+    """Crosshair to aim at a point, pick box to choose an object.
+
+    AutoCAD shows the pick box ALONE at a Select Objects prompt and while a
+    command picks an object; the crosshair alone while it asks for a point;
+    both when nothing is running. Keeping the crosshair up during a TRIM is
+    the difference a hand notices.
+    """
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.new_document()
+    try:
+        modes = win.tools.cursor_mode
+        assert modes() == "idle"
+
+        win.dispatcher.submit("TRIM")          # picks cutting edges/targets
+        assert modes() == "pick"
+        win.tools.cancel() if hasattr(win.tools, "cancel") else None
+        win.tools._finish()
+
+        win.dispatcher.submit("LINE")          # asks for points
+        assert modes() == "point"
+        win.tools._finish()
+
+        # A command that opens with "Select objects:" is picking, too.
+        win.tools.selection = set()
+        win.dispatcher.submit("MOVE")
+        assert modes() == "pick"
+        win.tools._finish()
+        assert modes() == "idle"
+    finally:
+        win.close()

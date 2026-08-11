@@ -826,7 +826,7 @@ class Viewport(QOpenGLWidget):
                 self._draw_tool_preview(p)
             self._draw_live_text(p)
         if self._cursor is not None and not self._panning:
-            self._draw_crosshair(p, self._cursor)
+            self._draw_crosshair(p, self._cursor, self._cursor_mode())
         p.end()
 
     # AutoSnap marker glyphs (classic yellow), drawn in logical pixels.
@@ -1057,15 +1057,32 @@ class Viewport(QOpenGLWidget):
         r, g, b, _a = self._scene.background
         return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 0.5
 
-    def _draw_crosshair(self, p: QPainter, pos: QPointF) -> None:
+    def _cursor_mode(self) -> str:
+        delegate = self.tool_delegate
+        getter = getattr(delegate, "cursor_mode", None) if delegate else None
+        try:
+            return getter() if getter else "idle"
+        except Exception:
+            return "idle"
+
+    def _draw_crosshair(self, p: QPainter, pos: QPointF,
+                        mode: str = "idle") -> None:
+        """The cursor, in AutoCAD's three states (see cursor_mode).
+
+        A command that is choosing objects shows the pick box ALONE: the
+        crosshair is for aiming at a coordinate, and there is no coordinate
+        being asked for. Keeping it there is the giveaway that a CAD program
+        was written by someone who never watched a drafter work.
+        """
         color = CROSSHAIR_COLOR_LIGHT if self._light_background() else CROSSHAIR_COLOR
         p.setPen(QPen(color, 1))
         x, y = pos.x(), pos.y()
         half = PICKBOX_PX / 2
-        # Full-viewport crosshair with the pick box gap-free on top (classic).
-        p.drawLine(QPointF(0, y), QPointF(self.width(), y))
-        p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
-        p.drawRect(x - half, y - half, PICKBOX_PX, PICKBOX_PX)
+        if mode != "pick":
+            p.drawLine(QPointF(0, y), QPointF(self.width(), y))
+            p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+        if mode != "point":
+            p.drawRect(x - half, y - half, PICKBOX_PX, PICKBOX_PX)
 
     # -- input -----------------------------------------------------------------
     def mousePressEvent(self, event) -> None:

@@ -1111,6 +1111,24 @@ class ToolController(QObject):
             self.window.command_line.echo(
                 tr("{count} selected.", count=len(self.selection)))
 
+    def cursor_mode(self) -> str:
+        """What the cursor should be right now, AutoCAD's three states.
+
+        ``"idle"``   crosshair with the pick box, nothing running;
+        ``"pick"``   pick box alone, at a Select Objects prompt or while a
+                     command picks an object (TRIM's targets, FILLET's lines);
+        ``"point"``  crosshair alone, while a command asks for a point.
+
+        The pickbox "appears in editing commands" at the Select Objects
+        prompt (PICKBOX, p.2451) — and AutoCAD drops the crosshair there,
+        which is the difference a hand notices.
+        """
+        if self._selecting_for is not None:
+            return "pick"
+        if self.tool is None:
+            return "idle"
+        return "pick" if self.tool.entity_picker else "point"
+
     def crossing_rects(self):
         """The crossing rectangles of the selection a tool is about to get."""
         return list(self._crossing_rects)
