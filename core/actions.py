@@ -156,13 +156,26 @@ class AddEntityCommand(Command):
 
     def do(self, document) -> None:
         self.entity = self._factory(document.modelspace())
-        # New entities land on the current layer (AutoCAD/BricsCAD), with
-        # ByLayer color/linetype so they inherit the layer's appearance —
-        # unless the command asked for a specific one.
+        # New entities take the CURRENT properties, the ones the Properties
+        # bar sets: layer, colour, linetype, lineweight. They default to
+        # ByLayer, so a drawing stays layer-driven unless the user overrides
+        # it on purpose — and a command that already chose (OFFSET keeping
+        # the source's layer) keeps what it chose.
+        from core import layers as layer_ops
+
         wanted = self.layer if self.layer is not None \
             else document.doc.header.get("$CLAYER", "0")
         if wanted in document.doc.layers:
             self.entity.dxf.layer = wanted
+        for prop in ("color", "linetype", "lineweight"):
+            if self.entity.dxf.hasattr(prop):
+                continue          # the factory already said what it wanted
+            value = layer_ops.current_property(document, prop)
+            if value != layer_ops.CURRENT_DEFAULTS[prop]:
+                try:
+                    self.entity.dxf.set(prop, value)
+                except Exception:
+                    pass
         document.dirty = True
 
     def undo(self, document) -> None:

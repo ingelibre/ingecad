@@ -60,6 +60,55 @@ def swatch_icon(index: int, size: int = 13):
     return QIcon(pm)
 
 
+# Dash patterns for the previews, by the family a standard linetype's name
+# starts with. The drawing carries the real definitions; this only has to
+# make the list recognisable at a glance, the way AutoCAD's preview does.
+_LINETYPE_DASHES = (
+    ("CENTER", [9, 3, 3, 3]),
+    ("DASHDOT", [8, 3, 1, 3]),
+    ("DASHED", [7, 4]),
+    ("DIVIDE", [8, 3, 1, 3, 1, 3]),
+    ("DOT", [1, 4]),
+    ("PHANTOM", [10, 3, 2, 3, 2, 3]),
+    ("HIDDEN", [5, 3]),
+)
+
+
+def linetype_icon(name: str, document=None, width: int = 58, height: int = 12):
+    """A short sample of the linetype, as the AutoCAD combo shows."""
+    from PySide6.QtGui import QPainter, QPen
+
+    pm = QPixmap(width, height)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    pen = QPen(QColor(220, 220, 220), 1.3)
+    upper = (name or "").upper()
+    for prefix, dashes in _LINETYPE_DASHES:
+        if upper.startswith(prefix):
+            pen.setDashPattern([d for d in dashes])
+            break
+    p.setPen(pen)
+    p.drawLine(2, height // 2, width - 2, height // 2)
+    p.end()
+    return QIcon(pm)
+
+
+def lineweight_icon(value: int, width: int = 34, height: int = 12):
+    """A line drawn at the weight it names (ByLayer/ByBlock stay hairlines)."""
+    from PySide6.QtGui import QPainter, QPen
+
+    pm = QPixmap(width, height)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    # 0.00 mm is a hairline; 2.11 mm is the thickest AutoCAD offers. Five
+    # pixels of range is enough to tell them apart in a combo.
+    thickness = 1.0 if value < 0 else 1.0 + min(value, 211) / 211.0 * 4.0
+    p.setPen(QPen(QColor(220, 220, 220), thickness))
+    p.drawLine(2, height // 2, width - 2, height // 2)
+    p.end()
+    return QIcon(pm)
+
+
 def fill_color_combo(combo, include_bylayer: bool = True) -> None:
     """Populate a color combo with swatches (not "Color N" text)."""
     from views.properties_panel import BYLAYER_COLOR

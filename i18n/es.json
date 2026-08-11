@@ -918,5 +918,8 @@
   "Extension tracking is not implemented yet.": "El rastreo de extensión todavía no está implementado.",
   "Apparent intersection is not implemented yet.": "La intersección ficticia todavía no está implementada.",
   "Parallel tracking is not implemented yet.": "El rastreo de paralelas todavía no está implementado.",
-  "{mode}: {state}": "{mode}: {state}"
+  "{mode}: {state}": "{mode}: {state}",
+  "Current {prop}: {value}": "{prop} actual: {value}",
+  "Default": "Por defecto",
+  "ByBlock": "PorBloque"
 }

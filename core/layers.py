@@ -98,6 +98,30 @@ def current_layer_name(document) -> str:
     return document.doc.header.get("$CLAYER", "0")
 
 
+# -- the current properties new entities are drawn with ------------------------
+#
+# AutoCAD keeps one of each in the header, and the Properties bar sets them
+# when nothing is selected: $CECOLOR (256 = ByLayer), $CELTYPE ("ByLayer"),
+# $CELWEIGHT (-1 = ByLayer). Drawing with ByLayer everywhere is the habit the
+# layer system rewards, so those are the defaults.
+CURRENT_VARS = {"color": "$CECOLOR", "linetype": "$CELTYPE",
+                "lineweight": "$CELWEIGHT"}
+CURRENT_DEFAULTS = {"color": 256, "linetype": "ByLayer", "lineweight": -1}
+
+
+def current_property(document, prop: str):
+    var = CURRENT_VARS[prop]
+    try:
+        return document.doc.header[var]
+    except Exception:
+        return CURRENT_DEFAULTS[prop]
+
+
+def set_current_property(document, prop: str, value) -> None:
+    document.doc.header[CURRENT_VARS[prop]] = value
+    document.dirty = True
+
+
 def set_current_layer(document, name: str) -> None:
     if name in document.doc.layers:
         document.doc.header["$CLAYER"] = name

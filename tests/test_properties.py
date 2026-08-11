@@ -115,3 +115,124 @@ def test_polyline_area_only_when_closed():
     rows = pp._lwpolyline_rows(panel, pl)[1]
     assert "Area" in [r.label for r in rows]
     assert _row(rows, "Area").get(pl) == pytest.approx(100.0)
+
+
+# -- the Properties bar: current settings vs the selection ---------------------
+
+def _fresh_window(qapp):
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.new_document("mm")
+    return win
+
+
+def test_with_nothing_selected_the_bar_sets_what_comes_next(qapp):
+    from core import layers as layer_ops
+
+    win = _fresh_window(qapp)
+    try:
+        win._apply_property("linetype", "DASHED")
+        win._apply_property("lineweight", 50)
+        win._apply_property("color", 1)
+        assert layer_ops.current_property(win.document, "linetype") == "DASHED"
+        assert layer_ops.current_property(win.document, "lineweight") == 50
+        assert layer_ops.current_property(win.document, "color") == 1
+
+        win._on_command_submitted("LINE")
+        win.tools.tool.on_point((0, 0))
+        win.tools.tool.on_point((10, 0))
+        win.tools.tool.on_enter()
+        drawn = list(win.document.modelspace())[-1]
+        assert drawn.dxf.linetype == "DASHED"
+        assert drawn.dxf.lineweight == 50
+        assert drawn.dxf.color == 1
+    finally:
+        win.close()
+
+
+def test_a_fresh_drawing_draws_bylayer(qapp):
+    """The defaults must stay ByLayer, or a layer stops controlling anything."""
+    win = _fresh_window(qapp)
+    try:
+        win._on_command_submitted("LINE")
+        win.tools.tool.on_point((0, 0))
+        win.tools.tool.on_point((10, 0))
+        win.tools.tool.on_enter()
+        drawn = list(win.document.modelspace())[-1]
+        assert drawn.dxf.get("color", 256) == 256
+        assert drawn.dxf.get("linetype", "ByLayer") == "ByLayer"
+        assert drawn.dxf.get("lineweight", -1) == -1
+    finally:
+        win.close()
+
+
+def test_with_a_selection_the_bar_edits_it_and_leaves_the_default_alone(qapp):
+    from core import layers as layer_ops
+
+    win = _fresh_window(qapp)
+    try:
+        line = win.document.modelspace().add_line((0, 0), (10, 0))
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.tools.selection = {line.dxf.handle}
+
+        win._apply_property("color", 3)
+        assert line.dxf.color == 3
+        # The current setting is untouched: this was an edit, not a default.
+        assert layer_ops.current_property(win.document, "color") == 256
+        # And it undoes.
+        win.history.undo()
+        assert line.dxf.get("color", 256) == 256
+    finally:
+        win.close()
+
+
+def test_the_bar_shows_the_selection_and_falls_back_to_the_defaults(qapp):
+    win = _fresh_window(qapp)
+    try:
+        line = win.document.modelspace().add_line(
+            (0, 0), (10, 0), dxfattribs={"linetype": "DASHED", "color": 5})
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.tools.selection = {line.dxf.handle}
+        win._refresh_props_toolbar()
+        assert win._linetype_combo.currentData() == "DASHED"
+        assert win._color_combo.currentData() == 5
+
+        win.tools.selection = set()
+        win._refresh_props_toolbar()
+        assert win._linetype_combo.currentData() == "ByLayer"
+        assert win._color_combo.currentData() == 256
+    finally:
+        win.close()
+
+
+def test_a_mixed_selection_shows_nothing_rather_than_a_lie(qapp):
+    win = _fresh_window(qapp)
+    try:
+        msp = win.document.modelspace()
+        a = msp.add_line((0, 0), (1, 0), dxfattribs={"color": 1})
+        b = msp.add_line((0, 1), (1, 1), dxfattribs={"color": 3})
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.tools.selection = {a.dxf.handle, b.dxf.handle}
+        win._refresh_props_toolbar()
+        assert win._color_combo.currentIndex() == -1
+    finally:
+        win.close()
+
+
+def test_the_linetype_list_offers_what_the_drawing_carries(qapp):
+    from core import layers as layer_ops
+
+    win = _fresh_window(qapp)
+    try:
+        names = [win._linetype_combo.itemData(i)
+                 for i in range(win._linetype_combo.count())]
+        assert names[:2] == ["ByLayer", "ByBlock"]
+        for name in layer_ops.available_linetypes(win.document):
+            assert name in names
+        assert "DASHED" in names and "CENTER" in names
+    finally:
+        win.close()

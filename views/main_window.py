@@ -1024,7 +1024,9 @@ class MainWindow(QMainWindow):
         """BricsCAD-style quick Layer + Properties bar on top."""
         from PySide6.QtWidgets import QComboBox, QLabel, QToolBar
 
-        # Same row as Modify (single top row), separated by the bar handle.
+        # Its own row under Modify: four combos plus seventeen modify
+        # buttons do not fit on one row on a laptop, and what overflows is
+        # silently hidden behind a chevron.
         bar = QToolBar(tr("Properties"), self)
         bar.setObjectName("props_toolbar")
 
@@ -1052,6 +1054,23 @@ class MainWindow(QMainWindow):
         self._color_combo.activated.connect(self._on_prop_color)
         bar.addSeparator()
         bar.addWidget(self._color_combo)
+
+        self._linetype_combo = QComboBox(self)
+        self._linetype_combo.setFixedWidth(128)
+        self._linetype_combo.setMaxVisibleItems(16)
+        self._linetype_combo.setStyleSheet(combo_style)
+        self._linetype_combo.setToolTip(tr("Linetype"))
+        self._linetype_combo.activated.connect(self._on_prop_linetype)
+        bar.addWidget(self._linetype_combo)
+
+        self._lineweight_combo = QComboBox(self)
+        self._lineweight_combo.setFixedWidth(104)
+        self._lineweight_combo.setMaxVisibleItems(16)
+        self._lineweight_combo.setStyleSheet(combo_style)
+        self._lineweight_combo.setToolTip(tr("Lineweight"))
+        self._lineweight_combo.activated.connect(self._on_prop_lineweight)
+        bar.addWidget(self._lineweight_combo)
+        self.addToolBarBreak(Qt.TopToolBarArea)
         self.addToolBar(Qt.TopToolBarArea, bar)
         self._props_toolbar = bar
         self._build_viewports_toolbar()
@@ -1267,7 +1286,59 @@ class MainWindow(QMainWindow):
             if idx >= 0:
                 self._layer_combo.setCurrentIndex(idx)
         fill_color_combo(self._color_combo)
+        self._fill_linetype_combo()
+        self._fill_lineweight_combo()
+        self._show_current_properties()
         self._props_loading = False
+
+    def _fill_linetype_combo(self) -> None:
+        from core import layers as layer_ops
+        from views.layers_panel import linetype_icon
+
+        combo = getattr(self, "_linetype_combo", None)
+        if combo is None:
+            return
+        combo.clear()
+        names = ["ByLayer", "ByBlock"]
+        if self.document is not None:
+            names += [n for n in layer_ops.available_linetypes(self.document)
+                      if n not in names]
+        for name in names:
+            combo.addItem(linetype_icon(name, self.document), name, name)
+
+    def _fill_lineweight_combo(self) -> None:
+        from core import layers as layer_ops
+        from views.layers_panel import lineweight_icon
+
+        combo = getattr(self, "_lineweight_combo", None)
+        if combo is None:
+            return
+        combo.clear()
+        for value in (-1, -2, *layer_ops.LINEWEIGHTS):
+            combo.addItem(lineweight_icon(value),
+                          tr(layer_ops.lineweight_label(value)), value)
+
+    def _show_current_properties(self) -> None:
+        """Reflect either the selection or the current settings, as AutoCAD."""
+        from core import layers as layer_ops
+
+        if self.document is None:
+            return
+        selection = self.tools._selection_entities() if self.tools else []
+        for prop, combo in (("color", getattr(self, "_color_combo", None)),
+                            ("linetype", getattr(self, "_linetype_combo", None)),
+                            ("lineweight",
+                             getattr(self, "_lineweight_combo", None))):
+            if combo is None:
+                continue
+            if selection:
+                values = {e.dxf.get(prop, layer_ops.CURRENT_DEFAULTS[prop])
+                          for e in selection}
+                value = values.pop() if len(values) == 1 else None
+            else:
+                value = layer_ops.current_property(self.document, prop)
+            index = combo.findData(value) if value is not None else -1
+            combo.setCurrentIndex(index)
 
     def _on_layer_combo(self, index: int) -> None:
         if getattr(self, "_props_loading", False) or self.document is None:
@@ -1285,16 +1356,49 @@ class MainWindow(QMainWindow):
         self._sync_panels()
 
     def _on_prop_color(self, index: int) -> None:
+        self._apply_property("color", self._color_combo.itemData(index))
+
+    def _on_prop_linetype(self, index: int) -> None:
+        self._apply_property("linetype", self._linetype_combo.itemData(index))
+
+    def _on_prop_lineweight(self, index: int) -> None:
+        self._apply_property("lineweight",
+                             self._lineweight_combo.itemData(index))
+
+    def _apply_property(self, prop: str, value) -> None:
+        """The Properties bar rule: change the selection, or set the default.
+
+        With objects selected the combo edits them; with nothing selected it
+        sets what the NEXT object will be drawn with ($CECOLOR/$CELTYPE/
+        $CELWEIGHT). Same control, two jobs — AutoCAD's, and the reason the
+        bar is worth having at all.
+        """
         if getattr(self, "_props_loading", False) or self.document is None:
             return
+        from core import actions, layers as layer_ops
+
         selection = self.tools._selection_entities() if self.tools else []
-        if not selection:
+        if selection:
+            self.history.execute(
+                actions.SetPropertyCommand(selection, prop, value))
+            self.regen_in_memory()
+            self._sync_panels()
             return
-        from core import actions
-        self.history.execute(actions.SetPropertyCommand(
-            selection, "color", self._color_combo.itemData(index)))
-        self.regen_in_memory()
-        self._sync_panels()
+        layer_ops.set_current_property(self.document, prop, value)
+        self.command_line.echo(
+            tr("Current {prop}: {value}", prop=tr(prop.capitalize()),
+               value=self._property_label(prop, value)))
+
+    def _property_label(self, prop: str, value) -> str:
+        from core import layers as layer_ops
+
+        if prop == "lineweight":
+            return tr(layer_ops.lineweight_label(value))
+        if prop == "color":
+            from views.layers_panel import ACI_NAMES
+
+            return tr(ACI_NAMES.get(value, str(value)))
+        return str(value)
 
     def _sync_panels(self) -> None:
         if self._layers_panel is not None:
