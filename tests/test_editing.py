@@ -634,3 +634,127 @@ def test_the_cursor_switches_between_points_and_objects_within_offset():
     assert tool.entity_picker is True         # choosing the object
     tool.on_point((5.0, 0.0))
     assert tool.entity_picker is False        # aiming at the side
+
+
+# -- OFFSET on polylines -------------------------------------------------------
+
+def _rows(points, bulges=None):
+    bulges = bulges or [0.0] * len(points)
+    return [(p[0], p[1], 0.0, 0.0, b) for p, b in zip(points, bulges)]
+
+
+def test_a_closed_polyline_offsets_inward_like_ezdxfs_own_answer():
+    """ezdxf.math.offset_vertices_2d is the oracle for the straight case."""
+    from ezdxf.math import offset_vertices_2d
+
+    from core.polyoffset import offset_polyline
+
+    square = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    rows, closed = offset_polyline(_rows(square), True, 1.0, (5.0, 5.0))
+    ours = [(round(r[0], 6), round(r[1], 6)) for r in rows]
+    theirs = [(round(v.x, 6), round(v.y, 6))
+              for v in offset_vertices_2d(square, 1.0, closed=True)]
+    assert ours == theirs
+    assert closed is True
+
+
+def test_the_pick_side_decides_inward_or_outward():
+    from core.polyoffset import offset_polyline
+
+    square = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    inward, _ = offset_polyline(_rows(square), True, 1.0, (5.0, 5.0))
+    outward, _ = offset_polyline(_rows(square), True, 1.0, (-5.0, 5.0))
+    assert (round(inward[0][0], 6), round(inward[0][1], 6)) == (1.0, 1.0)
+    assert (round(outward[0][0], 6), round(outward[0][1], 6)) == (-1.0, -1.0)
+
+
+def test_a_corner_moves_further_than_the_offset_distance():
+    """The vertex of a right angle moves by d*sqrt(2), not by d.
+
+    Moving every vertex sideways by the distance is the tempting wrong
+    implementation; it leaves the sides non-parallel.
+    """
+    from core.polyoffset import offset_polyline
+
+    rows, _ = offset_polyline(_rows([(0, 0), (10, 0), (10, 10)]), False,
+                              2.0, (5.0, 5.0))
+    corner = (rows[1][0], rows[1][1])
+    assert corner == pytest.approx((8.0, 2.0))
+    assert math.dist(corner, (10.0, 0.0)) == pytest.approx(2.0 * math.sqrt(2))
+
+
+def test_an_arc_segment_stays_an_arc_and_goes_concentric():
+    from core.polyoffset import offset_polyline
+
+    bulge = math.tan(math.radians(90) / 4)      # a quarter turn
+    rows, _ = offset_polyline(
+        _rows([(0, 0), (10, 0), (20, 10), (20, 20)], [0.0, bulge, 0.0, 0.0]),
+        False, 2.0, (5.0, 5.0))
+    assert rows[1][4] == pytest.approx(bulge, rel=1e-6)   # same sweep
+    # Concentric about (10,10): the offset arc runs from (10,2) to (18,10).
+    assert (rows[1][0], rows[1][1]) == pytest.approx((10.0, 2.0))
+    assert (rows[2][0], rows[2][1]) == pytest.approx((18.0, 10.0))
+
+
+def test_an_offset_that_swallows_the_shape_is_refused():
+    from core.polyoffset import offset_polyline
+
+    # A circle-like closed arc pair offset inward past its own centre.
+    rows = _rows([(0, 0), (10, 0)], [1.0, 1.0])
+    assert offset_polyline(rows, True, 50.0, (5.0, 0.1)) is None
+
+
+def test_offsetting_a_polyline_through_the_command(qapp=None):
+    h = OffsetHarness()
+    poly = h.msp.add_lwpolyline([(0, 0), (10, 0), (10, 10)])
+    h.entity = poly
+    tool = _offset_tool(h)
+    tool.on_option("2")
+    tool.on_point((5.0, 0.0))          # pick the polyline
+    tool.on_point((5.0, 5.0))          # inner side
+    made = [e for e in h.msp if e is not poly]
+    assert len(made) == 1
+    assert made[0].dxftype() == "LWPOLYLINE"
+    points = [(round(p[0], 6), round(p[1], 6))
+              for p in made[0].get_points("xy")]
+    assert points == [(0.0, 2.0), (8.0, 2.0), (8.0, 10.0)]
+
+
+def test_an_old_style_polyline_can_be_offset_too():
+    h = OffsetHarness()
+    poly = h.msp.add_polyline2d([(0, 0), (10, 0), (10, 10)])
+    h.entity = poly
+    tool = _offset_tool(h)
+    tool.on_option("2")
+    tool.on_point((5.0, 0.0))
+    tool.on_point((5.0, 5.0))
+    made = [e for e in h.msp if e is not poly]
+    assert len(made) == 1 and made[0].dxftype() == "LWPOLYLINE"
+
+
+def test_through_works_on_a_polyline():
+    h = OffsetHarness()
+    poly = h.msp.add_lwpolyline([(0, 0), (10, 0), (10, 10)])
+    h.entity = poly
+    tool = _offset_tool(h)
+    tool.on_option("T")
+    tool.on_point((5.0, 0.0))
+    tool.on_point((5.0, 3.0))          # it must pass through here
+    made = [e for e in h.msp if e is not poly]
+    points = [(round(p[0], 6), round(p[1], 6))
+              for p in made[0].get_points("xy")]
+    assert points[0] == (0.0, 3.0)
+
+
+def test_a_closed_polyline_offsets_closed():
+    h = OffsetHarness()
+    poly = h.msp.add_lwpolyline([(0, 0), (10, 0), (10, 10), (0, 10)],
+                                close=True)
+    h.entity = poly
+    tool = _offset_tool(h)
+    tool.on_option("1")
+    tool.on_point((5.0, 0.0))
+    tool.on_point((5.0, 5.0))
+    made = [e for e in h.msp if e is not poly][0]
+    assert made.closed is True
+    assert len(list(made.get_points("xy"))) == 4

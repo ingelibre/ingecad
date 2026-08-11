@@ -890,5 +890,7 @@
   "Erase source object after offsetting? [Yes/No] <{cur}>:": "¿Borrar el objeto de origen tras desfasar? [Sí/No] <{cur}>:",
   "Enter layer option for offset objects [Current/Source] <{cur}>:": "Indique la capa de los objetos desfasados [aCtual/Origen] <{cur}>:",
   "Offset distance = {d}": "Distancia de desfase = {d}",
-  "Source": "Origen"
+  "Source": "Origen",
+  "{kind} cannot be offset.": "{kind} no se puede desfasar.",
+  "The offset does not fit that polyline.": "El desfase no cabe en esa polilínea."
 }

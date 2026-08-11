@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 
-from core import actions, editmath
+from core import actions, editmath, polyoffset
 from core.i18n import tr
 from tools.base import Point, Tool
 
@@ -406,9 +406,9 @@ class OffsetTool(Tool):
             if entity is None:
                 self.ctx.echo(tr("Nothing there."))
                 return
-            if entity.dxftype() not in ("LINE", "CIRCLE", "ARC"):
-                self.ctx.echo(
-                    tr("OFFSET supports LINE, CIRCLE and ARC for now."))
+            if entity.dxftype() not in _OFFSETTABLE:
+                self.ctx.echo(tr("{kind} cannot be offset.",
+                                 kind=entity.dxftype()))
                 return
             self._entity = entity
             self._ask_side()
@@ -424,6 +424,8 @@ class OffsetTool(Tool):
         """Through mode measures the distance to the picked point."""
         if not self._through:
             return type(self).distance
+        if entity.dxftype() in ("LWPOLYLINE", "POLYLINE"):
+            return _distance_to_polyline(entity, side) or None
         if entity.dxftype() == "LINE":
             seg = (entity.dxf.start.x, entity.dxf.start.y,
                    entity.dxf.end.x, entity.dxf.end.y)
@@ -448,6 +450,24 @@ class OffsetTool(Tool):
         attribs = self._attribs(entity)
         layer = attribs.pop("layer", None)
         kind = entity.dxftype()
+        if kind in ("LWPOLYLINE", "POLYLINE"):
+            result = polyoffset.offset_polyline(
+                _polyline_rows(entity), _polyline_closed(entity),
+                distance, side)
+            if result is None:
+                self.ctx.echo(tr("The offset does not fit that polyline."))
+                return
+            rows, closed = result
+            command = actions.AddEntityCommand(
+                "OFFSET",
+                lambda msp, r=rows, c=closed, a=attribs: _add_polyline(
+                    msp, r, c, a),
+                layer=layer)
+            self.ctx.execute(command)
+            self._done_any = True
+            if type(self).erase_source:
+                self.ctx.execute(actions.EraseCommand([entity]))
+            return
         if kind == "LINE":
             seg = (entity.dxf.start.x, entity.dxf.start.y,
                    entity.dxf.end.x, entity.dxf.end.y)
@@ -495,6 +515,47 @@ class OffsetTool(Tool):
             if value is not None:
                 keep[name] = value
         return keep
+
+
+_OFFSETTABLE = ("LINE", "CIRCLE", "ARC", "LWPOLYLINE", "POLYLINE")
+
+
+def _polyline_rows(entity):
+    """(x, y, start_width, end_width, bulge) rows, for either polyline type."""
+    if entity.dxftype() == "LWPOLYLINE":
+        return list(entity.get_points("xyseb"))
+    return [(v.dxf.location.x, v.dxf.location.y, 0.0, 0.0,
+             getattr(v.dxf, "bulge", 0.0) or 0.0) for v in entity.vertices]
+
+
+def _polyline_closed(entity) -> bool:
+    if entity.dxftype() == "LWPOLYLINE":
+        return bool(entity.closed)
+    return bool(entity.is_closed)
+
+
+def _distance_to_polyline(entity, point) -> float:
+    """Shortest distance from a point to the polyline's own geometry."""
+    elements = polyoffset.elements_of(
+        _polyline_rows(entity), _polyline_closed(entity))
+    best = None
+    for element in elements:
+        if element[0] == "L":
+            _k, p0, p1 = element
+            _t, closest = polyoffset._closest_on_segment(p0, p1, point)
+            distance = math.dist(point, closest)
+        else:
+            _k, center, radius, _a0, _a1, _ccw = element
+            distance = abs(math.dist(point, center) - radius)
+        if best is None or distance < best:
+            best = distance
+    return best or 0.0
+
+
+def _add_polyline(msp, rows, closed: bool, attribs: dict):
+    poly = msp.add_lwpolyline(rows, format="xyseb", dxfattribs=dict(attribs))
+    poly.closed = closed
+    return poly
 
 
 def _number(text: str):
