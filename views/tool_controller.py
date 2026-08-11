@@ -103,6 +103,11 @@ class ToolController(QObject):
         self.window = window
         self.tool: Optional[Tool] = None
         self.osnap_on = True
+        # Which snaps are running (core.osnap keys). The status-bar menu and
+        # the Drafting Settings dialog write here.
+        from core import osnap as osnap_modes
+
+        self.osnap_modes = set(osnap_modes.from_bits(osnap_modes.DEFAULT_BITS))
         self.ortho_on = False
         self.polar_on = False
         self.snap_engine: Optional[SnapEngine] = None
@@ -936,9 +941,11 @@ class ToolController(QObject):
             # The snap engine indexes MODEL geometry; its points are model
             # coordinates and mean nothing on a paper-space sheet.
             needs_snap = False
-        if needs_snap and self.osnap_on and self.snap_engine is not None:
+        if needs_snap and self.osnap_on and self.snap_engine is not None \
+                and self.osnap_modes:
             self.snap_hit = self.snap_engine.find(
                 (wx, wy), threshold_world,
+                kinds=frozenset(self.osnap_modes),
                 from_point=self.tool.last_point if self.tool else None,
             )
         self._sync_ghost(wx, wy)

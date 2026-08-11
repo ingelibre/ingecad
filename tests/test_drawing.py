@@ -223,3 +223,109 @@ def test_rectang_and_polygon_tools():
     for p in ((0, 0), (5, 5), (10, 0)):
         tool.on_point(p)
     assert len(h.msp.query("ARC")) == 1
+
+
+# -- running object snaps (OSMODE) ---------------------------------------------
+
+def test_the_mode_bits_round_trip_through_autocads_osmode():
+    from core import osnap
+
+    assert osnap.to_bits({"END"}) == 1
+    assert osnap.to_bits({"END", "MID"}) == 3
+    assert osnap.to_bits({"CEN", "INT"}) == 4 + 32
+    assert osnap.from_bits(3) == frozenset({"END", "MID"})
+    # The off flag is not a mode; it rides alongside them (OSMODE, p.2436).
+    assert osnap.is_off(osnap.with_off(3, True))
+    assert osnap.from_bits(osnap.with_off(3, True)) == frozenset({"END", "MID"})
+    assert not osnap.is_off(osnap.with_off(3 | osnap.OFF_BIT, False))
+
+
+def test_modes_that_are_not_implemented_are_never_returned_as_running():
+    from core import osnap
+
+    every_bit = sum(mode.bit for mode in osnap.MODES)
+    running = osnap.from_bits(every_bit)
+    assert running == osnap.AVAILABLE
+    assert "EXT" not in running and "PAR" not in running
+
+
+def test_the_engine_only_offers_the_modes_it_is_asked_for():
+    from core.document import Document
+    from core.snap import SnapEngine
+
+    document = Document.new()
+    document.modelspace().add_line((0, 0), (10, 0))
+    engine = SnapEngine(document)
+    engine._build()
+    assert engine.find((0.1, 0.1), 1.0, kinds=frozenset({"END"})).kind == "END"
+    # With endpoint off, the same cursor finds the next best thing, not END.
+    hit = engine.find((0.1, 0.1), 1.0, kinds=frozenset({"NEA"}))
+    assert hit is not None and hit.kind == "NEA"
+    assert engine.find((0.1, 0.1), 1.0, kinds=frozenset({"CEN"})) is None
+
+
+def test_insertion_snaps_to_where_a_block_or_a_text_hangs_from():
+    from core.document import Document
+    from core.snap import SnapEngine
+
+    document = Document.new()
+    block = document.doc.blocks.new("B")
+    block.add_line((0, 0), (1, 1))
+    document.modelspace().add_blockref("B", (30, 30))
+    text = document.modelspace().add_text("A", height=1)
+    text.set_placement((50, 5))
+    engine = SnapEngine(document)
+    engine._build()
+    for x, y in ((30.0, 30.0), (50.0, 5.0)):
+        hit = engine.find((x + 0.3, y + 0.3), 1.0, kinds=frozenset({"INS"}))
+        assert hit is not None and hit.kind == "INS"
+        assert (hit.x, hit.y) == pytest.approx((x, y))
+
+
+def test_geometric_centre_is_the_area_centroid_not_the_vertex_average():
+    """On an L-shaped lot those are different points, and the one a drafter
+    wants is the one the area balances on."""
+    from core.document import Document
+    from core.snap import SnapEngine
+
+    document = Document.new()
+    document.modelspace().add_lwpolyline(
+        [(0, 0), (20, 0), (20, 10), (10, 10), (10, 20), (0, 20)], close=True)
+    engine = SnapEngine(document)
+    engine._build()
+    hit = engine.find((8.3, 8.3), 2.0, kinds=frozenset({"GCE"}))
+    assert hit is not None
+    assert (hit.x, hit.y) == pytest.approx((8.3333333, 8.3333333), abs=1e-5)
+    vertex_average = (60 / 6, 60 / 6)
+    assert (hit.x, hit.y) != pytest.approx(vertex_average, abs=1e-3)
+
+
+def test_tangent_touches_the_circle_where_the_line_from_the_last_point_does():
+    import math
+
+    from core.document import Document
+    from core.snap import SnapEngine
+
+    document = Document.new()
+    document.modelspace().add_circle((80, 0), 10)
+    engine = SnapEngine(document)
+    engine._build()
+    hit = engine.find((70.5, 3.5), 2.0, kinds=frozenset({"TAN"}),
+                      from_point=(80.0, 30.0))
+    assert hit is not None and hit.kind == "TAN"
+    # A tangent touches at right angles to the radius.
+    radius = (hit.x - 80.0, hit.y - 0.0)
+    to_point = (80.0 - hit.x, 30.0 - hit.y)
+    dot = radius[0] * to_point[0] + radius[1] * to_point[1]
+    assert dot == pytest.approx(0.0, abs=1e-6)
+
+
+def test_tangent_needs_a_previous_point():
+    from core.document import Document
+    from core.snap import SnapEngine
+
+    document = Document.new()
+    document.modelspace().add_circle((80, 0), 10)
+    engine = SnapEngine(document)
+    engine._build()
+    assert engine.find((70.5, 3.5), 2.0, kinds=frozenset({"TAN"})) is None

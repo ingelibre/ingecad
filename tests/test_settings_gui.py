@@ -153,3 +153,76 @@ def test_ltscale_with_the_value_on_the_command_line(win, monkeypatch):
     monkeypatch.setattr(win, "regen_in_memory", lambda *a, **k: None)
     win.dispatcher.submit("LTSCALE 0.5")
     assert win.document.doc.header["$LTSCALE"] == 0.5
+
+
+# -- the object snap dropdown --------------------------------------------------
+
+def test_the_osnap_menu_lists_every_mode_in_autocads_order(win):
+    from core import osnap as osnap_modes
+
+    from views.osnap_dialog import OsnapSettingsDialog
+
+    dialog = OsnapSettingsDialog(win, win.tools.osnap_modes, True)
+    try:
+        assert list(dialog._boxes) == [m.key for m in osnap_modes.MODES]
+        # The three we cannot do yet are listed, disabled, with a reason.
+        for key in ("EXT", "APP", "PAR"):
+            box = dialog._boxes[key]
+            assert not box.isEnabled() and box.toolTip()
+        assert "END" in dialog.modes()
+    finally:
+        dialog.deleteLater()
+
+
+def test_ticking_a_mode_changes_what_the_engine_is_asked_for(win):
+    assert "QUA" not in win.tools.osnap_modes
+    win._set_osnap_mode("QUA", True)
+    assert "QUA" in win.tools.osnap_modes
+    win._set_osnap_mode("END", False)
+    assert "END" not in win.tools.osnap_modes
+
+
+def test_the_running_snaps_survive_a_restart(win, qapp):
+    from views.main_window import MainWindow
+
+    win._set_osnap_mode("QUA", True)
+    win._set_osnap_mode("MID", False)
+    expected = set(win.tools.osnap_modes)
+
+    other = MainWindow()
+    try:
+        assert other.tools.osnap_modes == expected
+    finally:
+        other.close()
+
+
+def test_f3_is_remembered_apart_from_the_ticks(win, qapp):
+    """AutoCAD keeps which modes are ticked when the snap is switched off."""
+    from views.main_window import MainWindow
+
+    before = set(win.tools.osnap_modes)
+    win._toggle_mode("osnap")
+    assert win.tools.osnap_on is False
+
+    other = MainWindow()
+    try:
+        assert other.tools.osnap_on is False
+        assert other.tools.osnap_modes == before
+    finally:
+        other.close()
+    win._toggle_mode("osnap")
+
+
+def test_the_settings_dialog_can_clear_and_select_everything(win):
+    from core import osnap as osnap_modes
+
+    from views.osnap_dialog import OsnapSettingsDialog
+
+    dialog = OsnapSettingsDialog(win, win.tools.osnap_modes, True)
+    try:
+        dialog._set_all(False)
+        assert dialog.modes() == set()
+        dialog._set_all(True)
+        assert dialog.modes() == set(osnap_modes.AVAILABLE)
+    finally:
+        dialog.deleteLater()

@@ -13,8 +13,11 @@ segments through a per-row bounds table — one vectorized pass selects the
 rows near the cursor and every snap kind works on those candidates only
 (the old per-kind full-array passes cost ~130 ms per mouse move).
 
-Supported: END, MID, CEN, QUA, NOD, INT, PER, NEA. Priorities follow
-AutoCAD: an endpoint beats a nearby midpoint beats "nearest".
+Supported: END, MID, CEN, GCE, NOD, QUA, INT, INS, PER, TAN, NEA — the
+running-snap set of ``core.osnap`` minus the three tracking modes
+(extension, apparent intersection, parallel), which need alignment paths.
+Priorities follow AutoCAD: an endpoint beats a nearby midpoint beats
+"nearest".
 
 Curves (ELLIPSE, SPLINE, and the arc segments of a polyline) are NOT fed in
 as chords. A chord chain would put a false ENDpoint on every flattening
@@ -40,13 +43,13 @@ from typing import Optional
 import numpy as np
 
 # Lower = wins when within threshold.
-PRIORITY = {"END": 0, "INT": 1, "MID": 2, "CEN": 3, "NOD": 4, "QUA": 5,
-            "PER": 6, "NEA": 7}
+PRIORITY = {"END": 0, "INT": 1, "MID": 2, "CEN": 3, "GCE": 4, "NOD": 5,
+            "QUA": 6, "INS": 7, "PER": 8, "TAN": 9, "NEA": 10}
 ALL_KINDS = frozenset(PRIORITY)
 
 # Point targets share one table with a kind column, so a curve can offer an
 # end, a midpoint, a centre and four quadrants without four more arrays.
-TARGET_KINDS = ("END", "MID", "CEN", "QUA")
+TARGET_KINDS = ("END", "MID", "CEN", "QUA", "INS", "GCE")
 _TARGET_CODE = {kind: i for i, kind in enumerate(TARGET_KINDS)}
 
 # Max sagitta of the chord chain, as a fraction of the curve's size. The
@@ -118,6 +121,10 @@ class SnapEngine:
                 vertices = [(v[0], v[1], v[4]) for v in e.get_points("xyseb")]
                 SnapEngine._polyline(vertices, bool(e.closed), oid,
                                      segs, seg_o, arcs, arc_o)
+                if e.closed and targets is not None:
+                    SnapEngine._geometric_center(
+                        [(v[0], v[1]) for v in vertices], oid,
+                        targets, target_o)
             elif t == "POLYLINE":
                 if e.get_mode() in ("AcDb2dPolyline", "AcDb3dPolyline"):
                     vertices = [(v.dxf.location.x, v.dxf.location.y,
@@ -129,6 +136,9 @@ class SnapEngine:
                 c = e.dxf.center
                 circles.append((c.x, c.y, e.dxf.radius))
                 circle_o.append(oid)
+                if targets is not None:      # a circle's area centre is its centre
+                    targets.append((c.x, c.y, _TARGET_CODE["GCE"]))
+                    target_o.append(oid)
             elif t == "ARC":
                 c = e.dxf.center
                 a0 = math.radians(e.dxf.start_angle)
@@ -141,8 +151,17 @@ class SnapEngine:
                 l = e.dxf.location
                 points.append((l.x, l.y))
                 point_o.append(oid)
+            elif t in ("INSERT", "TEXT", "MTEXT", "ATTDEF", "SHAPE") \
+                    and targets is not None:
+                # INSertion: the point the object hangs from.
+                anchor = e.dxf.get("insert")
+                targets.append((anchor.x, anchor.y, _TARGET_CODE["INS"]))
+                target_o.append(oid)
             elif t == "ELLIPSE" and curves is not None:
                 SnapEngine._ellipse(e, oid, curves, curve_o, targets, target_o)
+                c = e.dxf.center
+                targets.append((c.x, c.y, _TARGET_CODE["GCE"]))
+                target_o.append(oid)
             elif t == "SPLINE" and curves is not None:
                 SnapEngine._spline(e, oid, curves, curve_o, targets, target_o)
         except Exception:
@@ -176,6 +195,29 @@ class SnapEngine:
                 a1 += math.tau
             arcs.append((center.x, center.y, radius, a0, a1))
             arc_o.append(oid)
+
+    @staticmethod
+    def _geometric_center(points, oid, targets, target_o) -> None:
+        """The centroid of a closed shape — AutoCAD's Geometric Center.
+
+        The area centroid, not the average of the vertices: on an L-shaped
+        lot those are different points, and the one a drafter wants is the
+        one the area balances on.
+        """
+        if len(points) < 3:
+            return
+        twice_area = 0.0
+        cx = cy = 0.0
+        for (x0, y0), (x1, y1) in zip(points, points[1:] + points[:1]):
+            cross = x0 * y1 - x1 * y0
+            twice_area += cross
+            cx += (x0 + x1) * cross
+            cy += (y0 + y1) * cross
+        if abs(twice_area) < 1e-12:
+            return
+        targets.append((cx / (3.0 * twice_area), cy / (3.0 * twice_area),
+                        _TARGET_CODE["GCE"]))
+        target_o.append(oid)
 
     @staticmethod
     def _curve_targets(points, oid, targets, target_o) -> None:
@@ -549,6 +591,8 @@ class SnapEngine:
                     i = int(np.argmin(d2))
                     offer("CEN", float(arr[i, 0]), float(arr[i, 1]))
         offer_targets("CEN")
+        offer_targets("GCE")
+        offer_targets("INS")
         offer_targets("QUA")
         if "QUA" in kinds:
             # The four compass points of a circle, and of an arc when the
@@ -569,6 +613,17 @@ class SnapEngine:
                                 ang, arr[i, 3], arr[i, 4]):
                             continue
                         offer("QUA", float(qx[i]), float(qy[i]))
+        if "TAN" in kinds and from_point is not None:
+            # The tangent points from the previous point to a round object:
+            # the two touch points of the tangent lines through it.
+            fx, fy = from_point
+            for arr, full in ((circles, True), (arcs, False)):
+                for row in arr:
+                    for tx, ty in _tangent_points(row, fx, fy):
+                        if full or _angle_in_sweep(
+                                math.atan2(ty - row[1], tx - row[0]) % math.tau,
+                                row[3], row[4]):
+                            offer("TAN", tx, ty)
         if "NOD" in kinds and len(points):
             d2 = (points[:, 0] - cx) ** 2 + (points[:, 1] - cy) ** 2
             i = int(np.argmin(d2))
@@ -612,6 +667,22 @@ class SnapEngine:
                         offer("NEA", p[0], p[1])
 
         return best[2] if best else None
+
+
+def _tangent_points(row, px: float, py: float):
+    """Where the tangent lines from (px, py) touch the circle in ``row``."""
+    cx, cy, r = row[0], row[1], row[2]
+    dx, dy = px - cx, py - cy
+    d2 = dx * dx + dy * dy
+    if d2 <= r * r + 1e-12:
+        return []                       # inside or on it: no tangent from here
+    d = math.sqrt(d2)
+    # The touch points sit at angle acos(r/d) either side of the line to the
+    # external point.
+    base = math.atan2(dy, dx)
+    spread = math.acos(max(-1.0, min(1.0, r / d)))
+    return [(cx + r * math.cos(base + s * spread),
+             cy + r * math.sin(base + s * spread)) for s in (1.0, -1.0)]
 
 
 def _angle_in_sweep(angle: float, a0: float, a1: float) -> bool:

@@ -1059,6 +1059,16 @@ class Viewport(QOpenGLWidget):
             p.drawEllipse(QPointF(x, y), s, s)
             p.drawLine(QPointF(x - s, y - s), QPointF(x + s, y + s))
             p.drawLine(QPointF(x - s, y + s), QPointF(x + s, y - s))
+        elif kind == "INS":     # two offset squares
+            p.drawRect(x - s, y - s, 1.6 * s, 1.6 * s)
+            p.drawRect(x - 0.4 * s, y - 0.4 * s, 1.6 * s, 1.6 * s)
+        elif kind == "GCE":     # square with its centre marked
+            p.drawRect(x - s, y - s, 2 * s, 2 * s)
+            p.drawPoint(QPointF(x, y))
+            p.drawEllipse(QPointF(x, y), 1.2, 1.2)
+        elif kind == "TAN":     # circle with its tangent across the top
+            p.drawEllipse(QPointF(x, y + 1), s - 1, s - 1)
+            p.drawLine(QPointF(x - s, y - s), QPointF(x + s, y - s))
         elif kind == "QUA":     # diamond
             p.drawPolygon([QPointF(x, y - s), QPointF(x + s, y),
                            QPointF(x, y + s), QPointF(x - s, y)])

@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QThread, Signal
+from PySide6.QtCore import (QEvent, QObject, QPoint, QSettings, Qt,
+                            QThread, Signal)
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -760,10 +761,21 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False, k=key: self._toggle_mode(k))
             self._mode_buttons[key] = b
             self.statusBar().addPermanentWidget(b)
+            if key == "osnap":
+                # AutoCAD's status bar hangs the running-snap list off this
+                # button; the arrow opens it without toggling the snap.
+                arrow = QToolButton(self)
+                arrow.setText("\u25b4")
+                arrow.setStyleSheet(style)
+                arrow.setToolTip(tr("Object snap modes"))
+                arrow.setFocusPolicy(Qt.NoFocus)
+                arrow.clicked.connect(self._show_osnap_menu)
+                self._osnap_arrow = arrow
+                self.statusBar().addPermanentWidget(arrow)
             if fkey:
                 QShortcut(QKeySequence(fkey), self,
                           lambda k=key: self._toggle_mode(k))
-        self._update_mode_buttons()
+        self._load_osnap_modes()
 
     def _toggle_space(self) -> None:
         if self.document is None or self._active_layout == "Model":
@@ -802,12 +814,89 @@ class MainWindow(QMainWindow):
             self.viewport.update()
         else:
             value = self.tools.toggle(which)
+            if which == "osnap":
+                self._save_osnap_modes()
         self._update_mode_buttons()
         names = {"grid": tr("Grid"), "osnap": tr("Object snap"),
                  "ortho": tr("Ortho"), "polar": tr("Polar"),
                  "lwt": tr("Lineweight display")}
         state = tr("on") if value else tr("off")
         self.command_line.echo(f"{names[which]}: {state}")
+
+    # -- running object snaps (the status-bar dropdown) ------------------------
+    def _osnap_settings_key(self) -> str:
+        return "osnap/osmode"
+
+    def _load_osnap_modes(self) -> None:
+        """Restore the running snaps from the saved OSMODE bitcode."""
+        from core import osnap as osnap_modes
+
+        raw = QSettings().value(self._osnap_settings_key(),
+                                osnap_modes.DEFAULT_BITS)
+        try:
+            bits = int(raw)
+        except (TypeError, ValueError):
+            bits = osnap_modes.DEFAULT_BITS
+        self.tools.osnap_modes = set(osnap_modes.from_bits(bits))
+        self.tools.osnap_on = not osnap_modes.is_off(bits)
+        self._update_mode_buttons()
+
+    def _save_osnap_modes(self) -> None:
+        from core import osnap as osnap_modes
+
+        bits = osnap_modes.with_off(
+            osnap_modes.to_bits(self.tools.osnap_modes),
+            not self.tools.osnap_on)
+        QSettings().setValue(self._osnap_settings_key(), bits)
+
+    def _show_osnap_menu(self) -> None:
+        from core import osnap as osnap_modes
+
+        from views.osnap_dialog import marker_icon
+
+        menu = QMenu(self)
+        for mode in osnap_modes.MODES:
+            action = menu.addAction(tr(mode.label))
+            running = mode.key in self.tools.osnap_modes
+            action.setCheckable(True)
+            action.setChecked(running)
+            action.setIcon(marker_icon(mode.key, running and mode.available))
+            if mode.available:
+                action.triggered.connect(
+                    lambda checked, k=mode.key: self._set_osnap_mode(k, checked))
+            else:
+                action.setEnabled(False)
+                action.setToolTip(tr(mode.note))
+        menu.addSeparator()
+        menu.addAction(tr("Object Snap Settings..."), self._osnap_settings)
+        button = self._mode_buttons.get("osnap")
+        anchor = getattr(self, "_osnap_arrow", button)
+        menu.exec(anchor.mapToGlobal(anchor.rect().topLeft())
+                  - QPoint(0, menu.sizeHint().height()))
+
+    def _set_osnap_mode(self, key: str, on: bool) -> None:
+        if on:
+            self.tools.osnap_modes.add(key)
+        else:
+            self.tools.osnap_modes.discard(key)
+        self._save_osnap_modes()
+        from core import osnap as osnap_modes
+
+        self.command_line.echo(
+            tr("{mode}: {state}", mode=tr(osnap_modes.label_of(key)),
+               state=tr("on") if on else tr("off")))
+
+    def _osnap_settings(self) -> None:
+        from views.osnap_dialog import OsnapSettingsDialog
+
+        dialog = OsnapSettingsDialog(self, self.tools.osnap_modes,
+                                     self.tools.osnap_on)
+        if not dialog.exec():
+            return
+        self.tools.osnap_modes = set(dialog.modes())
+        self.tools.osnap_on = dialog.osnap_on()
+        self._save_osnap_modes()
+        self._update_mode_buttons()
 
     def _update_mode_buttons(self) -> None:
         for key, b in self._mode_buttons.items():
