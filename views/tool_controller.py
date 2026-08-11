@@ -28,6 +28,7 @@ from tools.draw import TOOL_CLASSES
 from tools.edit import EDIT_TOOL_CLASSES
 from tools.construct import CONSTRUCT_TOOL_CLASSES
 from tools.inquiry import INQUIRY_TOOL_CLASSES
+from tools.modify import MODIFY_TOOL_CLASSES
 from tools.layout_tools import LAYOUT_TOOL_CLASSES
 
 SNAP_PX = 12.0   # aperture in logical pixels
@@ -85,7 +86,8 @@ class _GhostWorker(QThread):
 
 ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES,
                     **DIM_TOOL_CLASSES, **LAYOUT_TOOL_CLASSES,
-                    **CONSTRUCT_TOOL_CLASSES, **INQUIRY_TOOL_CLASSES}
+                    **CONSTRUCT_TOOL_CLASSES, **INQUIRY_TOOL_CLASSES,
+                    **MODIFY_TOOL_CLASSES}
 
 # Sentinel first element of _grip_drag while a VIEWPORT grip is hot — the
 # paper-space grip flow shares the widget's click-move-click plumbing but
@@ -130,6 +132,9 @@ class ToolController(QObject):
         # entity (border click). Model selection machinery never sees it.
         self.paper_vp = None
         self._selecting_for: Optional[Tool] = None
+        # Rectangles a crossing selection covered, for the one command that
+        # cares WHERE the selection touched: STRETCH.
+        self._crossing_rects: list = []
         self._window_anchor: Optional[tuple[float, float]] = None
         self._pick_tolerance = 1.0  # world units, refreshed on hover
         # Edits render instantly via the overlay; the expensive base-scene
@@ -237,6 +242,8 @@ class ToolController(QObject):
             self.window.new_document()
         if self.tool is not None:
             self.tool.on_cancel()
+        if not self.selection:
+            self._crossing_rects = []
         ctx = ToolContext(
             execute=self._execute,
             prompt=self.window.command_line.echo,
@@ -471,6 +478,7 @@ class ToolController(QObject):
         self._selecting_for = None
         self._window_anchor = None
         self.selection = set()  # command done: highlight goes off
+        self._crossing_rects = []
         if self._ghost_on:
             self._ghost_on = False
             self.window.viewport.set_ghost_scene(None)
@@ -1078,8 +1086,10 @@ class ToolController(QObject):
             ax, ay = self._window_anchor
             self._window_anchor = None
             rect = (min(ax, wx), min(ay, wy), max(ax, wx), max(ay, wy))
-            hits = (self.index.window(rect) if wx >= ax
-                    else self.index.crossing(rect))
+            crossing = wx < ax
+            hits = self.index.crossing(rect) if crossing else self.index.window(rect)
+            if crossing and not shift:
+                self._crossing_rects.append(rect)
             if shift:
                 self.selection -= set(hits)
             else:
@@ -1100,6 +1110,10 @@ class ToolController(QObject):
         if self.selection:
             self.window.command_line.echo(
                 tr("{count} selected.", count=len(self.selection)))
+
+    def crossing_rects(self):
+        """The crossing rectangles of the selection a tool is about to get."""
+        return list(self._crossing_rects)
 
     def selection_rect(self):
         """(rect, crossing?) while a window pick is in progress."""

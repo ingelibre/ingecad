@@ -84,6 +84,9 @@ DEFAULT_ALIASES: dict[str, str] = {
     "-UN": "-UNITS",
     "DDUNITS": "UNITS",
     "LTS": "LTSCALE",
+    "S": "STRETCH",
+    "BR": "BREAK",
+    "J": "JOIN",
 }
 
 

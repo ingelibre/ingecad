@@ -522,6 +522,10 @@ class MainWindow(QMainWindow):
                             (tr("Fillet"), "FILLET"), (tr("Erase"), "ERASE")):
             cmd_item(modify_menu, label, name)
         modify_menu.addSeparator()
+        for label, name in ((tr("Stretch"), "STRETCH"), (tr("Break"), "BREAK"),
+                            (tr("Join"), "JOIN")):
+            cmd_item(modify_menu, label, name, icon=False)
+        modify_menu.addSeparator()
         cmd_item(modify_menu, tr("Explode"), "EXPLODE", icon=False)
 
         # -- Tools ------------------------------------------------------------
@@ -1373,7 +1377,8 @@ class MainWindow(QMainWindow):
                      "DIMCONTINUE", "DIMBASELINE", "DIMTEDIT",
                      "MVIEW", "XLINE", "RAY", "DIVIDE", "MEASURE",
                      "REVCLOUD",
-                     "DIST", "ID", "AREA", "LIST"):
+                     "DIST", "ID", "AREA", "LIST",
+                     "STRETCH", "BREAK", "JOIN"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
         d.register("SAVE", lambda *a: self.save_document())
         d.register("QSAVE", lambda *a: self.save_document())
