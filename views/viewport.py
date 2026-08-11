@@ -1006,6 +1006,9 @@ class Viewport(QOpenGLWidget):
             p.drawEllipse(QPointF(x, y), s, s)
             p.drawLine(QPointF(x - s, y - s), QPointF(x + s, y + s))
             p.drawLine(QPointF(x - s, y + s), QPointF(x + s, y - s))
+        elif kind == "QUA":     # diamond
+            p.drawPolygon([QPointF(x, y - s), QPointF(x + s, y),
+                           QPointF(x, y + s), QPointF(x - s, y)])
         elif kind == "INT":     # X
             p.drawLine(QPointF(x - s, y - s), QPointF(x + s, y + s))
             p.drawLine(QPointF(x - s, y + s), QPointF(x + s, y - s))
