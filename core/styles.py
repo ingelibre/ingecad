@@ -220,8 +220,37 @@ class DeleteDimStyleCommand(Command):
         document.dirty = True
 
 
+def dim_style_attribs(document, name: str) -> dict:
+    """Every explicit DXF attribute of a dimension style (for Start With)."""
+    d = document.doc.dimstyles.get(name)
+    attribs = dict(d.dxf.all_existing_dxf_attribs())
+    for skip in ("handle", "owner", "name"):
+        attribs.pop(skip, None)
+    return attribs
+
+
+def rerender_dimensions(document, style_name: str) -> None:
+    """Re-render every dimension that uses ``style_name`` — AutoCAD applies a
+    modified style to the dimensions drawn with it. Superseded *D blocks are
+    dropped unless shared (dimensions inside block references share theirs)."""
+    from core.actions import _drop_dim_block
+
+    for e in list(document.doc.entitydb.values()):
+        if not e.is_alive or e.dxftype() not in ("DIMENSION", "ARC_DIMENSION"):
+            continue
+        if e.dxf.get("dimstyle", None) != style_name:
+            continue
+        old_block = e.dxf.get("geometry", None)
+        try:
+            e.render()
+        except Exception:
+            continue
+        _drop_dim_block(document, old_block)
+
+
 class SetDimStylePropsCommand(Command):
     name = "DIMSTYLE"
+    needs_regen = True
 
     def __init__(self, style_name: str, props: dict) -> None:
         self.style_name = style_name
@@ -233,6 +262,7 @@ class SetDimStylePropsCommand(Command):
         self._old = {k: d.dxf.get(k, None) for k in self.props}
         for k, v in self.props.items():
             d.dxf.set(k, v)
+        rerender_dimensions(document, self.style_name)
         document.dirty = True
 
     def undo(self, document) -> None:
@@ -242,6 +272,37 @@ class SetDimStylePropsCommand(Command):
                 d.dxf.discard(k)
             else:
                 d.dxf.set(k, v)
+        rerender_dimensions(document, self.style_name)
+        document.dirty = True
+
+
+class RenameDimStyleCommand(Command):
+    """Rename a dimension style: duplicate under the new name, repoint every
+    dimension that used it, keep $DIMSTYLE current, drop the old entry."""
+
+    name = "DIMSTYLE"
+
+    def __init__(self, old: str, new: str) -> None:
+        self.old = old
+        self.new = new
+
+    def do(self, document) -> None:
+        self._apply(document, self.old, self.new)
+
+    def undo(self, document) -> None:
+        self._apply(document, self.new, self.old)
+
+    @staticmethod
+    def _apply(document, old: str, new: str) -> None:
+        doc = document.doc
+        doc.tables.dimstyles.duplicate_entry(old, new)
+        for e in doc.entitydb.values():
+            if e.is_alive and e.dxftype() in ("DIMENSION", "ARC_DIMENSION") \
+                    and e.dxf.get("dimstyle", None) == old:
+                e.dxf.dimstyle = new
+        if doc.header.get("$DIMSTYLE", "Standard") == old:
+            doc.header["$DIMSTYLE"] = new
+        doc.dimstyles.remove(old)
         document.dirty = True
 
 

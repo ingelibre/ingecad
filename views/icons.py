@@ -316,6 +316,172 @@ def _revcloud():
     return pm
 
 
+# -- dimension icons (classic Dimension toolbar glyphs) -------------------------
+
+def _dim_arrows(p: QPainter, x1: float, x2: float, y: float) -> None:
+    """A dimension line with inward arrowheads at both ends."""
+    p.drawLine(QPointF(x1, y), QPointF(x2, y))
+    _arrow(p, x1, y, 180)
+    _arrow(p, x2, y, 0)
+
+
+def _dimlinear():
+    pm, p = _canvas()
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawLine(4, 6, 20, 6)                          # the measured edge
+    p.restore()
+    p.drawLine(4, 8, 4, 20)                          # extension lines
+    p.drawLine(20, 8, 20, 20)
+    _dim_arrows(p, 4, 20, 17)
+    p.end()
+    return pm
+
+
+def _dimaligned():
+    pm, p = _canvas()
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawLine(3, 12, 15, 3)                         # slanted edge
+    p.restore()
+    p.drawLine(3, 12, 9, 20)                         # extension lines
+    p.drawLine(15, 3, 21, 11)
+    p.drawLine(QPointF(9, 20), QPointF(21, 11))      # aligned dim line
+    _arrow(p, 9, 20, 143)
+    _arrow(p, 21, 11, -37)
+    p.end()
+    return pm
+
+
+def _dimangular():
+    pm, p = _canvas()
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawLine(4, 20, 20, 20)                        # the two legs
+    p.drawLine(4, 20, 16, 6)
+    p.restore()
+    p.drawArc(QRectF(4 - 9, 20 - 9, 18, 18), 0, 50 * 16)
+    p.end()
+    return pm
+
+
+def _dimarc():
+    pm, p = _canvas()
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawArc(QRectF(5, 8, 14, 14), 20 * 16, 140 * 16)   # the arc
+    p.restore()
+    p.drawArc(QRectF(2, 3, 20, 20), 25 * 16, 130 * 16)   # dimension arc
+    p.end()
+    return pm
+
+
+def _dimordinate():
+    pm, p = _canvas()
+    _node(p, 5, 18)                                  # the feature
+    p.drawLine(5, 18, 5, 11)                         # ordinate leader
+    p.drawLine(5, 11, 12, 7)
+    p.drawLine(12, 7, 19, 7)
+    p.drawLine(4, 21, 9, 21)                         # datum axis hint
+    p.end()
+    return pm
+
+
+def _dimradius():
+    pm, p = _canvas()
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawEllipse(QPointF(10, 14), 8, 8)
+    p.restore()
+    p.drawLine(QPointF(10, 14), QPointF(21, 4))      # radius leader
+    _arrow(p, 15.7, 8.8, -42)
+    p.end()
+    return pm
+
+
+def _dimdiameter():
+    pm, p = _canvas()
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawEllipse(QPointF(12, 12), 8, 8)
+    p.restore()
+    p.drawLine(QPointF(4, 20), QPointF(20, 4))       # through-diameter
+    _arrow(p, 6.3, 17.7, 135)
+    _arrow(p, 17.7, 6.3, -45)
+    p.end()
+    return pm
+
+
+def _dimbaseline():
+    pm, p = _canvas()
+    p.drawLine(4, 3, 4, 21)                          # shared first ext line
+    p.drawLine(14, 8, 14, 21)
+    p.drawLine(20, 3, 20, 14)
+    _dim_arrows(p, 4, 14, 18)
+    _dim_arrows(p, 4, 20, 11)
+    p.end()
+    return pm
+
+
+def _dimcontinue():
+    pm, p = _canvas()
+    p.drawLine(3, 8, 3, 21)
+    p.drawLine(12, 8, 12, 21)
+    p.drawLine(21, 8, 21, 21)
+    _dim_arrows(p, 3, 12, 17)
+    _dim_arrows(p, 12, 21, 17)
+    p.end()
+    return pm
+
+
+def _dimcenter():
+    pm, p = _canvas()
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawEllipse(QPointF(12, 12), 8, 8)
+    p.restore()
+    p.drawLine(9, 12, 15, 12)                        # the center mark
+    p.drawLine(12, 9, 12, 15)
+    p.drawLine(2, 12, 6, 12)                         # center lines
+    p.drawLine(18, 12, 22, 12)
+    p.drawLine(12, 2, 12, 6)
+    p.drawLine(12, 18, 12, 22)
+    p.end()
+    return pm
+
+
+def _dimtedit():
+    pm, p = _canvas()
+    p.drawLine(3, 8, 3, 21)
+    p.drawLine(21, 8, 21, 21)
+    _dim_arrows(p, 3, 21, 17)
+    from PySide6.QtGui import QFont
+    f = QFont()
+    f.setPixelSize(10)
+    f.setBold(True)
+    p.setFont(f)
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.2))
+    p.drawText(QRectF(6, 1, 12, 12), Qt.AlignCenter, "A")
+    p.restore()
+    p.end()
+    return pm
+
+
+def _dimstyle():
+    pm, p = _canvas()
+    p.drawLine(3, 6, 3, 18)
+    p.drawLine(21, 6, 21, 18)
+    _dim_arrows(p, 3, 21, 14)
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.6))                     # the styling brush
+    p.drawLine(QPointF(14, 21), QPointF(21, 14))
+    p.drawLine(QPointF(13, 22), QPointF(15, 20))
+    p.restore()
+    p.end()
+    return pm
+
+
 # -- layout / paper-space icons -------------------------------------------------
 
 def _mview():
@@ -376,6 +542,12 @@ _PAINTERS = {
     "HATCH": _hatch, "-HATCH": _hatch, "INSERT": _insert,
     "XLINE": _xline, "RAY": _ray, "DIVIDE": _divide, "MEASURE": _measure,
     "REVCLOUD": _revcloud,
+    "DIMLINEAR": _dimlinear, "DIMALIGNED": _dimaligned,
+    "DIMANGULAR": _dimangular, "DIMARC": _dimarc,
+    "DIMORDINATE": _dimordinate, "DIMRADIUS": _dimradius,
+    "DIMDIAMETER": _dimdiameter, "DIMBASELINE": _dimbaseline,
+    "DIMCONTINUE": _dimcontinue, "DIMCENTER": _dimcenter,
+    "DIMTEDIT": _dimtedit, "DIMSTYLE": _dimstyle,
     "MVIEW": _mview, "VPLOCK": _vplock, "PAGESETUP": _pagesetup,
     "LAYOUT": _layout,
 }

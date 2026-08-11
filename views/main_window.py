@@ -412,7 +412,7 @@ class MainWindow(QMainWindow):
         cmd_item(format_menu, tr("Linetype..."), "LINETYPE", icon=False)
         format_menu.addSeparator()
         item(format_menu, tr("Text Style..."), self.toggle_styles_panel)
-        item(format_menu, tr("Dimension Style..."), self.toggle_styles_panel)
+        item(format_menu, tr("Dimension Style..."), self._open_dimstyle_manager)
 
         # -- Draw -------------------------------------------------------------
         draw_menu = menu_bar.addMenu(tr("Draw"))
@@ -437,19 +437,25 @@ class MainWindow(QMainWindow):
 
         # -- Dimension --------------------------------------------------------
         dim_menu = menu_bar.addMenu(tr("Dimension"))
-        cmd_item(dim_menu, tr("Linear"), "DIMLINEAR", icon=False)
-        cmd_item(dim_menu, tr("Aligned"), "DIMALIGNED", icon=False)
-        cmd_item(dim_menu, tr("Arc Length"), "DIMARC", icon=False)
-        cmd_item(dim_menu, tr("Ordinate"), "DIMORDINATE", icon=False)
-        cmd_item(dim_menu, tr("Radius"), "DIMRADIUS", icon=False)
-        cmd_item(dim_menu, tr("Diameter"), "DIMDIAMETER", icon=False)
-        cmd_item(dim_menu, tr("Angular"), "DIMANGULAR", icon=False)
+        cmd_item(dim_menu, tr("Linear"), "DIMLINEAR")
+        cmd_item(dim_menu, tr("Aligned"), "DIMALIGNED")
+        cmd_item(dim_menu, tr("Arc Length"), "DIMARC")
+        cmd_item(dim_menu, tr("Ordinate"), "DIMORDINATE")
+        cmd_item(dim_menu, tr("Radius"), "DIMRADIUS")
+        cmd_item(dim_menu, tr("Diameter"), "DIMDIAMETER")
+        cmd_item(dim_menu, tr("Angular"), "DIMANGULAR")
         dim_menu.addSeparator()
-        cmd_item(dim_menu, tr("Baseline"), "DIMBASELINE", icon=False)
-        cmd_item(dim_menu, tr("Continue"), "DIMCONTINUE", icon=False)
+        cmd_item(dim_menu, tr("Baseline"), "DIMBASELINE")
+        cmd_item(dim_menu, tr("Continue"), "DIMCONTINUE")
         dim_menu.addSeparator()
-        cmd_item(dim_menu, tr("Center Mark"), "DIMCENTER", icon=False)
-        cmd_item(dim_menu, tr("Align Text"), "DIMTEDIT", icon=False)
+        cmd_item(dim_menu, tr("Center Mark"), "DIMCENTER")
+        cmd_item(dim_menu, tr("Align Text"), "DIMTEDIT")
+        dim_menu.addSeparator()
+        style_act = QAction(tr("Dimension Style..."), self)
+        from views.icons import command_icon as _cmd_icon
+        style_act.setIcon(_cmd_icon("DIMSTYLE"))
+        style_act.triggered.connect(self._open_dimstyle_manager)
+        dim_menu.addAction(style_act)
         dim_menu.addSeparator()
         cmd_item(dim_menu, tr("Area"), "AREA", icon=False)
 
@@ -789,6 +795,102 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, bar)
         self.tools.changed.connect(self._refresh_vp_scale_combo)
         self._refresh_vp_scale_combo()
+        self._build_dimension_toolbar()
+
+    def _build_dimension_toolbar(self) -> None:
+        """Classic AutoCAD "Dimension" toolbar: the dim commands in the 2011
+        order, the current-style combo, and the Dimension Style manager."""
+        from PySide6.QtWidgets import QComboBox, QToolBar
+
+        from views.icons import command_icon
+
+        bar = QToolBar(tr("Dimension"), self)
+        bar.setObjectName("dimension_toolbar")
+        for name, label in (("DIMLINEAR", tr("Linear")),
+                            ("DIMALIGNED", tr("Aligned")),
+                            ("DIMARC", tr("Arc Length")),
+                            ("DIMORDINATE", tr("Ordinate")),
+                            ("DIMRADIUS", tr("Radius")),
+                            ("DIMDIAMETER", tr("Diameter")),
+                            ("DIMANGULAR", tr("Angular")),
+                            ("DIMBASELINE", tr("Baseline")),
+                            ("DIMCONTINUE", tr("Continue"))):
+            act = QAction(command_icon(name), label, self)
+            act.setToolTip(f"{label} ({name})")
+            act.triggered.connect(lambda _=False, n=name: self._invoke_command(n))
+            bar.addAction(act)
+        bar.addSeparator()
+        for name, label in (("DIMCENTER", tr("Center Mark")),
+                            ("DIMTEDIT", tr("Dimension Text Edit"))):
+            act = QAction(command_icon(name), label, self)
+            act.setToolTip(f"{label} ({name})")
+            act.triggered.connect(lambda _=False, n=name: self._invoke_command(n))
+            bar.addAction(act)
+        bar.addSeparator()
+        self._dim_style_combo = QComboBox(self)
+        self._dim_style_combo.setToolTip(tr("Current dimension style"))
+        self._dim_style_combo.setMinimumWidth(96)
+        self._dim_style_combo.setMaximumWidth(150)
+        self._dim_style_combo.setStyleSheet(
+            "QComboBox { font-size: 11px; combobox-popup: 0; }")
+        self._dim_style_combo.setMaxVisibleItems(16)
+        self._dim_style_combo.activated.connect(self._on_dim_style_combo)
+        bar.addWidget(self._dim_style_combo)
+        act = QAction(command_icon("DIMSTYLE"), tr("Dimension Style..."), self)
+        act.setToolTip(tr("Dimension Style Manager (DIMSTYLE)"))
+        act.triggered.connect(self._open_dimstyle_manager)
+        bar.addAction(act)
+        self.addToolBar(Qt.TopToolBarArea, bar)
+        self._dimension_toolbar = bar
+        self.tools.changed.connect(self._refresh_dim_style_combo)
+        self._refresh_dim_style_combo()
+
+    def _refresh_dim_style_combo(self) -> None:
+        from core import styles as style_ops
+
+        combo = getattr(self, "_dim_style_combo", None)
+        if combo is None:
+            return
+        if self.document is None:
+            combo.clear()
+            return
+        names = style_ops.dim_style_names(self.document)
+        current = style_ops.current_dim_style(self.document)
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(names)
+        if current in names:
+            combo.setCurrentText(current)
+        combo.blockSignals(False)
+
+    def _on_dim_style_combo(self, index: int) -> None:
+        from core import styles as style_ops
+
+        if self.document is None:
+            return
+        name = self._dim_style_combo.itemText(index)
+        if name and name != style_ops.current_dim_style(self.document):
+            self.history.execute(style_ops.SetCurrentDimStyleCommand(name))
+            self.command_line.echo(
+                tr("Current dimension style: {name}", name=name))
+            self.after_style_change()
+
+    def _open_dimstyle_manager(self) -> None:
+        """DIMSTYLE — AutoCAD's Dimension Style Manager window."""
+        if self.document is None:
+            return
+        from views.dimstyle_dialog import DimStyleManagerDialog
+
+        DimStyleManagerDialog(self).exec()
+        self.after_style_change()
+
+    def after_style_change(self) -> None:
+        """Refresh every surface that mirrors the dim style tables."""
+        self._refresh_dim_style_combo()
+        if getattr(self, "_styles_panel", None) is not None:
+            self._styles_panel.refresh()
+        self.regen_in_memory()
+        self.viewport.update()
 
     def _scale_target_vp(self):
         """The viewport the scale combo / VPLOCK act on: MSPACE first,
@@ -1052,7 +1154,7 @@ class MainWindow(QMainWindow):
         d.register("EXIT", lambda *a: self.close())
         d.register("LAYER", lambda *a: self.toggle_layers_panel())
         d.register("STYLE", lambda *a: self.toggle_styles_panel())
-        d.register("DIMSTYLE", lambda *a: self.toggle_styles_panel())
+        d.register("DIMSTYLE", lambda *a: self._open_dimstyle_manager())
         d.register("COPYCLIP", lambda *a: self._cmd_copy())
         d.register("CUTCLIP", lambda *a: self._cmd_cut())
         d.register("PASTECLIP", lambda *a: self._cmd_paste())
