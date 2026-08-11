@@ -475,3 +475,49 @@ def test_menu_entries_carry_icons(qapp):
                     f"{menu_name} > {label} has no icon"
     finally:
         win.close()
+
+
+def test_ctrl_z_and_ctrl_y_really_undo_and_redo(qapp):
+    """Sends the actual keystrokes, not the slots.
+
+    Ctrl+Y used to be bound TWICE — once as QKeySequence.Redo (which is
+    Ctrl+Y on Linux) and once as a separate QShortcut — and Qt fires
+    neither handler for an ambiguous shortcut, so AutoCAD's redo key did
+    nothing while every "is it bound?" check passed.
+    """
+    from PySide6.QtGui import QKeySequence
+    from PySide6.QtTest import QTest
+
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.new_document()
+    win.show()
+    qapp.processEvents()
+    try:
+        count = lambda: len(list(win.document.modelspace()))
+        win.dispatcher.submit("LINE")
+        win.tools.tool.on_point((0, 0))
+        win.tools.tool.on_point((10, 0))
+        win.tools.tool.on_point((10, 10))
+        win.tools.tool.on_enter()
+        assert count() == 2
+
+        win.viewport.setFocus()
+        qapp.processEvents()
+        QTest.keySequence(win, QKeySequence(QKeySequence.Undo))
+        qapp.processEvents()
+        assert count() == 1, "Ctrl+Z did not undo"
+
+        QTest.keySequence(win, QKeySequence("Ctrl+Y"))
+        qapp.processEvents()
+        assert count() == 2, "Ctrl+Y did not redo (ambiguous shortcut?)"
+
+        # The platform's own redo key must keep working where it differs.
+        QTest.keySequence(win, QKeySequence(QKeySequence.Undo))
+        qapp.processEvents()
+        QTest.keySequence(win, QKeySequence(QKeySequence.Redo))
+        qapp.processEvents()
+        assert count() == 2
+    finally:
+        win.close()

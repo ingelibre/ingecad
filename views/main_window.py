@@ -361,10 +361,17 @@ class MainWindow(QMainWindow):
         edit_menu = menu_bar.addMenu(tr("Edit"))
         item(edit_menu, tr("Undo"), self._cmd_undo, QKeySequence.Undo,
              icon="UNDO")
-        item(edit_menu, tr("Redo"), self._cmd_redo, QKeySequence.Redo,
-             icon="REDO")
-        from PySide6.QtGui import QShortcut
-        QShortcut(QKeySequence("Ctrl+Y"), self, self._cmd_redo)  # AutoCAD redo
+        # Redo answers to the platform key AND to AutoCAD's Ctrl+Y. Both go on
+        # the ONE action: a separate QShortcut for Ctrl+Y made Qt see two
+        # handlers for the same key on platforms where QKeySequence.Redo
+        # already is Ctrl+Y (Linux), and an ambiguous shortcut fires neither —
+        # Ctrl+Y silently did nothing.
+        redo_action = item(edit_menu, tr("Redo"), self._cmd_redo, icon="REDO")
+        redo_keys = [QKeySequence(QKeySequence.Redo)]
+        autocad_redo = QKeySequence("Ctrl+Y")
+        if autocad_redo not in redo_keys:
+            redo_keys.append(autocad_redo)
+        redo_action.setShortcuts(redo_keys)
         edit_menu.addSeparator()
 
         # Clipboard / Delete fire only when the drawing canvas has focus, so
