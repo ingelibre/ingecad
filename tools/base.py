@@ -91,3 +91,12 @@ class Tool:
     def preview_segments(self, cursor: Point) -> list[tuple[Point, Point]]:
         """Rubber-band segments from committed points to the cursor."""
         return []
+
+    def ghost_placement(self, cursor: Point):
+        """(angle_degrees, factor) for a ghost that turns or grows.
+
+        None — the default — means the ghost simply follows the cursor, the
+        way a MOVE drag does. ROTATE and SCALE answer here so their preview
+        shows the real result instead of a rubber-band line.
+        """
+        return None

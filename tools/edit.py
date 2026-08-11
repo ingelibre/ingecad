@@ -139,6 +139,10 @@ class RotateTool(Tool):
         if self._base is None:
             self._base = point
             self.last_point = point
+            # From here the selection turns with the cursor about this point,
+            # which is what AutoCAD shows and what makes the angle obvious.
+            self.ghost_entities = self._entities
+            self.ghost_base = point
             self.ctx.prompt(tr("Specify rotation angle or [Reference]:"))
             return
         ang = math.degrees(math.atan2(point[1] - self._base[1],
@@ -159,6 +163,16 @@ class RotateTool(Tool):
 
     def preview_segments(self, cursor: Point):
         return [(self._base, cursor)] if self._base else []
+
+    def ghost_placement(self, cursor: Point):
+        """The angle the cursor is asking for, live."""
+        if self._base is None or self._reference == -1.0:
+            return None
+        angle = math.degrees(math.atan2(cursor[1] - self._base[1],
+                                        cursor[0] - self._base[0]))
+        if self._reference is not None:
+            angle -= self._reference
+        return angle, 1.0
 
 
 class ScaleTool(Tool):
@@ -209,10 +223,36 @@ class ScaleTool(Tool):
         if self._base is None:
             self._base = point
             self.last_point = point
+            self.ghost_entities = self._entities
+            self.ghost_base = point
             self.ctx.prompt(tr("Specify scale factor or [Reference]:"))
+            return
+        # AutoCAD takes the factor from the distance to the base point, and
+        # shows it growing as you go.
+        factor = math.dist(self._base, point)
+        if factor <= 0:
+            self.ctx.echo(tr("Value must be positive."))
+            return
+        if self._ref_length == -1.0:
+            self._ref_length = factor
+            self.ctx.prompt(tr("Specify new length:"))
+            return
+        if self._ref_length is not None:
+            factor = factor / self._ref_length
+        self.ctx.execute(actions.scale_entities(
+            self._entities, self._base, factor))
+        self.ctx.finish()
 
     def preview_segments(self, cursor: Point):
         return [(self._base, cursor)] if self._base else []
+
+    def ghost_placement(self, cursor: Point):
+        if self._base is None or self._ref_length == -1.0:
+            return None
+        factor = math.dist(self._base, cursor)
+        if self._ref_length is not None and self._ref_length > 0:
+            factor /= self._ref_length
+        return 0.0, max(factor, 1e-6)
 
 
 class MirrorTool(Tool):

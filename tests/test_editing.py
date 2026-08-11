@@ -758,3 +758,122 @@ def test_a_closed_polyline_offsets_closed():
     made = [e for e in h.msp if e is not poly][0]
     assert made.closed is True
     assert len(list(made.get_points("xy"))) == 4
+
+
+# -- live previews: the ghost turns and grows ----------------------------------
+
+def _rotate_tool():
+    from core.commands import History
+    from core.document import Document
+    from tools.base import ToolContext
+    from tools.edit import RotateTool
+
+    class H:
+        pass
+
+    h = H()
+    h.document = Document.new()
+    h.history = History(h.document)
+    h.out = []
+    h.finished = False
+    h.ctx = ToolContext(execute=h.history.execute, prompt=h.out.append,
+                        echo=h.out.append,
+                        finish=lambda: setattr(h, "finished", True))
+    tool = RotateTool(h.ctx)
+    tool.start()
+    return h, tool
+
+
+def test_rotate_previews_the_turn_about_the_base_point():
+    h, tool = _rotate_tool()
+    rect = h.document.modelspace().add_lwpolyline(
+        [(0, 0), (20, 0), (20, 12), (0, 12)], close=True)
+    tool.on_selection([rect])
+    assert tool.ghost_placement((5.0, 5.0)) is None      # no base point yet
+
+    tool.on_point((0.0, 0.0))                            # the corner
+    assert tool.ghost_entities == [rect]
+    assert tool.ghost_base == (0.0, 0.0)
+    angle, factor = tool.ghost_placement((10.0, 10.0))
+    assert angle == pytest.approx(45.0)
+    assert factor == pytest.approx(1.0)
+    assert tool.ghost_placement((0.0, 10.0))[0] == pytest.approx(90.0)
+
+
+def test_the_rotate_preview_follows_the_reference_angle():
+    h, tool = _rotate_tool()
+    rect = h.document.modelspace().add_lwpolyline([(0, 0), (10, 0), (10, 5)])
+    tool.on_selection([rect])
+    tool.on_point((0.0, 0.0))
+    tool.on_option("R")
+    tool.on_option("30")                                 # reference = 30
+    # Now the preview shows the angle RELATIVE to the reference.
+    assert tool.ghost_placement((10.0, 10.0))[0] == pytest.approx(15.0)
+
+
+def test_scale_previews_the_growth_and_a_picked_point_sets_it():
+    from core.commands import History
+    from core.document import Document
+    from tools.base import ToolContext
+    from tools.edit import ScaleTool
+
+    class H:
+        pass
+
+    h = H()
+    h.document = Document.new()
+    h.history = History(h.document)
+    h.finished = False
+    h.ctx = ToolContext(execute=h.history.execute, prompt=lambda t: None,
+                        echo=lambda t: None,
+                        finish=lambda: setattr(h, "finished", True))
+    line = h.document.modelspace().add_line((0, 0), (10, 0))
+    tool = ScaleTool(h.ctx)
+    tool.start()
+    tool.on_selection([line])
+    tool.on_point((0.0, 0.0))
+    assert tool.ghost_base == (0.0, 0.0)
+    assert tool.ghost_placement((3.0, 0.0))[1] == pytest.approx(3.0)
+    tool.on_point((3.0, 0.0))                            # pick the factor
+    assert line.dxf.end.x == pytest.approx(30.0)
+    assert h.finished
+
+
+def test_the_ghost_placement_matrix_turns_about_the_base(qapp):
+    """The transform itself, in numbers: a vertex must land where the
+    rotation says it does. A wrong multiplication order still looks like a
+    rotation on screen — around the wrong point."""
+    from PySide6.QtGui import QVector4D
+
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.new_document()
+    try:
+        vp = win.viewport
+        vp.view.width, vp.view.height = 400, 400
+        origin = (100.0, 50.0)          # the scene's float32 origin
+        base = (110.0, 50.0)
+        # A vertex stored at (10, 0) sits at world (110, 50) — the base
+        # itself — so it must not move whatever the angle is.
+        m = vp._mvp_about(origin[0], origin[1], base, 90.0, 1.0)
+        at_base = m.map(QVector4D(10.0, 0.0, 0.0, 1.0))
+        expected = vp._mvp(0.0, 0.0).map(QVector4D(110.0, 50.0, 0.0, 1.0))
+        assert at_base.x() == pytest.approx(expected.x(), abs=1e-4)
+        assert at_base.y() == pytest.approx(expected.y(), abs=1e-4)
+
+        # A vertex 10 to the right of the base turns to 10 above it.
+        m = vp._mvp_about(origin[0], origin[1], base, 90.0, 1.0)
+        turned = m.map(QVector4D(20.0, 0.0, 0.0, 1.0))
+        expected = vp._mvp(0.0, 0.0).map(QVector4D(110.0, 60.0, 0.0, 1.0))
+        assert turned.x() == pytest.approx(expected.x(), abs=1e-4)
+        assert turned.y() == pytest.approx(expected.y(), abs=1e-4)
+
+        # And a factor of 2 doubles the distance from the base: a vertex at
+        # world 120, ten to the right of the base, lands twenty away at 130.
+        m = vp._mvp_about(origin[0], origin[1], base, 0.0, 2.0)
+        grown = m.map(QVector4D(20.0, 0.0, 0.0, 1.0))
+        expected = vp._mvp(0.0, 0.0).map(QVector4D(130.0, 50.0, 0.0, 1.0))
+        assert grown.x() == pytest.approx(expected.x(), abs=1e-4)
+    finally:
+        win.close()

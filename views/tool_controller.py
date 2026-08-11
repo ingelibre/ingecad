@@ -963,7 +963,15 @@ class ToolController(QObject):
             self.window.viewport.set_ghost_scene(scene)
             self._ghost_on = True
         rx, ry = self.resolved_point(wx, wy)
-        self.window.viewport.set_ghost_offset(rx - base[0], ry - base[1])
+        placement = None
+        getter = getattr(tool, "ghost_placement", None)
+        if getter is not None:
+            placement = getter((rx, ry))
+        if placement is None:
+            self.window.viewport.set_ghost_offset(rx - base[0], ry - base[1])
+        else:
+            angle, factor = placement
+            self.window.viewport.set_ghost_placement(base, angle, factor)
 
     def _ghost_scene_for(self, ents):
         """Cached ghost scene, or None while a worker tessellates it."""

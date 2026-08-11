@@ -188,6 +188,10 @@ class Viewport(QOpenGLWidget):
         self._ghost_dirty = False
         self._ghost_bufs: dict[str, tuple] = {}
         self._ghost_offset = (0.0, 0.0)
+        # A ghost can also turn or grow about a base point (ROTATE, SCALE).
+        self._ghost_base: Optional[tuple[float, float]] = None
+        self._ghost_angle = 0.0
+        self._ghost_factor = 1.0
         # Stamps: committed MOVE/COPY/PASTE results drawn as the ghost scene
         # at fixed offsets — the pasted geometry costs ZERO re-tessellation
         # until the idle merge folds it into the base scene. One group per
@@ -278,11 +282,31 @@ class Viewport(QOpenGLWidget):
         self._ghost_scene = scene
         self._ghost_dirty = True
         self._ghost_offset = (0.0, 0.0)
+        self._ghost_base = None
+        self._ghost_angle = 0.0
+        self._ghost_factor = 1.0
         self.update()
 
     def set_ghost_offset(self, dx: float, dy: float) -> None:
         """Move the ghost: only the MVP translation changes — free per frame."""
         self._ghost_offset = (dx, dy)
+        self._ghost_base = None
+        self._ghost_angle = 0.0
+        self._ghost_factor = 1.0
+
+    def set_ghost_placement(self, base, angle: float = 0.0,
+                            factor: float = 1.0,
+                            offset: tuple[float, float] = (0.0, 0.0)) -> None:
+        """Turn and/or grow the ghost about ``base`` (world coordinates).
+
+        Same buffers, same cost as a drag: the whole placement rides in the
+        MVP, so a ROTATE preview on a 90k-entity selection is as cheap as a
+        MOVE preview.
+        """
+        self._ghost_base = base
+        self._ghost_angle = float(angle)
+        self._ghost_factor = float(factor)
+        self._ghost_offset = offset
         self.update()
 
     def hide_handles(self, handles) -> None:
@@ -535,6 +559,28 @@ class Viewport(QOpenGLWidget):
         m.translate(-(cx - ox), -(cy - oy), 0.0)
         return m
 
+    def _mvp_about(self, ox: float, oy: float, base, angle: float,
+                   factor: float, dx: float = 0.0, dy: float = 0.0):
+        """World -> clip with the ghost turned/grown about ``base``.
+
+        A stored vertex v sits at ``v + origin``; the placement sends it to
+        ``R*(v + origin - base)*f + base + offset``, which is exactly the
+        chain of translations below (QMatrix4x4 post-multiplies, so it reads
+        outermost first).
+        """
+        kx, ky, cx, cy = self.view.ndc_factors()
+        bx, by = base
+        m = QMatrix4x4()
+        m.scale(kx, ky, 1.0)
+        m.translate(-cx, -cy, 0.0)
+        m.translate(bx + dx, by + dy, 0.0)
+        if angle:
+            m.rotate(angle, 0.0, 0.0, 1.0)
+        if factor != 1.0:
+            m.scale(factor, factor, 1.0)
+        m.translate(ox - bx, oy - by, 0.0)
+        return m
+
     def paintGL(self) -> None:
         gl = self._gl
         # Re-establish state every frame: the QPainter overlay below disables
@@ -661,8 +707,15 @@ class Viewport(QOpenGLWidget):
             ox, oy = self._ghost_scene.origin
             dx, dy = self._ghost_offset
             self._program.bind()
-            self._program.setUniformValue(self._loc_mvp,
-                                          self._mvp(ox + dx, oy + dy))
+            if self._ghost_base is None:
+                self._program.setUniformValue(self._loc_mvp,
+                                              self._mvp(ox + dx, oy + dy))
+            else:
+                self._program.setUniformValue(
+                    self._loc_mvp,
+                    self._mvp_about(ox, oy, self._ghost_base,
+                                    self._ghost_angle, self._ghost_factor,
+                                    dx, dy))
             for name, mode in (("triangles", GL_TRIANGLES),
                                ("lines", GL_LINES),
                                ("points", GL_POINTS)):
