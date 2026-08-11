@@ -80,6 +80,10 @@ DEFAULT_ALIASES: dict[str, str] = {
     "ME": "MEASURE",
     "PU": "PURGE",
     "MA": "MATCHPROP",
+    "UN": "UNITS",
+    "-UN": "-UNITS",
+    "DDUNITS": "UNITS",
+    "LTS": "LTSCALE",
 }
 
 

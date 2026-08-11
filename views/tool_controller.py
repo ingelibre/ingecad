@@ -27,6 +27,7 @@ from tools.dimension import DIM_TOOL_CLASSES
 from tools.draw import TOOL_CLASSES
 from tools.edit import EDIT_TOOL_CLASSES
 from tools.construct import CONSTRUCT_TOOL_CLASSES
+from tools.inquiry import INQUIRY_TOOL_CLASSES
 from tools.layout_tools import LAYOUT_TOOL_CLASSES
 
 SNAP_PX = 12.0   # aperture in logical pixels
@@ -84,7 +85,7 @@ class _GhostWorker(QThread):
 
 ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES,
                     **DIM_TOOL_CLASSES, **LAYOUT_TOOL_CLASSES,
-                    **CONSTRUCT_TOOL_CLASSES}
+                    **CONSTRUCT_TOOL_CLASSES, **INQUIRY_TOOL_CLASSES}
 
 # Sentinel first element of _grip_drag while a VIEWPORT grip is hot — the
 # paper-space grip flow shares the widget's click-move-click plumbing but
@@ -266,6 +267,10 @@ class ToolController(QObject):
     def paper_context(self):
         """(document, active layout name) for paper-space tools (MVIEW)."""
         return self.window.document, self.window._active_layout
+
+    def units(self):
+        """The drawing's unit settings, for the tools that print numbers."""
+        return self.window.display_units()
 
     def pick_entity(self, point):
         if self.index is None:

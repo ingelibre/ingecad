@@ -345,6 +345,8 @@ class MainWindow(QMainWindow):
              icon="NEW")
         item(file_menu, tr("Open..."), self._open_dialog, QKeySequence.Open,
              icon="OPEN")
+        item(file_menu, tr("Save"), self.save_document, QKeySequence.Save,
+             icon="SAVEAS")
         item(file_menu, tr("Save As..."), self._save_as_dialog,
              QKeySequence.SaveAs, icon="SAVEAS")
         file_menu.addSeparator()
@@ -437,6 +439,8 @@ class MainWindow(QMainWindow):
              icon="STYLE")
         item(format_menu, tr("Dimension Style..."),
              self._open_dimstyle_manager, icon="DIMSTYLE")
+        format_menu.addSeparator()
+        item(format_menu, tr("Units..."), self._units_dialog)
 
         # -- Draw -------------------------------------------------------------
         draw_menu = menu_bar.addMenu(tr("Draw"))
@@ -498,6 +502,12 @@ class MainWindow(QMainWindow):
 
         # -- Tools ------------------------------------------------------------
         tools_menu = menu_bar.addMenu(tr("Tools"))
+        inquiry_menu = tools_menu.addMenu(tr("Inquiry"))
+        cmd_item(inquiry_menu, tr("Distance"), "DIST", icon=False)
+        cmd_item(inquiry_menu, tr("Area"), "AREA", icon=False)
+        cmd_item(inquiry_menu, tr("List"), "LIST", icon=False)
+        cmd_item(inquiry_menu, tr("ID Point"), "ID", icon=False)
+        tools_menu.addSeparator()
         lang_menu = tools_menu.addMenu(tr("Language"))
         lang_group = QActionGroup(self)
         # Each language is listed in its own name — recognizable no matter
@@ -1285,12 +1295,18 @@ class MainWindow(QMainWindow):
                      "DIMANGULAR", "DIMARC", "DIMORDINATE", "DIMCENTER",
                      "DIMCONTINUE", "DIMBASELINE", "DIMTEDIT",
                      "MVIEW", "XLINE", "RAY", "DIVIDE", "MEASURE",
-                     "REVCLOUD"):
+                     "REVCLOUD",
+                     "DIST", "ID", "AREA", "LIST"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
+        d.register("SAVE", lambda *a: self.save_document())
+        d.register("QSAVE", lambda *a: self.save_document())
+        d.register("UNITS", lambda *a: self._units_dialog())
+        d.register("DDUNITS", lambda *a: self._units_dialog())
+        d.register("-UNITS", self._cmd_units_cli)
+        d.register("LTSCALE", self._cmd_ltscale)
         # In-scope commands that land in later phases: answer honestly.
         for name, phase in (
-            ("DIST", 4), ("LINETYPE", 6),
-            ("AREA", 7), ("LIST", 7),
+            ("LINETYPE", 6),
         ):
             d.register_future(name, phase)
 
@@ -1507,6 +1523,74 @@ class MainWindow(QMainWindow):
         return layer_ops.layer_command(
             self.document, self.history,
             echo=self.command_line.echo, refresh=refresh, args=args)
+
+    # -- UNITS / LTSCALE (drawing settings that live in the DXF header) --------
+    def _header_value(self, name: str, default):
+        if self.document is None:
+            return default
+        try:
+            return self.document.doc.header[name]
+        except Exception:
+            return default
+
+    def _apply_units(self, units, angdir: int, angbase: float) -> None:
+        from core.units import LINEAR_NAMES
+
+        doc = self.document.doc
+        units.to_doc(doc)
+        doc.header["$ANGDIR"] = int(angdir)
+        doc.header["$ANGBASE"] = float(angbase)
+        self._units_revision = getattr(self, "_units_revision", 0) + 1
+        self.document.dirty = True
+        self.command_line.echo(
+            tr("Units: {type}, precision {precision}, "
+               "insertion scale {scale}",
+               type=tr(LINEAR_NAMES.get(units.lunits, "Decimal")),
+               precision=units.luprec, scale=tr(units.unit_name)))
+
+    def _units_dialog(self, *args) -> None:
+        if self.document is None:
+            self.new_document()
+        from core.units import Units
+        from views.units_dialog import UnitsDialog
+
+        dialog = UnitsDialog(
+            self, Units.from_doc(self.document.doc),
+            angdir=int(self._header_value("$ANGDIR", 0) or 0),
+            angbase=float(self._header_value("$ANGBASE", 0.0) or 0.0))
+        if dialog.exec():
+            self._apply_units(dialog.values(), dialog.angdir(), dialog.angbase())
+
+    def _cmd_units_cli(self, *args) -> Prompt | None:
+        """-UNITS — the prompt sequence, for the keyboard-only flow."""
+        if self.document is None:
+            self.new_document()
+        from core.units import Units, units_command
+
+        return units_command(
+            Units.from_doc(self.document.doc),
+            echo=self.command_line.echo,
+            apply=self._apply_units,
+            angdir=int(self._header_value("$ANGDIR", 0) or 0),
+            angbase=float(self._header_value("$ANGBASE", 0.0) or 0.0),
+            args=args)
+
+    def _cmd_ltscale(self, *args) -> Prompt | None:
+        """LTSCALE — global linetype scale; changing it regenerates."""
+        if self.document is None:
+            self.new_document()
+        from core.units import ltscale_command
+
+        def apply(value: float) -> None:
+            self.document.doc.header["$LTSCALE"] = value
+            self.document.dirty = True
+            self.command_line.echo(tr("Regenerating model."))
+            self.regen_in_memory()
+            self.viewport.update()
+
+        return ltscale_command(
+            float(self._header_value("$LTSCALE", 1.0) or 1.0),
+            echo=self.command_line.echo, apply=apply, args=args)
 
     # ZOOM [Extents/Window/Previous/nXP]
     def _cmd_zoom(self, *args) -> Prompt | None:
@@ -1792,10 +1876,27 @@ class MainWindow(QMainWindow):
         self._busy_text = text
         self._coords_label.setText(text or "0.0000, 0.0000")
 
+    def display_units(self):
+        """The drawing's units, cached — this is read on every mouse move.
+
+        The cache key is the document plus a counter UNITS bumps, so the
+        readout follows a units change immediately without re-reading five
+        header variables per pixel of cursor travel.
+        """
+        from core.units import Units
+
+        key = (self.document, getattr(self, "_units_revision", 0))
+        if getattr(self, "_units_cache_key", None) != key:
+            self._units_cache = (Units.from_doc(self.document.doc)
+                                 if self.document is not None else Units())
+            self._units_cache_key = key
+        return self._units_cache
+
     def _on_cursor_moved(self, wx: float, wy: float) -> None:
         if self._busy_text:
             return          # the coordinates line is showing progress
-        self._coords_label.setText(f"{wx:.4f}, {wy:.4f}")
+        units = self.display_units()
+        self._coords_label.setText(f"{units.length(wx)}, {units.length(wy)}")
 
     # -- documents -------------------------------------------------------------
     def _open_dialog(self) -> None:
@@ -1823,12 +1924,33 @@ class MainWindow(QMainWindow):
         path = Path(filename)
         if path.suffix.lower() not in (".dwg", ".dxf"):
             path = path.with_suffix(".dwg" if "dwg" in selected.lower() else ".dxf")
+        self._write_document(path)
+
+    def save_document(self) -> None:
+        """SAVE / QSAVE / Ctrl+S — write over the file that is open.
+
+        A drawing that has never been written has nowhere to go, so it falls
+        through to Save As, which is what AutoCAD does with an unnamed
+        drawing.
+        """
+        if self.document is None:
+            self.command_line.echo(tr("Nothing to save yet"))
+            return
+        if self.document.path is None:
+            self._save_as_dialog()
+            return
+        self._write_document(self.document.path)
+
+    def _write_document(self, path: Path) -> None:
+        """The shared tail of SAVE and SAVEAS: write, report, warn."""
+        if self.document is None:
+            return
         try:
             engine, warnings = self.document.save_as(path)
         except Exception as exc:
             QMessageBox.warning(
                 self,
-                tr("Save Drawing As"),
+                tr("Save Drawing"),
                 tr("Cannot save {name}: {error}", name=path.name, error=str(exc)),
             )
             return
