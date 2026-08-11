@@ -426,3 +426,39 @@ def test_self_check_passes_on_this_checkout():
     assert "OK" in proc.stdout
     # The converters must be the ones IngeCAD ships, not whatever is on PATH.
     assert "(bundled)" in proc.stdout, proc.stdout
+
+
+def test_menu_entries_carry_icons(qapp):
+    """File/Edit/View/Insert/Format entries show icons (Marco's request)."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        expected = {
+            "File": ["New", "Open...", "Save As...", "Page Setup...",
+                     "Plot..."],
+            "Edit": ["Undo", "Redo", "Cut", "Copy", "Paste", "Delete",
+                     "Erase", "Move"],
+            "View": ["Zoom Extents", "Zoom Window", "Pan", "Regenerate",
+                     "Layers panel"],
+            "Insert": ["Block...", "Create Block..."],
+            "Format": ["Layers...", "Linetype...", "Text Style...",
+                       "Dimension Style..."],
+        }
+        # NOTE: never keep QMenu wrappers across statements — shiboken
+        # invalidates duplicated wrappers (the C++ menus stay alive, held
+        # by win._menus). Fetch actions in a single expression instead.
+        def menu_actions(title):
+            for a in win._menu_bar.actions():
+                if a.text() == title:
+                    return {x.text(): x for x in a.menu().actions()}
+            return {}
+
+        for menu_name, labels in expected.items():
+            actions = menu_actions(menu_name)
+            for label in labels:
+                assert label in actions, f"{menu_name} > {label} missing"
+                assert not actions[label].icon().isNull(), \
+                    f"{menu_name} > {label} has no icon"
+    finally:
+        win.close()

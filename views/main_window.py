@@ -319,10 +319,13 @@ class MainWindow(QMainWindow):
         menu_bar = self._menu_bar
         menu_bar.clear()
 
-        def item(menu, label, slot, shortcut=None):
+        def item(menu, label, slot, shortcut=None, icon=None):
+            from views.icons import command_icon
             act = QAction(label, self)
             if shortcut is not None:
                 act.setShortcut(shortcut)
+            if icon is not None:
+                act.setIcon(command_icon(icon))
             act.triggered.connect(slot)
             menu.addAction(act)
             return act
@@ -338,19 +341,26 @@ class MainWindow(QMainWindow):
 
         # -- File -------------------------------------------------------------
         file_menu = menu_bar.addMenu(tr("File"))
-        item(file_menu, tr("New"), self.new_document, QKeySequence.New)
-        item(file_menu, tr("Open..."), self._open_dialog, QKeySequence.Open)
-        item(file_menu, tr("Save As..."), self._save_as_dialog, QKeySequence.SaveAs)
+        item(file_menu, tr("New"), self.new_document, QKeySequence.New,
+             icon="NEW")
+        item(file_menu, tr("Open..."), self._open_dialog, QKeySequence.Open,
+             icon="OPEN")
+        item(file_menu, tr("Save As..."), self._save_as_dialog,
+             QKeySequence.SaveAs, icon="SAVEAS")
         file_menu.addSeparator()
-        item(file_menu, tr("Page Setup..."), lambda: self._cmd_pagesetup())
-        item(file_menu, tr("Plot..."), self._plot_dialog, QKeySequence.Print)
+        item(file_menu, tr("Page Setup..."), lambda: self._cmd_pagesetup(),
+             icon="PAGESETUP")
+        item(file_menu, tr("Plot..."), self._plot_dialog, QKeySequence.Print,
+             icon="PLOT")
         file_menu.addSeparator()
         item(file_menu, tr("Quit"), self.close, QKeySequence.Quit)
 
         # -- Edit -------------------------------------------------------------
         edit_menu = menu_bar.addMenu(tr("Edit"))
-        item(edit_menu, tr("Undo"), self._cmd_undo, QKeySequence.Undo)
-        item(edit_menu, tr("Redo"), self._cmd_redo, QKeySequence.Redo)
+        item(edit_menu, tr("Undo"), self._cmd_undo, QKeySequence.Undo,
+             icon="UNDO")
+        item(edit_menu, tr("Redo"), self._cmd_redo, QKeySequence.Redo,
+             icon="REDO")
         from PySide6.QtGui import QShortcut
         QShortcut(QKeySequence("Ctrl+Y"), self, self._cmd_redo)  # AutoCAD redo
         edit_menu.addSeparator()
@@ -358,19 +368,26 @@ class MainWindow(QMainWindow):
         # Clipboard / Delete fire only when the drawing canvas has focus, so
         # Ctrl+C/X/V and Delete keep their text meaning inside the command
         # line and other input fields (added to the viewport widget).
-        def canvas_action(label, slot, seq):
+        def canvas_action(label, slot, seq, icon=None):
+            from views.icons import command_icon
             act = QAction(label, self)
             act.setShortcut(seq)
             act.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+            if icon is not None:
+                act.setIcon(command_icon(icon))
             act.triggered.connect(slot)
             edit_menu.addAction(act)
             self.viewport.addAction(act)
             return act
 
-        canvas_action(tr("Cut"), self._cmd_cut, QKeySequence.Cut)
-        canvas_action(tr("Copy"), self._cmd_copy, QKeySequence.Copy)
-        canvas_action(tr("Paste"), self._cmd_paste, QKeySequence.Paste)
-        canvas_action(tr("Delete"), self._cmd_delete, QKeySequence.Delete)
+        canvas_action(tr("Cut"), self._cmd_cut, QKeySequence.Cut,
+                      icon="CUTCLIP")
+        canvas_action(tr("Copy"), self._cmd_copy, QKeySequence.Copy,
+                      icon="COPYCLIP")
+        canvas_action(tr("Paste"), self._cmd_paste, QKeySequence.Paste,
+                      icon="PASTECLIP")
+        canvas_action(tr("Delete"), self._cmd_delete, QKeySequence.Delete,
+                      icon="ERASE")
         edit_menu.addSeparator()
         cmd_item(edit_menu, tr("Erase"), "ERASE")
         cmd_item(edit_menu, tr("Move"), "MOVE")
@@ -378,11 +395,13 @@ class MainWindow(QMainWindow):
 
         # -- View -------------------------------------------------------------
         view_menu = menu_bar.addMenu(tr("View"))
-        item(view_menu, tr("Zoom Extents"), self.viewport.zoom_extents)
+        item(view_menu, tr("Zoom Extents"), self.viewport.zoom_extents,
+             icon="ZOOM_EXTENTS")
         item(view_menu, tr("Zoom Window"),
-             lambda: self._invoke_command("ZOOM"))
-        item(view_menu, tr("Pan"), lambda: self._invoke_command("PAN"))
-        item(view_menu, tr("Regenerate"), self.regen_in_memory)
+             lambda: self._invoke_command("ZOOM"), icon="ZOOM_WINDOW")
+        item(view_menu, tr("Pan"), lambda: self._invoke_command("PAN"),
+             icon="PAN")
+        item(view_menu, tr("Regenerate"), self.regen_in_memory, icon="REGEN")
         view_menu.addSeparator()
         # Classic AutoCAD: View > Viewports (paper-space floating viewports).
         vp_menu = view_menu.addMenu(tr("Viewports"))
@@ -394,25 +413,30 @@ class MainWindow(QMainWindow):
         item(vp_menu, tr("Paper space (PSPACE)"),
              lambda: self._invoke_command("PSPACE"))
         view_menu.addSeparator()
-        item(view_menu, tr("Layers panel"), self.toggle_layers_panel)
+        item(view_menu, tr("Layers panel"), self.toggle_layers_panel,
+             icon="LAYER")
 
         # -- Insert -----------------------------------------------------------
         insert_menu = menu_bar.addMenu(tr("Insert"))
         cmd_item(insert_menu, tr("Block..."), "INSERT")
-        cmd_item(insert_menu, tr("Create Block..."), "BLOCK", icon=False)
+        cmd_item(insert_menu, tr("Create Block..."), "BLOCK")
         insert_menu.addSeparator()
         # Classic AutoCAD: Insert > Layout.
         layout_menu = insert_menu.addMenu(tr("Layout"))
-        item(layout_menu, tr("New Layout"), self._new_layout_tab)
+        item(layout_menu, tr("New Layout"), self._new_layout_tab,
+             icon="LAYOUT")
         cmd_item(layout_menu, tr("Layout..."), "LAYOUT")
 
         # -- Format -----------------------------------------------------------
         format_menu = menu_bar.addMenu(tr("Format"))
-        item(format_menu, tr("Layers..."), self.toggle_layers_panel)
-        cmd_item(format_menu, tr("Linetype..."), "LINETYPE", icon=False)
+        item(format_menu, tr("Layers..."), self.toggle_layers_panel,
+             icon="LAYER")
+        cmd_item(format_menu, tr("Linetype..."), "LINETYPE")
         format_menu.addSeparator()
-        item(format_menu, tr("Text Style..."), self.toggle_styles_panel)
-        item(format_menu, tr("Dimension Style..."), self._open_dimstyle_manager)
+        item(format_menu, tr("Text Style..."), self.toggle_styles_panel,
+             icon="STYLE")
+        item(format_menu, tr("Dimension Style..."),
+             self._open_dimstyle_manager, icon="DIMSTYLE")
 
         # -- Draw -------------------------------------------------------------
         draw_menu = menu_bar.addMenu(tr("Draw"))
@@ -494,6 +518,19 @@ class MainWindow(QMainWindow):
 
         help_menu = menu_bar.addMenu(tr("Help"))
         item(help_menu, tr("About IngeCAD"), self._show_about)
+
+        # PySide6 gotcha: QMenus returned by addMenu(title) are Python-owned
+        # — without a live reference, gc.collect() DELETES them (menus and
+        # submenus would vanish from a running app). Keep them all.
+        self._menus = []
+        for action in menu_bar.actions():
+            menu = action.menu()
+            if menu is None:
+                continue
+            self._menus.append(menu)
+            for sub in menu.actions():
+                if sub.menu() is not None:
+                    self._menus.append(sub.menu())
 
     def _show_about(self) -> None:
         from PySide6.QtWidgets import QMessageBox

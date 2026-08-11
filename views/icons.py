@@ -316,6 +316,225 @@ def _revcloud():
     return pm
 
 
+# -- application menu icons (File / Edit / View / Insert / Format) --------------
+
+def _sheet(p: QPainter, x=6, y=3, w=12, h=17, fold=4) -> None:
+    """A page with a folded corner (the File-menu document glyph)."""
+    p.drawLine(QPointF(x, y), QPointF(x + w - fold, y))
+    p.drawLine(QPointF(x + w - fold, y), QPointF(x + w, y + fold))
+    p.drawLine(QPointF(x + w, y + fold), QPointF(x + w, y + h))
+    p.drawLine(QPointF(x + w, y + h), QPointF(x, y + h))
+    p.drawLine(QPointF(x, y + h), QPointF(x, y))
+    p.drawLine(QPointF(x + w - fold, y), QPointF(x + w - fold, y + fold))
+    p.drawLine(QPointF(x + w - fold, y + fold), QPointF(x + w, y + fold))
+
+
+def _new():
+    pm, p = _canvas()
+    _sheet(p)
+    p.end()
+    return pm
+
+
+def _open():
+    pm, p = _canvas()
+    p.drawLine(3, 19, 3, 7)                          # folder back
+    p.drawLine(3, 7, 9, 7)
+    p.drawLine(9, 7, 11, 9)
+    p.drawLine(11, 9, 18, 9)
+    p.drawLine(18, 9, 18, 12)
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))                     # open front flap
+    p.drawLine(3, 19, 7, 12)
+    p.drawLine(7, 12, 21, 12)
+    p.drawLine(21, 12, 17, 19)
+    p.drawLine(17, 19, 3, 19)
+    p.restore()
+    p.end()
+    return pm
+
+
+def _saveas():
+    pm, p = _canvas()
+    p.drawRect(QRectF(4, 4, 16, 16))                 # the diskette
+    p.drawRect(QRectF(8, 4, 8, 5))                   # shutter
+    p.drawRect(QRectF(7, 12, 10, 8))                 # label
+    p.end()
+    return pm
+
+
+def _plotprint():
+    pm, p = _canvas()
+    p.drawRect(QRectF(4, 9, 16, 8))                  # printer body
+    p.drawLine(8, 9, 8, 4)                           # sheet in
+    p.drawLine(8, 4, 16, 4)
+    p.drawLine(16, 4, 16, 9)
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawLine(8, 17, 8, 21)                         # sheet out
+    p.drawLine(8, 21, 16, 21)
+    p.drawLine(16, 21, 16, 17)
+    p.restore()
+    p.end()
+    return pm
+
+
+def _undo():
+    pm, p = _canvas()
+    p.drawArc(QRectF(5, 7, 14, 12), 0, 180 * 16)
+    p.drawLine(QPointF(5, 13), QPointF(5, 18))
+    _arrow(p, 5, 18, 90)
+    p.end()
+    return pm
+
+
+def _redo():
+    pm, p = _canvas()
+    p.drawArc(QRectF(5, 7, 14, 12), 0, 180 * 16)
+    p.drawLine(QPointF(19, 13), QPointF(19, 18))
+    _arrow(p, 19, 18, 90)
+    p.end()
+    return pm
+
+
+def _cutclip():
+    pm, p = _canvas()
+    p.drawLine(8, 4, 14, 16)                         # blades
+    p.drawLine(16, 4, 10, 16)
+    p.drawEllipse(QPointF(8.5, 18), 2.5, 2.5)        # handles
+    p.drawEllipse(QPointF(15.5, 18), 2.5, 2.5)
+    p.end()
+    return pm
+
+
+def _copyclip():
+    pm, p = _canvas()
+    _sheet(p, 4, 6, 10, 14, 3)
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    _sheet(p, 10, 3, 10, 14, 3)
+    p.restore()
+    p.end()
+    return pm
+
+
+def _pasteclip():
+    pm, p = _canvas()
+    p.drawRect(QRectF(4, 4, 14, 17))                 # clipboard
+    p.drawRect(QRectF(8, 2, 6, 4))                   # clip
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    _sheet(p, 10, 9, 10, 12, 3)                      # the pasted sheet
+    p.restore()
+    p.end()
+    return pm
+
+
+def _magnifier(p: QPainter) -> None:
+    p.drawEllipse(QPointF(10, 10), 7, 7)
+    p.drawLine(QPointF(15, 15), QPointF(21, 21))
+
+
+def _zoom_extents():
+    pm, p = _canvas()
+    _magnifier(p)
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.2))
+    for dx, dy in ((-3, 0), (3, 0), (0, -3), (0, 3)):    # outward arrows
+        p.drawLine(QPointF(10, 10), QPointF(10 + dx, 10 + dy))
+    p.restore()
+    p.end()
+    return pm
+
+
+def _zoom_window():
+    pm, p = _canvas()
+    _magnifier(p)
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.2))
+    p.drawRect(QRectF(7, 7, 6, 6))
+    p.restore()
+    p.end()
+    return pm
+
+
+def _pan():
+    pm, p = _canvas()
+    # the classic open hand, simplified: palm + four fingers
+    p.drawRoundedRect(QRectF(7, 10, 10, 10), 3, 3)
+    for i, x in enumerate((8.5, 11.2, 13.9, 16.6)):
+        p.drawLine(QPointF(x, 11), QPointF(x, 4.5 if i in (1, 2) else 6))
+    p.end()
+    return pm
+
+
+def _regen():
+    pm, p = _canvas()
+    p.drawArc(QRectF(5, 5, 14, 14), 30 * 16, 300 * 16)
+    _arrow(p, 17.1, 8.5, 145)
+    p.end()
+    return pm
+
+
+def _layers():
+    pm, p = _canvas()
+    # the classic stacked-sheets layers glyph
+    for i, y in enumerate((6, 11, 16)):
+        if i == 1:
+            p.save()
+            p.setPen(QPen(_ACCENT, 1.4))
+        poly = QPolygonF([QPointF(12, y - 3), QPointF(21, y + 1),
+                          QPointF(12, y + 5), QPointF(3, y + 1)])
+        p.drawPolygon(poly)
+        if i == 1:
+            p.restore()
+    p.end()
+    return pm
+
+
+def _linetype():
+    pm, p = _canvas()
+    p.drawLine(3, 6, 21, 6)                          # continuous
+    for x0, x1 in ((3, 8), (11, 16), (19, 21)):      # dashed
+        p.drawLine(x0, 12, x1, 12)
+    for x0, x1 in ((3, 7), (10, 11), (14, 18), (21, 21)):  # dash-dot
+        p.drawLine(x0, 18, x1, 18)
+    p.end()
+    return pm
+
+
+def _textstyle():
+    pm, p = _canvas()
+    from PySide6.QtGui import QFont
+    f = QFont()
+    f.setPixelSize(15)
+    f.setBold(True)
+    p.setFont(f)
+    p.drawText(QRectF(2, 4, 12, 18), Qt.AlignCenter, "A")
+    f.setItalic(True)
+    p.setFont(f)
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.2))
+    p.drawText(QRectF(11, 4, 12, 18), Qt.AlignCenter, "A")
+    p.restore()
+    p.end()
+    return pm
+
+
+def _block():
+    pm, p = _canvas()
+    p.drawRect(QRectF(4, 8, 12, 12))                 # the geometry
+    p.drawLine(QPointF(7, 14), QPointF(13, 14))
+    p.drawLine(QPointF(10, 11), QPointF(10, 17))
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))                     # "create": plus badge
+    p.drawLine(QPointF(19, 4), QPointF(19, 10))
+    p.drawLine(QPointF(16, 7), QPointF(22, 7))
+    p.restore()
+    p.end()
+    return pm
+
+
 # -- dimension icons (classic Dimension toolbar glyphs) -------------------------
 
 def _dim_arrows(p: QPainter, x1: float, x2: float, y: float) -> None:
@@ -550,6 +769,14 @@ _PAINTERS = {
     "DIMTEDIT": _dimtedit, "DIMSTYLE": _dimstyle,
     "MVIEW": _mview, "VPLOCK": _vplock, "PAGESETUP": _pagesetup,
     "LAYOUT": _layout,
+    # application menus (File / Edit / View / Insert / Format)
+    "NEW": _new, "OPEN": _open, "SAVEAS": _saveas, "PLOT": _plotprint,
+    "UNDO": _undo, "REDO": _redo,
+    "CUTCLIP": _cutclip, "COPYCLIP": _copyclip, "PASTECLIP": _pasteclip,
+    "ZOOM_EXTENTS": _zoom_extents, "ZOOM_WINDOW": _zoom_window,
+    "PAN": _pan, "REGEN": _regen,
+    "LAYER": _layers, "LINETYPE": _linetype, "STYLE": _textstyle,
+    "BLOCK": _block,
 }
 
 
