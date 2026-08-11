@@ -3,6 +3,8 @@
 """Dimension creation: DIMLINEAR, DIMALIGNED, DIMRADIUS, DIMDIAMETER."""
 from __future__ import annotations
 
+import math
+
 import ezdxf
 import pytest
 
@@ -169,6 +171,146 @@ def test_aligned_preview_measures_true_length():
     tool.on_point((3, 4))
     dim = tool.preview_dimension((0, 4))
     assert dim["text"] == "5.00"
+
+
+class FixedPick:
+    """pick_entity always returns one preset entity (option-flow tests)."""
+
+    def __init__(self, entity):
+        self._entity = entity
+
+    def pick_entity(self, point):
+        return self._entity
+
+
+# -- wave B: Mtext/Text/Angle + Horizontal/Vertical/Rotated --------------------
+
+def test_linear_text_override_with_placeholder():
+    h = Harness()
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((0, 0))
+    tool.on_point((10, 0))
+    assert tool.on_option("T")            # Text option at the location prompt
+    assert tool.on_option("<> m")         # <> stands for the measurement
+    tool.on_point((5, 4))
+    dim = h.msp.query("DIMENSION")[0]
+    assert dim.dxf.text == "<> m"
+    assert h.finished
+
+
+def test_linear_text_enter_keeps_measurement():
+    h = Harness()
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((0, 0))
+    tool.on_point((10, 0))
+    assert tool.on_option("T")
+    tool.on_enter()                       # empty Enter -> keep <measured>
+    tool.on_point((5, 4))
+    assert h.msp.query("DIMENSION")[0].dxf.text == "<>"
+
+
+def test_linear_angle_rotates_text_only():
+    h = Harness()
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((0, 0))
+    tool.on_point((10, 0))
+    assert tool.on_option("A")
+    assert tool.on_option("30")
+    tool.on_point((5, 4))
+    dim = h.msp.query("DIMENSION")[0]
+    assert dim.dxf.text_rotation == pytest.approx(30.0)
+    assert dim.get_measurement() == pytest.approx(10.0)   # measurement intact
+
+
+def test_linear_forced_vertical():
+    h = Harness()
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((0, 0))
+    tool.on_point((3, 4))
+    assert tool.on_option("V")
+    tool.on_point((2, 10))                # auto rule would say horizontal here
+    assert h.msp.query("DIMENSION")[0].get_measurement() == pytest.approx(4.0)
+
+
+def test_linear_rotated_projects_measurement():
+    h = Harness()
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((0, 0))
+    tool.on_point((10, 0))
+    assert tool.on_option("R")
+    assert tool.on_option("45")
+    tool.on_point((5, 6))
+    m = h.msp.query("DIMENSION")[0].get_measurement()
+    assert m == pytest.approx(10 * math.cos(math.radians(45)))
+
+
+def test_linear_select_circle_quadrant_rule():
+    # Official: a pick near the N/S quadrant -> horizontal (W-E endpoints).
+    h = Harness()
+    circle = h.msp.add_circle((5, 5), 3)
+    h.ctx.services = FixedPick(circle)
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_enter()                       # select-object mode
+    tool.on_point((5, 7.9))               # near north
+    assert tool._p1 == (2, 5) and tool._p2 == (8, 5)
+    tool.on_point((5, 12))
+    assert h.msp.query("DIMENSION")[0].get_measurement() == pytest.approx(6.0)
+
+
+def test_aligned_select_circle_uses_pick_diameter():
+    h = Harness()
+    circle = h.msp.add_circle((0, 0), 5)
+    h.ctx.services = FixedPick(circle)
+    tool = DimAlignedTool(h.ctx)
+    tool.start()
+    tool.on_enter()
+    tool.on_point((3, 3))                 # diameter through the pick (45 deg)
+    assert tool._p1[0] == pytest.approx(-tool._p2[0])
+    assert math.dist(tool._p1, tool._p2) == pytest.approx(10.0)
+
+
+def test_linear_select_polyline_segment():
+    h = Harness()
+    pl = h.msp.add_lwpolyline([(0, 0), (10, 0), (10, 8)])
+    h.ctx.services = FixedPick(pl)
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_enter()
+    tool.on_point((5, 0.1))               # nearest the bottom segment
+    assert tool._p1 == (0, 0) and tool._p2 == (10, 0)
+
+
+def test_radius_text_and_angle_options():
+    h = Harness()
+    h.msp.add_circle((0, 0), 6)
+    tool = DimRadiusTool(h.ctx)
+    tool.start()
+    tool.on_point((0, 0))                 # picks the circle
+    assert tool.on_option("T")
+    assert tool.on_option("<> TYP")
+    assert tool.on_option("A")
+    assert tool.on_option("15")
+    tool.on_point((6, 0))
+    dim = h.msp.query("DIMENSION")[0]
+    assert dim.dxf.text == "<> TYP"
+    assert dim.dxf.text_rotation == pytest.approx(15.0)
+
+
+def test_preview_text_substitutes_placeholder():
+    h = Harness()
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((0, 0))
+    tool.on_point((10, 0))
+    assert tool.on_option("T")
+    assert tool.on_option("<> m")
+    assert tool.preview_dimension((5, 4))["text"] == "10.00 m"
 
 
 def test_dimension_uses_current_style():

@@ -913,21 +913,38 @@ def _current_dimstyle(document) -> str:
     return name if name in document.doc.dimstyles else "Standard"
 
 
-def dim_linear(p1, p2, location) -> AddDimensionCommand:
-    """DIMLINEAR: horizontal or vertical, chosen by the dimension-line pick."""
-    mid = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
-    horizontal = abs(location[1] - mid[1]) >= abs(location[0] - mid[0])
-    angle = 0.0 if horizontal else 90.0
+def dim_linear(p1, p2, location, *, angle: float | None = None,
+               text: str = "<>",
+               text_rotation: float | None = None) -> AddDimensionCommand:
+    """DIMLINEAR: horizontal/vertical chosen by the dimension-line pick, or a
+    forced angle (Horizontal=0 / Vertical=90 / Rotated=any). ``text`` follows
+    AutoCAD's Text option: "<>" is the measurement, " " suppresses it, any
+    other string replaces it (an embedded "<>" is substituted by ezdxf).
+    ``text_rotation`` is the Angle option (absolute text angle)."""
+    if angle is None:
+        mid = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+        horizontal = abs(location[1] - mid[1]) >= abs(location[0] - mid[0])
+        angle = 0.0 if horizontal else 90.0
 
     def factory(msp, document):
         return msp.add_linear_dim(
             base=(location[0], location[1]),
             p1=(p1[0], p1[1]), p2=(p2[0], p2[1]),
-            angle=angle, dimstyle=_current_dimstyle(document))
+            angle=angle, text=text, text_rotation=text_rotation,
+            dimstyle=_current_dimstyle(document))
     return AddDimensionCommand(factory)
 
 
-def dim_aligned(p1, p2, location) -> AddDimensionCommand:
+def _text_rotation_attribs(text_rotation: float | None) -> dict:
+    # ezdxf's renderer reads the user text angle straight from the DIMENSION
+    # entity (group 53); only add_linear_dim exposes it as a keyword.
+    if text_rotation is None:
+        return {}
+    return {"text_rotation": float(text_rotation)}
+
+
+def dim_aligned(p1, p2, location, *, text: str = "<>",
+                text_rotation: float | None = None) -> AddDimensionCommand:
     """DIMALIGNED: dimension parallel to p1->p2, offset to the picked side."""
     dx, dy = p2[0] - p1[0], p2[1] - p1[1]
     length = math.hypot(dx, dy) or 1.0
@@ -937,29 +954,35 @@ def dim_aligned(p1, p2, location) -> AddDimensionCommand:
     def factory(msp, document):
         return msp.add_aligned_dim(
             p1=(p1[0], p1[1]), p2=(p2[0], p2[1]),
-            distance=distance, dimstyle=_current_dimstyle(document))
+            distance=distance, text=text,
+            dimstyle=_current_dimstyle(document),
+            dxfattribs=_text_rotation_attribs(text_rotation))
     return AddDimensionCommand(factory)
 
 
-def dim_radius(center, radius: float, location) -> AddDimensionCommand:
+def dim_radius(center, radius: float, location, *, text: str = "<>",
+               text_rotation: float | None = None) -> AddDimensionCommand:
     angle = math.degrees(math.atan2(location[1] - center[1],
                                     location[0] - center[0]))
 
     def factory(msp, document):
         return msp.add_radius_dim(
             center=(center[0], center[1]), radius=radius, angle=angle,
-            dimstyle=_current_dimstyle(document))
+            text=text, dimstyle=_current_dimstyle(document),
+            dxfattribs=_text_rotation_attribs(text_rotation))
     return AddDimensionCommand(factory)
 
 
-def dim_diameter(center, radius: float, location) -> AddDimensionCommand:
+def dim_diameter(center, radius: float, location, *, text: str = "<>",
+                 text_rotation: float | None = None) -> AddDimensionCommand:
     angle = math.degrees(math.atan2(location[1] - center[1],
                                     location[0] - center[0]))
 
     def factory(msp, document):
         return msp.add_diameter_dim(
             center=(center[0], center[1]), radius=radius, angle=angle,
-            dimstyle=_current_dimstyle(document))
+            text=text, dimstyle=_current_dimstyle(document),
+            dxfattribs=_text_rotation_attribs(text_rotation))
     return AddDimensionCommand(factory)
 
 
