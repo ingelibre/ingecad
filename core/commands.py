@@ -24,6 +24,29 @@ class Command(ABC):
     def undo(self, document) -> None: ...
 
 
+class CompositeCommand(Command):
+    """Several sub-commands executed as ONE undo step (DIVIDE's n-1 points,
+    REVCLOUD Object's erase+add). needs_regen because the members bypass
+    the incremental display paths."""
+
+    needs_regen = True
+
+    def __init__(self, name: str, commands) -> None:
+        self.name = name
+        self.commands = list(commands)
+
+    def do(self, document) -> None:
+        for command in self.commands:
+            command.do(document)
+
+    def undo(self, document) -> None:
+        removed = []
+        for command in reversed(self.commands):
+            command.undo(document)
+            removed.extend(getattr(command, "removed_handles", ()) or ())
+        self.removed_handles = removed
+
+
 class History:
     """Undo/redo stacks. ``execute`` runs and records a command."""
 

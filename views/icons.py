@@ -270,6 +270,52 @@ def _insert():
     return pm
 
 
+def _xline():
+    pm, p = _canvas()
+    p.drawLine(2, 15, 22, 9)                         # edge-to-edge line
+    _node(p, 9, 13)                                  # root point
+    _node(p, 16, 11)                                 # through point
+    p.end()
+    return pm
+
+
+def _ray():
+    pm, p = _canvas()
+    p.drawLine(5, 18, 22, 7)                         # off one edge only
+    _node(p, 5, 18)                                  # anchored start
+    p.end()
+    return pm
+
+
+def _divide():
+    pm, p = _canvas()
+    p.drawLine(3, 12, 21, 12)
+    for x in (8, 12, 16):                            # equal thirds
+        _node(p, x, 12)
+    p.end()
+    return pm
+
+
+def _measure():
+    pm, p = _canvas()
+    p.drawLine(3, 12, 21, 12)
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.2))
+    for x in (8, 13):                                # fixed step, remainder
+        p.drawLine(QPointF(x, 9), QPointF(x, 15))
+    p.restore()
+    p.end()
+    return pm
+
+
+def _revcloud():
+    pm, p = _canvas()
+    for cx, cy in ((7, 9), (12, 7), (17, 9), (18, 14), (13, 16), (7, 15)):
+        p.drawArc(QRectF(cx - 3, cy - 3, 6, 6), 0, 300 * 16)
+    p.end()
+    return pm
+
+
 # -- layout / paper-space icons -------------------------------------------------
 
 def _mview():
@@ -328,6 +374,8 @@ _PAINTERS = {
     "SCALE": _scale, "MIRROR": _mirror, "OFFSET": _offset, "TRIM": _trim,
     "EXTEND": _extend, "FILLET": _fillet,
     "HATCH": _hatch, "-HATCH": _hatch, "INSERT": _insert,
+    "XLINE": _xline, "RAY": _ray, "DIVIDE": _divide, "MEASURE": _measure,
+    "REVCLOUD": _revcloud,
     "MVIEW": _mview, "VPLOCK": _vplock, "PAGESETUP": _pagesetup,
     "LAYOUT": _layout,
 }

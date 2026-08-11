@@ -26,6 +26,7 @@ from tools.blocks import BLOCK_TOOL_CLASSES
 from tools.dimension import DIM_TOOL_CLASSES
 from tools.draw import TOOL_CLASSES
 from tools.edit import EDIT_TOOL_CLASSES
+from tools.construct import CONSTRUCT_TOOL_CLASSES
 from tools.layout_tools import LAYOUT_TOOL_CLASSES
 
 SNAP_PX = 12.0   # aperture in logical pixels
@@ -82,7 +83,8 @@ class _GhostWorker(QThread):
         self.done.emit(self._ents, scene)
 
 ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES,
-                    **DIM_TOOL_CLASSES, **LAYOUT_TOOL_CLASSES}
+                    **DIM_TOOL_CLASSES, **LAYOUT_TOOL_CLASSES,
+                    **CONSTRUCT_TOOL_CLASSES}
 
 # Sentinel first element of _grip_drag while a VIEWPORT grip is hot — the
 # paper-space grip flow shares the widget's click-move-click plumbing but

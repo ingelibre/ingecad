@@ -1193,6 +1193,133 @@ def add_point(pos) -> AddEntityCommand:
         "POINT", lambda msp: msp.add_point((pos[0], pos[1])))
 
 
+# -- construction lines (XLINE / RAY) ------------------------------------------
+
+def add_xline(point, direction_deg: float) -> AddEntityCommand:
+    """Infinite construction line through ``point`` at ``direction_deg``."""
+    rad = math.radians(direction_deg)
+    unit = (math.cos(rad), math.sin(rad))
+    return AddEntityCommand(
+        "XLINE", lambda msp: msp.add_xline((point[0], point[1], 0.0),
+                                           (unit[0], unit[1], 0.0)))
+
+
+def add_ray(point, direction_deg: float) -> AddEntityCommand:
+    """Semi-infinite RAY from ``point`` toward ``direction_deg``."""
+    rad = math.radians(direction_deg)
+    unit = (math.cos(rad), math.sin(rad))
+    return AddEntityCommand(
+        "RAY", lambda msp: msp.add_ray((point[0], point[1], 0.0),
+                                       (unit[0], unit[1], 0.0)))
+
+
+# -- DIVIDE / MEASURE: arc-length sampling along an entity ----------------------
+
+def _entity_polyline(entity):
+    """(points, closed) — the entity flattened to a fine 2D polyline."""
+    from ezdxf import path as ezpath
+
+    p = ezpath.make_path(entity)
+    # tolerance relative to size so splines and arcs sample smoothly
+    box_pts = list(p.flattening(1.0))
+    if len(box_pts) < 2:
+        raise ValueError("degenerate entity")
+    xs = [v.x for v in box_pts]
+    ys = [v.y for v in box_pts]
+    diag = math.hypot(max(xs) - min(xs), max(ys) - min(ys)) or 1.0
+    pts = [(v.x, v.y) for v in p.flattening(diag / 4000.0)]
+    return pts, p.is_closed
+
+
+def _resample(points, positions):
+    """[(x, y, tangent_deg)] at the given arc-length positions."""
+    lengths = [0.0]
+    for a, b in zip(points, points[1:]):
+        lengths.append(lengths[-1] + math.dist(a, b))
+    total = lengths[-1]
+    out = []
+    seg = 1
+    for s in positions:
+        s = min(max(s, 0.0), total)
+        while seg < len(lengths) - 1 and lengths[seg] < s:
+            seg += 1
+        a, b = points[seg - 1], points[seg]
+        span = lengths[seg] - lengths[seg - 1] or 1.0
+        t = (s - lengths[seg - 1]) / span
+        out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
+                    math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))))
+    return out
+
+
+def divide_samples(entity, segments: int):
+    """DIVIDE: sample points along the entity — (n-1) for open objects,
+    n for closed ones (no point coincides with an endpoint)."""
+    if not 2 <= segments <= 32767:
+        raise ValueError("between 2 and 32767 segments")
+    points, closed = _entity_polyline(entity)
+    total = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+    if total <= 0.0:
+        raise ValueError("zero-length entity")
+    if closed:
+        positions = [total * i / segments for i in range(segments)]
+    else:
+        positions = [total * i / segments for i in range(1, segments)]
+    return _resample(points, positions)
+
+
+def measure_samples(entity, step: float, pick):
+    """MEASURE: points every ``step`` starting at the end nearest ``pick``;
+    the remainder stays at the far end (AutoCAD)."""
+    if step <= 0.0:
+        raise ValueError("segment length must be positive")
+    points, closed = _entity_polyline(entity)
+    if not closed and pick is not None:
+        if math.dist(pick, points[-1]) < math.dist(pick, points[0]):
+            points = points[::-1]
+    total = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+    if total <= 0.0:
+        raise ValueError("zero-length entity")
+    positions = []
+    s = step
+    while s < total - 1e-9:
+        positions.append(s)
+        s += step
+    return _resample(points, positions)
+
+
+# -- REVCLOUD -------------------------------------------------------------------
+
+def _loop_is_ccw(points) -> bool:
+    area = 0.0
+    for a, b in zip(points, points[1:] + points[:1]):
+        area += a[0] * b[1] - b[0] * a[1]
+    return area > 0.0
+
+
+def revcloud_vertices(loop, arc_chord: float, reverse: bool = False,
+                      calligraphy: bool = False) -> list:
+    """A revision cloud as closed xyseb vertices: the loop resampled at the
+    chord length, every chord bulged OUTWARD (~110 degrees); Reverse flips
+    the convexity; Calligraphy tapers each arc's width."""
+    if arc_chord <= 0.0:
+        raise ValueError("arc length must be positive")
+    pts = [(p[0], p[1]) for p in loop]
+    if len(pts) < 3:
+        raise ValueError("need at least 3 points")
+    if math.dist(pts[0], pts[-1]) > 1e-9:
+        pts.append(pts[0])
+    total = sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
+    count = max(int(round(total / arc_chord)), 3)
+    samples = _resample(pts, [total * i / count for i in range(count)])
+    ring = [(x, y) for x, y, _t in samples]
+    outward_sign = -1.0 if _loop_is_ccw(ring) else 1.0   # right of travel
+    if reverse:
+        outward_sign = -outward_sign
+    bulge = outward_sign * math.tan(math.radians(110.0) / 4.0)
+    ew = arc_chord * 0.18 if calligraphy else 0.0
+    return [(x, y, 0.0, ew, bulge) for x, y in ring]
+
+
 def _current_text_style(msp) -> str:
     """The document's current text style ($TEXTSTYLE), AutoCAD-style."""
     name = msp.doc.header.get("$TEXTSTYLE", "Standard")

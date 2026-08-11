@@ -64,6 +64,9 @@ DEFAULT_ALIASES: dict[str, str] = {
     "X": "EXPLODE",
     "F": "FILLET",
     "RE": "REGEN",
+    "XL": "XLINE",
+    "DIV": "DIVIDE",
+    "ME": "MEASURE",
     "PU": "PURGE",
     "MA": "MATCHPROP",
 }

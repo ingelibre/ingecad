@@ -416,12 +416,20 @@ class MainWindow(QMainWindow):
 
         # -- Draw -------------------------------------------------------------
         draw_menu = menu_bar.addMenu(tr("Draw"))
+        cmd_item(draw_menu, tr("Construction Line"), "XLINE")
+        cmd_item(draw_menu, tr("Ray"), "RAY")
+        draw_menu.addSeparator()
         for label, name in ((tr("Line"), "LINE"), (tr("Polyline"), "PLINE"),
                             (tr("Circle"), "CIRCLE"), (tr("Arc"), "ARC"),
                             (tr("Ellipse"), "ELLIPSE"),
                             (tr("Rectangle"), "RECTANG"), (tr("Polygon"), "POLYGON"),
                             (tr("Point"), "POINT")):
             cmd_item(draw_menu, label, name)
+        # AutoCAD classic: Draw > Point > Divide / Measure
+        point_menu = draw_menu.addMenu(tr("Point"))
+        cmd_item(point_menu, tr("Divide"), "DIVIDE")
+        cmd_item(point_menu, tr("Measure"), "MEASURE")
+        cmd_item(draw_menu, tr("Revision Cloud"), "REVCLOUD")
         draw_menu.addSeparator()
         cmd_item(draw_menu, tr("Text"), "TEXT")
         cmd_item(draw_menu, tr("Multiline text"), "MTEXT")
@@ -1053,7 +1061,8 @@ class MainWindow(QMainWindow):
                      "OFFSET", "TRIM", "EXTEND", "FILLET",
                      "BLOCK", "INSERT", "EXPLODE", "HATCH", "-HATCH",
                      "DIMLINEAR", "DIMALIGNED", "DIMRADIUS", "DIMDIAMETER",
-                     "MVIEW"):
+                     "MVIEW", "XLINE", "RAY", "DIVIDE", "MEASURE",
+                     "REVCLOUD"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
         # In-scope commands that land in later phases: answer honestly.
         for name, phase in (
