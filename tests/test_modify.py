@@ -367,3 +367,272 @@ def test_join_undoes_back_to_the_pieces():
     assert len(entities(h.document)) == 1
     h.history.undo()
     assert len(entities(h.document)) == 2
+
+
+# -- CHAMFER -------------------------------------------------------------------
+
+def test_a_chamfer_cuts_each_line_by_its_own_distance():
+    """Dist1 goes on the FIRST line picked — the pick order is the answer."""
+    from tools.modify import ChamferTool
+
+    h = Harness()
+    a = h.msp.add_line((10, 0), (0, 0))
+    b = h.msp.add_line((0, 10), (0, 0))
+    ChamferTool.dist1, ChamferTool.dist2, ChamferTool.trim = 3.0, 4.0, True
+    tool = ChamferTool(h.ctx)
+    tool.start()
+    h._entity = a
+    tool.on_point((5.0, 0.0))
+    h._entity = b
+    tool.on_point((0.0, 5.0))
+
+    kept = entities(h.document)
+    assert len(kept) == 3
+    bevel = [e for e in kept
+             if abs(e.dxf.start.x - 3.0) < 1e-9 or abs(e.dxf.end.x - 3.0) < 1e-9]
+    assert bevel, "no bevel line was created"
+    ends = sorted((round(e.dxf.start.x, 6), round(e.dxf.start.y, 6),
+                   round(e.dxf.end.x, 6), round(e.dxf.end.y, 6)) for e in kept)
+    assert (0.0, 4.0, 0.0, 10.0) in ends or (0.0, 10.0, 0.0, 4.0) in ends
+
+
+def test_chamfer_with_no_trim_keeps_both_originals():
+    from tools.modify import ChamferTool
+
+    h = Harness()
+    a = h.msp.add_line((10, 0), (0, 0))
+    b = h.msp.add_line((0, 10), (0, 0))
+    ChamferTool.dist1 = ChamferTool.dist2 = 2.0
+    ChamferTool.trim = False
+    try:
+        tool = ChamferTool(h.ctx)
+        tool.start()
+        h._entity = a
+        tool.on_point((5.0, 0.0))
+        h._entity = b
+        tool.on_point((0.0, 5.0))
+        assert len(entities(h.document)) == 3      # both originals + bevel
+        assert a.is_alive and b.is_alive
+    finally:
+        ChamferTool.trim = True
+
+
+def test_a_chamfer_that_does_not_fit_says_so_and_changes_nothing():
+    from tools.modify import ChamferTool
+
+    h = Harness()
+    a = h.msp.add_line((10, 0), (0, 0))
+    b = h.msp.add_line((0, 10), (0, 0))
+    ChamferTool.dist1 = ChamferTool.dist2 = 50.0
+    try:
+        tool = ChamferTool(h.ctx)
+        tool.start()
+        h._entity = a
+        tool.on_point((5.0, 0.0))
+        h._entity = b
+        tool.on_point((0.0, 5.0))
+        assert "does not fit" in h.text
+        assert len(entities(h.document)) == 2
+    finally:
+        ChamferTool.dist1 = ChamferTool.dist2 = 0.0
+
+
+# -- ARRAY ---------------------------------------------------------------------
+
+def test_a_rectangular_array_leaves_the_original_and_adds_the_rest():
+    document = Document.new()
+    line = document.modelspace().add_line((0, 0), (1, 0))
+    command = modify.array_rect([line], rows=2, columns=3,
+                                row_spacing=10.0, column_spacing=5.0)
+    command.do(document)
+    kept = entities(document)
+    assert len(kept) == 6                       # 2x3 including the original
+    starts = sorted((round(e.dxf.start.x, 6), round(e.dxf.start.y, 6))
+                    for e in kept)
+    assert starts == [(0, 0), (0, 10), (5, 0), (5, 10), (10, 0), (10, 10)]
+
+
+def test_negative_spacing_arrays_down_and_to_the_left():
+    document = Document.new()
+    line = document.modelspace().add_line((0, 0), (1, 0))
+    modify.array_rect([line], 2, 2, -10.0, -5.0).do(document)
+    starts = sorted((round(e.dxf.start.x, 6), round(e.dxf.start.y, 6))
+                    for e in entities(document))
+    assert starts == [(-5, -10), (-5, 0), (0, -10), (0, 0)]
+
+
+def test_a_full_polar_array_spaces_items_around_the_whole_circle():
+    document = Document.new()
+    circle = document.modelspace().add_circle((10, 0), 1)
+    modify.array_polar([circle], (0, 0), count=4, fill_angle=360.0).do(document)
+    centres = sorted((round(e.dxf.center.x, 6), round(e.dxf.center.y, 6))
+                     for e in entities(document))
+    assert centres == [(-10, 0), (0, -10), (0, 10), (10, 0)]
+
+
+def test_a_partial_polar_array_spans_the_angle_end_to_end():
+    """3 items over 90 degrees sit at 0, 45 and 90 — not at 0, 30, 60."""
+    document = Document.new()
+    circle = document.modelspace().add_circle((10, 0), 1)
+    modify.array_polar([circle], (0, 0), count=3, fill_angle=90.0).do(document)
+    angles = sorted(round(math.degrees(math.atan2(e.dxf.center.y,
+                                                  e.dxf.center.x)) % 360.0)
+                    for e in entities(document))
+    assert angles == [0, 45, 90]
+
+
+def test_an_array_undoes_to_the_single_original():
+    document = Document.new()
+    line = document.modelspace().add_line((0, 0), (1, 0))
+    command = modify.array_rect([line], 3, 3, 1.0, 1.0)
+    command.do(document)
+    assert len(entities(document)) == 9
+    command.undo(document)
+    assert len(entities(document)) == 1
+
+
+def test_the_array_prompts_run_the_rectangular_flow():
+    from tools.modify import ArrayTool
+
+    h = Harness()
+    line = h.msp.add_line((0, 0), (1, 0))
+    tool = ArrayTool(h.ctx)
+    tool.start()
+    tool.on_selection([line])
+    assert "Rectangular/Polar" in h.text
+    tool.on_option("R")
+    tool.on_option("2")        # rows
+    tool.on_option("2")        # columns
+    tool.on_option("10")       # row spacing
+    tool.on_option("5")        # column spacing
+    assert len(entities(h.document)) == 4
+    assert h.finished
+
+
+# -- MATCHPROP -----------------------------------------------------------------
+
+def test_matchprop_copies_layer_colour_and_linetype():
+    from tools.modify import MatchPropTool
+
+    h = Harness()
+    h.document.doc.layers.add("MUROS")
+    source = h.msp.add_line((0, 0), (1, 0), dxfattribs={
+        "layer": "MUROS", "color": 3, "linetype": "DASHED"})
+    target = h.msp.add_line((0, 5), (1, 5))
+    tool = MatchPropTool(h.ctx)
+    tool.start()
+    h._entity = source
+    tool.on_point((0.5, 0.0))
+    h._entity = target
+    tool.on_point((0.5, 5.0))
+    assert target.dxf.layer == "MUROS"
+    assert target.dxf.color == 3
+    assert target.dxf.linetype == "DASHED"
+
+
+def test_matchprop_leaves_the_geometry_alone():
+    h = Harness()
+    source = h.msp.add_line((0, 0), (1, 0), dxfattribs={"color": 5})
+    target = h.msp.add_circle((10, 10), 3)
+    modify.match_properties(source, [target]).do(h.document)
+    assert target.dxf.color == 5
+    assert (target.dxf.center.x, target.dxf.center.y) == pytest.approx((10, 10))
+    assert target.dxf.radius == pytest.approx(3.0)
+
+
+def test_matchprop_undoes_every_target_individually():
+    h = Harness()
+    source = h.msp.add_line((0, 0), (1, 0), dxfattribs={"color": 5})
+    a = h.msp.add_line((0, 1), (1, 1), dxfattribs={"color": 1})
+    b = h.msp.add_line((0, 2), (1, 2), dxfattribs={"color": 2})
+    command = modify.match_properties(source, [a, b])
+    command.do(h.document)
+    assert (a.dxf.color, b.dxf.color) == (5, 5)
+    command.undo(h.document)
+    assert (a.dxf.color, b.dxf.color) == (1, 2)
+
+
+def test_matchprop_copies_the_text_style_between_texts():
+    h = Harness()
+    h.document.doc.styles.add("TITULOS", font="arial.ttf")
+    source = h.msp.add_text("A", height=1, dxfattribs={"style": "TITULOS"})
+    target = h.msp.add_text("B", height=1)
+    modify.match_properties(source, [target]).do(h.document)
+    assert target.dxf.style == "TITULOS"
+
+
+# -- PEDIT ---------------------------------------------------------------------
+
+def test_pedit_closes_and_reopens_a_polyline():
+    from tools.modify import PeditTool
+
+    h = Harness()
+    poly = h.msp.add_lwpolyline([(0, 0), (10, 0), (10, 10)])
+    h._entity = poly
+    tool = PeditTool(h.ctx)
+    tool.start()
+    tool.on_point((5.0, 0.0))
+    assert "Close" in h.text
+    tool.on_option("C")
+    assert poly.closed is True
+    tool.on_option("O")
+    assert poly.closed is False
+
+
+def test_pedit_sets_the_width_of_every_segment():
+    from tools.modify import PeditTool
+
+    h = Harness()
+    poly = h.msp.add_lwpolyline([(0, 0), (10, 0), (10, 10)])
+    h._entity = poly
+    tool = PeditTool(h.ctx)
+    tool.start()
+    tool.on_point((5.0, 0.0))
+    tool.on_option("W")
+    tool.on_option("0.5")
+    widths = [(p[2], p[3]) for p in poly.get_points("xyseb")]
+    assert all(w == pytest.approx((0.5, 0.5)) for w in widths)
+
+
+def test_pedit_reverse_flips_the_direction_and_the_bulges():
+    h = Harness()
+    poly = h.msp.add_lwpolyline(
+        [(0, 0, 0, 0, 0.5), (10, 0, 0, 0, 0), (10, 10, 0, 0, 0)],
+        format="xyseb")
+    modify.polyline_edit(poly, "reverse").do(h.document)
+    rows = poly.get_points("xyseb")
+    assert [(round(p[0], 6), round(p[1], 6)) for p in rows] == [
+        (10, 10), (10, 0), (0, 0)]
+    # The bulge that belonged to the first span now belongs to the last,
+    # with the opposite sign — otherwise the arc would flip to the wrong side.
+    assert rows[1][4] == pytest.approx(-0.5)
+
+
+def test_pedit_offers_to_turn_a_line_into_a_polyline():
+    from tools.modify import PeditTool
+
+    h = Harness()
+    line = h.msp.add_line((0, 0), (10, 0))
+    h._entity = line
+    tool = PeditTool(h.ctx)
+    tool.start()
+    tool.on_point((5.0, 0.0))
+    assert "not a polyline" in h.text
+    tool.on_option("Y")
+    kept = entities(h.document)
+    assert len(kept) == 1 and kept[0].dxftype() == "LWPOLYLINE"
+
+
+def test_pedit_declining_the_conversion_leaves_the_line_alone():
+    from tools.modify import PeditTool
+
+    h = Harness()
+    line = h.msp.add_line((0, 0), (10, 0))
+    h._entity = line
+    tool = PeditTool(h.ctx)
+    tool.start()
+    tool.on_point((5.0, 0.0))
+    tool.on_option("N")
+    assert h.finished
+    kept = entities(h.document)
+    assert len(kept) == 1 and kept[0].dxftype() == "LINE"

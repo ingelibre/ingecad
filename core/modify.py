@@ -507,3 +507,201 @@ def join_entities(entities):
         return None, reason
     return ReplaceEntitiesCommand(
         "JOIN", entities, [_factory_for(piece, entities[0])]), ""
+
+
+# -- ARRAY ---------------------------------------------------------------------
+
+class ArrayCommand(Command):
+    """Copies laid out on a grid or around a centre.
+
+    Plain copies, not AutoCAD's associative array object: an associative
+    array is a parametric entity a colleague's AutoCAD would have to
+    understand on the way back, and the round trip matters more here than
+    the parametrics. Explode an AutoCAD array and this is what is left.
+    """
+
+    name = "ARRAY"
+
+    def __init__(self, entities, transforms) -> None:
+        self.entities = list(entities)
+        self._transforms = list(transforms)
+        self.new_entities: list = []
+
+    def do(self, document) -> None:
+        msp = document.modelspace()
+        self.new_entities = []
+        for matrix in self._transforms:
+            for source in self.entities:
+                copy = source.copy()
+                copy.transform(matrix)
+                msp.add_entity(copy)
+                self.new_entities.append(copy)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        msp = document.modelspace()
+        for entity in self.new_entities:
+            msp.delete_entity(entity)
+        self.new_entities = []
+        document.dirty = True
+
+
+def array_rect(entities, rows: int, columns: int,
+               row_spacing: float, column_spacing: float) -> ArrayCommand:
+    """Rows up and columns to the right from the original (-ARRAY, p.155)."""
+    from ezdxf.math import Matrix44
+
+    transforms = []
+    for r in range(int(rows)):
+        for c in range(int(columns)):
+            if r == 0 and c == 0:
+                continue          # the original stays where it is
+            transforms.append(
+                Matrix44.translate(c * column_spacing, r * row_spacing, 0))
+    return ArrayCommand(entities, transforms)
+
+
+def array_polar(entities, center: Point, count: int,
+                fill_angle: float = 360.0, rotate: bool = True) -> ArrayCommand:
+    """Copies around a centre; positive fill angle turns counter-clockwise."""
+    from ezdxf.math import Matrix44
+
+    count = int(count)
+    if count < 2:
+        return ArrayCommand(entities, [])
+    # A full turn puts the last copy on top of the original, so the step
+    # divides the whole circle; a partial fan spans it end to end.
+    divisor = count if abs(abs(fill_angle) - 360.0) < 1e-9 else count - 1
+    step = fill_angle / divisor
+    transforms = []
+    for index in range(1, count):
+        angle = math.radians(step * index)
+        about = Matrix44.z_rotate(angle)
+        move_back = Matrix44.translate(center[0], center[1], 0)
+        move_to_origin = Matrix44.translate(-center[0], -center[1], 0)
+        if rotate:
+            transforms.append(move_to_origin @ about @ move_back)
+        else:
+            # Same place, same orientation: rotate the anchor only.
+            dx = (center[0] + (0 - center[0]) * math.cos(angle)
+                  - (0 - center[1]) * math.sin(angle))
+            dy = (center[1] + (0 - center[0]) * math.sin(angle)
+                  + (0 - center[1]) * math.cos(angle))
+            transforms.append(Matrix44.translate(dx, dy, 0))
+    return ArrayCommand(entities, transforms)
+
+
+# -- MATCHPROP -----------------------------------------------------------------
+
+# What the Property Settings dialog copies by default (MATCHPROP, p.1081).
+MATCH_PROPERTIES = ("layer", "color", "linetype", "ltscale", "lineweight",
+                    "thickness", "transparency", "true_color")
+
+
+class MatchPropCommand(Command):
+    """Copy the source object's properties onto the destination objects."""
+
+    name = "MATCHPROP"
+
+    def __init__(self, source, targets, properties=MATCH_PROPERTIES) -> None:
+        self.source = source
+        self.targets = list(targets)
+        self.properties = tuple(properties)
+        self._before: list = []
+
+    def do(self, document) -> None:
+        self._before = [e.copy() for e in self.targets]
+        for target in self.targets:
+            for name in self.properties:
+                try:
+                    value = self.source.dxf.get(name)
+                except Exception:
+                    continue
+                if value is None:
+                    continue
+                try:
+                    target.dxf.set(name, value)
+                except Exception:
+                    pass          # not every property exists on every type
+            _match_style(self.source, target)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        for target, snap in zip(self.targets, self._before):
+            _restore_entity(target, snap)
+        document.dirty = True
+
+
+def _match_style(source, target) -> None:
+    """The per-type extras AutoCAD copies: text style, dimension style."""
+    kinds = {source.dxftype(), target.dxftype()}
+    if kinds <= {"TEXT", "MTEXT", "ATTDEF", "ATTRIB"}:
+        try:
+            target.dxf.style = source.dxf.style
+        except Exception:
+            pass
+    if source.dxftype() == "DIMENSION" and target.dxftype() == "DIMENSION":
+        try:
+            target.dxf.dimstyle = source.dxf.dimstyle
+        except Exception:
+            pass
+
+
+def match_properties(source, targets, properties=MATCH_PROPERTIES):
+    return MatchPropCommand(source, targets, properties)
+
+
+# -- PEDIT ---------------------------------------------------------------------
+
+class PolylineEditCommand(Command):
+    """One PEDIT operation, with snapshot undo."""
+
+    name = "PEDIT"
+
+    def __init__(self, entity, operation: str, value=None) -> None:
+        self.entity = entity
+        self.operation = operation
+        self.value = value
+        self._before = None
+
+    def do(self, document) -> None:
+        self._before = self.entity.copy()
+        apply_pedit(self.entity, self.operation, self.value)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        _restore_entity(self.entity, self._before)
+        document.dirty = True
+
+
+def apply_pedit(entity, operation: str, value=None) -> None:
+    if operation == "close":
+        entity.closed = True
+    elif operation == "open":
+        entity.closed = False
+    elif operation == "width":
+        rows = [(x, y, float(value), float(value), b)
+                for x, y, _sw, _ew, b in entity.get_points("xyseb")]
+        entity.set_points(rows, format="xyseb")
+    elif operation == "reverse":
+        rows = _reverse_rows([(x, y, b)
+                              for x, y, _sw, _ew, b in
+                              entity.get_points("xyseb")])
+        entity.set_points([(x, y, 0.0, 0.0, b) for x, y, b in rows],
+                          format="xyseb")
+
+
+def polyline_edit(entity, operation: str, value=None) -> PolylineEditCommand:
+    return PolylineEditCommand(entity, operation, value)
+
+
+def to_polyline(entity):
+    """PEDIT on a line or arc: convert it, so it can be edited and joined."""
+    kind = entity.dxftype()
+    if kind == "LWPOLYLINE":
+        return None
+    if kind not in ("LINE", "ARC"):
+        return None
+    rows = _entity_chain_rows(entity)
+    piece = ("LWPOLYLINE", [(x, y, 0.0, 0.0, b) for x, y, b in rows], False)
+    return ReplaceEntitiesCommand("PEDIT", [entity], [_factory_for(piece, entity)])

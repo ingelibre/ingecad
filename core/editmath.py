@@ -435,3 +435,41 @@ def fillet_arc(s1: Seg, s2: Seg, radius: float):
     if (a2 - a1) % 360.0 > 180.0:
         a1, a2 = a2, a1
     return ((cx, cy), radius, a1, a2, t1, t2)
+
+
+def chamfer_pieces(s1: Seg, s2: Seg, d1: float, d2: float):
+    """CHAMFER: the two trimmed lines and the bevel that joins them.
+
+    ``d1`` is measured along the FIRST line picked and ``d2`` along the
+    second — the order of the picks is part of the answer, which is what the
+    manual means by "applied in the order that you select the objects"
+    (CHAMFER, p.313). Returns ``(new_s1, new_s2, bevel)`` or None when the
+    lines are parallel or the distances do not fit on them.
+    """
+    hit = line_line_intersection(s1, (s2[0], s2[1], s2[2], s2[3]),
+                                 infinite2=True)
+    if hit is None:
+        return None
+    corner = hit[1]
+
+    def cut(seg: Seg, distance: float):
+        """(far end kept, point at `distance` from the corner)."""
+        d_start = math.hypot(seg[0] - corner[0], seg[1] - corner[1])
+        d_end = math.hypot(seg[2] - corner[0], seg[3] - corner[1])
+        far = (seg[0], seg[1]) if d_start >= d_end else (seg[2], seg[3])
+        length = max(d_start, d_end)
+        if length <= 1e-12 or distance > length:
+            return None
+        ux = (far[0] - corner[0]) / length
+        uy = (far[1] - corner[1]) / length
+        return far, (corner[0] + ux * distance, corner[1] + uy * distance)
+
+    first = cut(s1, d1)
+    second = cut(s2, d2)
+    if first is None or second is None:
+        return None
+    far1, p1 = first
+    far2, p2 = second
+    return ((far1[0], far1[1], p1[0], p1[1]),
+            (far2[0], far2[1], p2[0], p2[1]),
+            (p1[0], p1[1], p2[0], p2[1]))

@@ -521,11 +521,17 @@ class MainWindow(QMainWindow):
         for label, name in ((tr("Trim"), "TRIM"), (tr("Extend"), "EXTEND"),
                             (tr("Fillet"), "FILLET"), (tr("Erase"), "ERASE")):
             cmd_item(modify_menu, label, name)
+        cmd_item(modify_menu, tr("Chamfer"), "CHAMFER", icon=False)
+        cmd_item(modify_menu, tr("Array"), "ARRAY", icon=False)
         modify_menu.addSeparator()
         for label, name in ((tr("Stretch"), "STRETCH"), (tr("Break"), "BREAK"),
                             (tr("Join"), "JOIN")):
             cmd_item(modify_menu, label, name, icon=False)
         modify_menu.addSeparator()
+        cmd_item(modify_menu, tr("Match Properties"), "MATCHPROP", icon=False)
+        object_menu = QMenu(tr("Object"), self)
+        modify_menu.addMenu(object_menu)
+        cmd_item(object_menu, tr("Polyline"), "PEDIT", icon=False)
         cmd_item(modify_menu, tr("Explode"), "EXPLODE", icon=False)
 
         # -- Tools ------------------------------------------------------------
@@ -1378,7 +1384,8 @@ class MainWindow(QMainWindow):
                      "MVIEW", "XLINE", "RAY", "DIVIDE", "MEASURE",
                      "REVCLOUD",
                      "DIST", "ID", "AREA", "LIST",
-                     "STRETCH", "BREAK", "JOIN"):
+                     "STRETCH", "BREAK", "JOIN",
+                     "CHAMFER", "ARRAY", "MATCHPROP", "PEDIT"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
         d.register("SAVE", lambda *a: self.save_document())
         d.register("QSAVE", lambda *a: self.save_document())

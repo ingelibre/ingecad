@@ -1,14 +1,24 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
-"""STRETCH, BREAK and JOIN — the prompts.
+"""The editing commands and their prompts: STRETCH, BREAK, JOIN, CHAMFER,
+ARRAY, MATCHPROP, PEDIT.
 
 Wording follows the AutoCAD Command Reference (STRETCH p.1851, BREAK p.269,
-JOIN p.1013). The geometry is in ``core.modify``, so the whole flow is
-testable without a GUI.
+JOIN p.1013, CHAMFER p.313, -ARRAY p.155, MATCHPROP p.1080, PEDIT p.1434).
+The geometry is in ``core.modify``, so every flow is testable without a GUI.
+
+Deliberate deviations, each a smaller menu rather than a different one:
+
+* ARRAY runs the classic ``-ARRAY`` prompts and produces plain copies. The
+  modern associative array is a parametric object a colleague's AutoCAD
+  would have to understand coming back; the round trip matters more here.
+* PEDIT offers Close/Open, Width, Reverse and Undo. Fit, Spline, Decurve,
+  Ltype gen and Edit vertex are not listed, because a prompt that accepts a
+  keyword and does nothing with it is worse than one that never offered it.
 """
 from __future__ import annotations
 
-from core import modify
+from core import actions, editmath, modify
 from core.i18n import tr
 from tools.base import Point, Tool
 
@@ -162,8 +172,391 @@ class JoinTool(Tool):
         self.ctx.finish()
 
 
+class ChamferTool(Tool):
+    """CHAMFER: bevel the corner two lines make, by two distances."""
+
+    entity_picker = True
+    dist1 = 0.0        # session-sticky, like AutoCAD's
+    dist2 = 0.0
+    trim = True
+
+    def start(self) -> None:
+        self.name = "CHAMFER"
+        self._first = None
+        self._await = None
+        self._announce()
+
+    def _announce(self) -> None:
+        cls = type(self)
+        mode = tr("TRIM") if cls.trim else tr("NOTRIM")
+        self.ctx.echo(tr("({mode} mode) Current chamfer Dist1 = {d1}, "
+                         "Dist2 = {d2}", mode=mode,
+                         d1=f"{cls.dist1:g}", d2=f"{cls.dist2:g}"))
+        self.ctx.prompt(tr("Select first line or [Distance/Trim]:"))
+
+    def on_option(self, text: str) -> bool:
+        token = text.strip().upper()
+        cls = type(self)
+        if self._await == "d1":
+            value = _number(text)
+            if value is None or value < 0:
+                self.ctx.echo(tr("Requires a positive number."))
+                return True
+            cls.dist1 = value
+            self._await = "d2"
+            self.ctx.prompt(tr("Specify second chamfer distance <{d}>:",
+                               d=f"{cls.dist1:g}"))
+            return True
+        if self._await == "d2":
+            value = _number(text) if text.strip() else cls.dist1
+            if value is None or value < 0:
+                self.ctx.echo(tr("Requires a positive number."))
+                return True
+            cls.dist2 = value
+            self._await = None
+            self._announce()
+            return True
+        if self._await == "trim":
+            if token.startswith("T"):
+                cls.trim = True
+            elif token.startswith("N"):
+                cls.trim = False
+            else:
+                self.ctx.echo(tr("Requires Trim or No trim."))
+                return True
+            self._await = None
+            self._announce()
+            return True
+        if token in ("D", "DISTANCE"):
+            self._await = "d1"
+            self.ctx.prompt(tr("Specify first chamfer distance <{d}>:",
+                               d=f"{cls.dist1:g}"))
+            return True
+        if token in ("T", "TRIM"):
+            self._await = "trim"
+            self.ctx.prompt(tr("Enter Trim mode option [Trim/No trim] "
+                               "<{mode}>:",
+                               mode=tr("Trim") if cls.trim else tr("No trim")))
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        if self._await == "d2":
+            self.on_option("")
+            return
+        self.ctx.finish()
+
+    def on_point(self, point: Point) -> None:
+        services = self.ctx.services
+        entity = services.pick_entity(point) if services else None
+        if entity is None or entity.dxftype() != "LINE":
+            self.ctx.echo(tr("CHAMFER works on pairs of lines."))
+            return
+        if self._first is None:
+            self._first = entity
+            self.ctx.prompt(tr("Select second line:"))
+            return
+        if entity is self._first:
+            self.ctx.echo(tr("Pick a different line."))
+            return
+        cls = type(self)
+        s1 = _seg(self._first)
+        s2 = _seg(entity)
+        pieces = editmath.chamfer_pieces(s1, s2, cls.dist1, cls.dist2)
+        if pieces is None:
+            self.ctx.echo(tr("The chamfer does not fit those lines."))
+            self.ctx.finish()
+            return
+        new1, new2, bevel = pieces
+        factories = [lambda msp, p=bevel: msp.add_line((p[0], p[1]),
+                                                       (p[2], p[3]))]
+        if cls.trim:
+            factories = [
+                lambda msp, p=new1: msp.add_line((p[0], p[1]), (p[2], p[3])),
+                lambda msp, p=new2: msp.add_line((p[0], p[1]), (p[2], p[3])),
+            ] + factories
+            old = [self._first, entity]
+        else:
+            old = []
+        self.ctx.execute(actions.ReplaceEntitiesCommand(
+            "CHAMFER", old, factories))
+        self.ctx.finish()
+
+
+class ArrayTool(Tool):
+    """ARRAY: the command-line flow of -ARRAY, producing plain copies."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "ARRAY"
+        self._entities: list = []
+        self._mode = None
+        self._await = None
+        self._rows = 1
+        self._cols = 1
+        self._row_spacing = 0.0
+        self._center: Point | None = None
+        self._count = 4
+        self._fill = 360.0
+
+    def on_selection(self, entities: list) -> None:
+        if not entities:
+            self.ctx.finish()
+            return
+        self._entities = entities
+        self.ctx.prompt(
+            tr("Enter the type of array [Rectangular/Polar] <R>:"))
+
+    def on_option(self, text: str) -> bool:
+        token = text.strip().upper()
+        if self._mode is None:
+            if token in ("", "R", "RECTANGULAR"):
+                self._mode = "rect"
+                self._await = "rows"
+                self.ctx.prompt(tr("Enter the number of rows (---) <1>:"))
+                return True
+            if token in ("P", "POLAR"):
+                self._mode = "polar"
+                self.ctx.prompt(tr("Specify center point of array:"))
+                return True
+            return False
+        handler = getattr(self, f"_take_{self._await}", None)
+        return handler(text) if handler else False
+
+    def on_enter(self) -> None:
+        if self._mode is None:
+            self.on_option("R")
+            return
+        if self._await:
+            self.on_option("")
+            return
+        self.ctx.finish()
+
+    # -- rectangular
+    def _take_rows(self, text: str) -> bool:
+        self._rows = int(_number(text) or 1)
+        self._await = "cols"
+        self.ctx.prompt(tr("Enter the number of columns (|||) <1>:"))
+        return True
+
+    def _take_cols(self, text: str) -> bool:
+        self._cols = int(_number(text) or 1)
+        if self._rows <= 1 and self._cols <= 1:
+            self.ctx.echo(tr("One row and one column is the object itself."))
+            self.ctx.finish()
+            return True
+        self._await = "row_spacing"
+        self.ctx.prompt(tr("Enter the distance between rows (---):"))
+        return True
+
+    def _take_row_spacing(self, text: str) -> bool:
+        self._row_spacing = _number(text) or 0.0
+        self._await = "col_spacing"
+        self.ctx.prompt(tr("Specify the distance between columns (|||):"))
+        return True
+
+    def _take_col_spacing(self, text: str) -> bool:
+        spacing = _number(text) or 0.0
+        self.ctx.execute(modify.array_rect(
+            self._entities, self._rows, self._cols,
+            self._row_spacing, spacing))
+        self.ctx.echo(tr("{count} copies placed.",
+                         count=(self._rows * self._cols - 1)
+                         * len(self._entities)))
+        self.ctx.finish()
+        return True
+
+    # -- polar
+    def _take_count(self, text: str) -> bool:
+        self._count = int(_number(text) or 0)
+        if self._count < 2:
+            self.ctx.echo(tr("An array needs at least two items."))
+            self.ctx.finish()
+            return True
+        self._await = "fill"
+        self.ctx.prompt(tr("Specify the angle to fill (+=ccw, -=cw) <360>:"))
+        return True
+
+    def _take_fill(self, text: str) -> bool:
+        self._fill = _number(text) if text.strip() else 360.0
+        self._await = "rotate"
+        self.ctx.prompt(tr("Rotate arrayed objects? [Yes/No] <Y>:"))
+        return True
+
+    def _take_rotate(self, text: str) -> bool:
+        rotate = not text.strip().upper().startswith("N")
+        self.ctx.execute(modify.array_polar(
+            self._entities, self._center, self._count, self._fill, rotate))
+        self.ctx.echo(tr("{count} copies placed.",
+                         count=(self._count - 1) * len(self._entities)))
+        self.ctx.finish()
+        return True
+
+    def on_point(self, point: Point) -> None:
+        if self._mode == "polar" and self._center is None:
+            self._center = point
+            self._await = "count"
+            self.ctx.prompt(tr("Enter the number of items in the array:"))
+
+
+class MatchPropTool(Tool):
+    """MATCHPROP: one source, then every destination you click."""
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "MATCHPROP"
+        self._source = None
+        self.ctx.prompt(tr("Select source object:"))
+
+    def on_point(self, point: Point) -> None:
+        services = self.ctx.services
+        entity = services.pick_entity(point) if services else None
+        if entity is None:
+            self.ctx.prompt(tr("Nothing selected. Select source object:"))
+            return
+        if self._source is None:
+            self._source = entity
+            self.ctx.echo(tr("Current active settings: Color Layer Ltype "
+                             "Ltscale Lineweight Thickness"))
+            self.ctx.prompt(tr("Select destination object(s):"))
+            return
+        if entity is self._source:
+            return
+        self.ctx.execute(modify.match_properties(self._source, [entity]))
+        # AutoCAD keeps painting until Enter.
+
+
+class PeditTool(Tool):
+    """PEDIT, with the options that exist here.
+
+    Fit, Spline, Decurve, Ltype gen and Edit vertex are not offered — the
+    prompt lists only what it can do, rather than accepting a keyword and
+    doing nothing with it.
+    """
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "PEDIT"
+        self._entity = None
+        self._await = None
+        self.ctx.prompt(tr("Select polyline:"))
+
+    def _menu(self) -> None:
+        closed = bool(getattr(self._entity, "closed", False))
+        first = tr("Open") if closed else tr("Close")
+        self.ctx.prompt(
+            tr("Enter an option [{first}/Width/Reverse/Undo/eXit] <eXit>:",
+               first=first))
+
+    def on_point(self, point: Point) -> None:
+        if self._entity is not None:
+            return
+        services = self.ctx.services
+        entity = services.pick_entity(point) if services else None
+        if entity is None:
+            self.ctx.prompt(tr("Nothing selected. Select polyline:"))
+            return
+        if entity.dxftype() in ("LINE", "ARC"):
+            self._await = "convert"
+            self._candidate = entity
+            self.ctx.prompt(tr("Object selected is not a polyline. Do you "
+                               "want it to turn into one? <Y>:"))
+            return
+        if entity.dxftype() != "LWPOLYLINE":
+            self.ctx.echo(tr("PEDIT works on polylines, lines and arcs."))
+            self.ctx.finish()
+            return
+        self._entity = entity
+        self.entity_picker = False
+        self._menu()
+
+    def on_enter(self) -> None:
+        if self._await == "convert":
+            self._convert()
+            return
+        if self._await == "width":
+            self.ctx.echo(tr("Requires a number."))
+            return
+        self.ctx.finish()
+
+    def _convert(self) -> None:
+        command = modify.to_polyline(self._candidate)
+        if command is None:
+            self.ctx.finish()
+            return
+        self.ctx.execute(command)
+        self._entity = command.new_entities[0]
+        self._await = None
+        self.entity_picker = False
+        self._menu()
+
+    def on_option(self, text: str) -> bool:
+        token = text.strip().upper()
+        if self._await == "convert":
+            if token.startswith("N"):
+                self.ctx.finish()
+            else:
+                self._convert()
+            return True
+        if self._await == "width":
+            value = _number(text)
+            if value is None or value < 0:
+                self.ctx.echo(tr("Requires a positive number."))
+                return True
+            self._await = None
+            self.ctx.execute(modify.polyline_edit(self._entity, "width", value))
+            self._menu()
+            return True
+        if self._entity is None:
+            return False
+        if token in ("C", "CLOSE"):
+            self.ctx.execute(modify.polyline_edit(self._entity, "close"))
+            self._menu()
+            return True
+        if token in ("O", "OPEN"):
+            self.ctx.execute(modify.polyline_edit(self._entity, "open"))
+            self._menu()
+            return True
+        if token in ("W", "WIDTH"):
+            self._await = "width"
+            self.ctx.prompt(tr("Specify new width for all segments:"))
+            return True
+        if token in ("R", "REVERSE"):
+            self.ctx.execute(modify.polyline_edit(self._entity, "reverse"))
+            self.ctx.echo(tr("Polyline direction reversed."))
+            self._menu()
+            return True
+        if token in ("U", "UNDO"):
+            self.ctx.undo_last()
+            self._menu()
+            return True
+        if token in ("X", "EXIT"):
+            self.ctx.finish()
+            return True
+        return False
+
+
+def _seg(entity):
+    return (entity.dxf.start.x, entity.dxf.start.y,
+            entity.dxf.end.x, entity.dxf.end.y)
+
+
+def _number(text: str):
+    try:
+        return float(text.strip())
+    except (TypeError, ValueError):
+        return None
+
+
 MODIFY_TOOL_CLASSES = {
     "STRETCH": StretchTool,
     "BREAK": BreakTool,
     "JOIN": JoinTool,
+    "CHAMFER": ChamferTool,
+    "ARRAY": ArrayTool,
+    "MATCHPROP": MatchPropTool,
+    "PEDIT": PeditTool,
 }

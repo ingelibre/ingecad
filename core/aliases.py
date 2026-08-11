@@ -87,6 +87,10 @@ DEFAULT_ALIASES: dict[str, str] = {
     "S": "STRETCH",
     "BR": "BREAK",
     "J": "JOIN",
+    "CHA": "CHAMFER",
+    "AR": "ARRAY",
+    "-AR": "ARRAY",
+    "PE": "PEDIT",
 }
 
 
