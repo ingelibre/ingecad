@@ -267,64 +267,241 @@ class MirrorTool(Tool):
 
 
 class OffsetTool(Tool):
-    entity_picker = True
+    """OFFSET, with the whole prompt tree (OFFSET, p.1286).
+
+    The distance can be TYPED or picked as two points — AutoCAD accepts
+    either at that prompt, and picking it off the drawing is how you offset
+    a wall by the thickness of another one without doing arithmetic.
+    """
+
+    distance = 10.0        # sticky through the session, like AutoCAD's
+    erase_source = False
+    layer_mode = "source"  # or "current"
 
     def start(self) -> None:
         self.name = "OFFSET"
-        self._distance: float | None = None
+        self._phase = "distance"
+        self._first: Point | None = None
         self._entity = None
-        self.ctx.prompt(tr("Specify offset distance:"))
+        self._through = False
+        self._await = None
+        self._done_any = False
+        self.entity_picker = False      # a distance is points, not objects
+        self._announce()
 
+    # -- prompts ---------------------------------------------------------------
+    def _announce(self) -> None:
+        cls = type(self)
+        self.ctx.echo(tr("Current settings: Erase source = {erase}  "
+                         "Layer = {layer}",
+                         erase=tr("Yes") if cls.erase_source else tr("No"),
+                         layer=tr("Current") if cls.layer_mode == "current"
+                         else tr("Source")))
+        self.ctx.prompt(
+            tr("Specify offset distance or [Through/Erase/Layer] <{d}>:",
+               d=f"{cls.distance:g}"))
+
+    def _ask_object(self) -> None:
+        self._phase = "object"
+        self.entity_picker = True
+        self.ctx.prompt(tr("Select object to offset or [Exit/Undo] <Exit>:"))
+
+    def _ask_side(self) -> None:
+        self._phase = "side"
+        self.entity_picker = False
+        if self._through:
+            self.ctx.prompt(
+                tr("Specify through point or [Exit/Multiple/Undo] <Exit>:"))
+        else:
+            self.ctx.prompt(tr("Specify point on side to offset or "
+                               "[Exit/Multiple/Undo] <Exit>:"))
+
+    # -- keywords --------------------------------------------------------------
     def on_option(self, text: str) -> bool:
-        if self._distance is None:
-            try:
-                d = float(text)
-            except ValueError:
+        token = text.strip().upper()
+        cls = type(self)
+        if self._await == "erase":
+            cls.erase_source = token.startswith("Y")
+            self._await = None
+            self._announce()
+            return True
+        if self._await == "layer":
+            cls.layer_mode = "current" if token.startswith("C") else "source"
+            self._await = None
+            self._announce()
+            return True
+
+        if self._phase == "distance":
+            if token in ("T", "THROUGH"):
+                self._through = True
+                self._ask_object()
+                return True
+            if token in ("E", "ERASE"):
+                self._await = "erase"
+                self.ctx.prompt(tr("Erase source object after offsetting? "
+                                   "[Yes/No] <{cur}>:",
+                                   cur=tr("Yes") if cls.erase_source
+                                   else tr("No")))
+                return True
+            if token in ("L", "LAYER"):
+                self._await = "layer"
+                self.ctx.prompt(tr("Enter layer option for offset objects "
+                                   "[Current/Source] <{cur}>:",
+                                   cur=tr("Current") if cls.layer_mode
+                                   == "current" else tr("Source")))
+                return True
+            value = _number(text)
+            if value is None:
                 return False
-            if d <= 0:
+            if value <= 0:
                 self.ctx.echo(tr("Value must be positive."))
                 return True
-            self._distance = d
-            self.ctx.prompt(tr("Select object to offset (Enter ends):"))
+            cls.distance = value
+            self._ask_object()
             return True
+
+        if self._phase in ("object", "side"):
+            if token in ("X", "EXIT", ""):
+                self.ctx.finish()
+                return True
+            if token in ("U", "UNDO"):
+                if self._done_any:
+                    self.ctx.undo_last()
+                self._ask_object()
+                return True
+            if token in ("M", "MULTIPLE") and self._phase == "side":
+                return True     # already the behaviour: the side prompt loops
         return False
 
-    def on_point(self, point: Point) -> None:
-        if self._distance is None:
+    def on_enter(self) -> None:
+        if self._await:
+            self.on_option("")
             return
-        if self._entity is None:
+        if self._phase == "distance":
+            self._ask_object()          # Enter takes the <current> distance
+            return
+        self.ctx.finish()
+
+    # -- points ----------------------------------------------------------------
+    def on_point(self, point: Point) -> None:
+        if self._phase == "distance":
+            # Two clicks measure the distance off the drawing.
+            if self._first is None:
+                self._first = point
+                self.last_point = point
+                self.ctx.prompt(tr("Specify second point:"))
+                return
+            distance = math.dist(self._first, point)
+            self._first = None
+            if distance <= 0:
+                self.ctx.echo(tr("Value must be positive."))
+                return
+            type(self).distance = distance
+            self.ctx.echo(tr("Offset distance = {d}", d=f"{distance:g}"))
+            self._ask_object()
+            return
+
+        if self._phase == "object":
             entity = self.ctx.services.pick_entity(point)
             if entity is None:
                 self.ctx.echo(tr("Nothing there."))
                 return
             if entity.dxftype() not in ("LINE", "CIRCLE", "ARC"):
-                self.ctx.echo(tr("OFFSET supports LINE, CIRCLE and ARC for now."))
+                self.ctx.echo(
+                    tr("OFFSET supports LINE, CIRCLE and ARC for now."))
                 return
             self._entity = entity
-            self.ctx.prompt(tr("Specify side to offset:"))
+            self._ask_side()
             return
-        e, side = self._entity, point
-        self._entity = None
-        t = e.dxftype()
-        if t == "LINE":
-            seg = (e.dxf.start.x, e.dxf.start.y, e.dxf.end.x, e.dxf.end.y)
-            n = editmath.offset_line(seg, self._distance, side)
-            self.ctx.execute(actions.add_line((n[0], n[1]), (n[2], n[3])))
+
+        if self._phase == "side" and self._entity is not None:
+            self._emit(self._entity, point)
+            self._entity = None
+            self._ask_object()
+
+    # -- the offset itself -----------------------------------------------------
+    def _distance_for(self, entity, side: Point) -> float | None:
+        """Through mode measures the distance to the picked point."""
+        if not self._through:
+            return type(self).distance
+        if entity.dxftype() == "LINE":
+            seg = (entity.dxf.start.x, entity.dxf.start.y,
+                   entity.dxf.end.x, entity.dxf.end.y)
+            closest = editmath._dist_point_segment(seg, side) \
+                if hasattr(editmath, "_dist_point_segment") else None
+            if closest is None:
+                dx, dy = seg[2] - seg[0], seg[3] - seg[1]
+                length = math.hypot(dx, dy)
+                if length == 0:
+                    return None
+                closest = abs((side[0] - seg[0]) * dy
+                              - (side[1] - seg[1]) * dx) / length
+            return closest or None
+        center = (entity.dxf.center.x, entity.dxf.center.y)
+        return abs(math.dist(center, side) - entity.dxf.radius) or None
+
+    def _emit(self, entity, side: Point) -> None:
+        distance = self._distance_for(entity, side)
+        if not distance:
+            self.ctx.echo(tr("Value must be positive."))
+            return
+        attribs = self._attribs(entity)
+        layer = attribs.pop("layer", None)
+        kind = entity.dxftype()
+        if kind == "LINE":
+            seg = (entity.dxf.start.x, entity.dxf.start.y,
+                   entity.dxf.end.x, entity.dxf.end.y)
+            n = editmath.offset_line(seg, distance, side)
+            command = actions.AddEntityCommand(
+                "OFFSET",
+                lambda msp, p=n, a=attribs: msp.add_line(
+                    (p[0], p[1]), (p[2], p[3]), dxfattribs=dict(a)),
+                layer=layer)
         else:
-            center = (e.dxf.center.x, e.dxf.center.y)
+            center = (entity.dxf.center.x, entity.dxf.center.y)
             new_r = editmath.offset_circle_radius(
-                e.dxf.radius, self._distance, center, side)
+                entity.dxf.radius, distance, center, side)
             if new_r is None:
                 self.ctx.echo(tr("Radius would vanish."))
-            elif t == "CIRCLE":
-                self.ctx.execute(actions.add_circle(center, new_r))
-            else:
-                a0, a1 = e.dxf.start_angle, e.dxf.end_angle
-                self.ctx.execute(actions.AddEntityCommand(
+                return
+            if kind == "CIRCLE":
+                command = actions.AddEntityCommand(
                     "OFFSET",
-                    lambda msp, c=center, r=new_r, s=a0, en=a1:
-                        msp.add_arc(c, r, s, en)))
-        self.ctx.prompt(tr("Select object to offset (Enter ends):"))
+                    lambda msp, c=center, r=new_r, a=attribs:
+                        msp.add_circle(c, r, dxfattribs=dict(a)),
+                    layer=layer)
+            else:
+                a0, a1 = entity.dxf.start_angle, entity.dxf.end_angle
+                command = actions.AddEntityCommand(
+                    "OFFSET",
+                    lambda msp, c=center, r=new_r, s=a0, en=a1, a=attribs:
+                        msp.add_arc(c, r, s, en, dxfattribs=dict(a)),
+                    layer=layer)
+        self.ctx.execute(command)
+        self._done_any = True
+        if type(self).erase_source:
+            self.ctx.execute(actions.EraseCommand([entity]))
+
+    def _attribs(self, entity) -> dict:
+        """Source layer, or the current one — the Layer option."""
+        if type(self).layer_mode == "current":
+            return {}
+        keep = {}
+        for name in ("layer", "color", "linetype", "lineweight", "ltscale"):
+            try:
+                value = entity.dxf.get(name)
+            except Exception:
+                continue
+            if value is not None:
+                keep[name] = value
+        return keep
+
+
+def _number(text: str):
+    try:
+        return float(text.strip())
+    except (TypeError, ValueError):
+        return None
 
 
 class _TrimExtendBase(Tool):

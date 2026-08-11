@@ -455,3 +455,182 @@ def test_grip_edit_undo_via_snapshot():
     assert tuple(line.dxf.end)[:2] == (10.0, 0.0)
     history.redo()
     assert tuple(line.dxf.end)[:2] == (10.0, 8.0)
+
+
+# -- OFFSET: the whole prompt tree ---------------------------------------------
+
+class OffsetHarness:
+    """Feeds an OffsetTool the way the controller does."""
+
+    def __init__(self):
+        from core.commands import History
+        from core.document import Document
+        from tools.base import ToolContext
+
+        self.document = Document.new()
+        self.history = History(self.document)
+        self.out: list[str] = []
+        self.finished = False
+        self.entity = None
+        self.ctx = ToolContext(
+            execute=self.history.execute,
+            prompt=self.out.append,
+            echo=self.out.append,
+            finish=lambda: setattr(self, "finished", True),
+            undo_last=self.history.undo,
+            services=self,
+        )
+
+    def pick_entity(self, point):
+        return self.entity
+
+    @property
+    def msp(self):
+        return self.document.modelspace()
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self.out)
+
+
+def _offset_tool(h):
+    from tools.edit import OffsetTool
+
+    OffsetTool.distance = 10.0
+    OffsetTool.erase_source = False
+    OffsetTool.layer_mode = "source"
+    tool = OffsetTool(h.ctx)
+    tool.start()
+    return tool
+
+
+def test_the_offset_distance_can_be_picked_with_two_points():
+    """AutoCAD takes a distance OR two points at that prompt."""
+    h = OffsetHarness()
+    line = h.msp.add_line((0, 0), (10, 0))
+    h.entity = line
+    tool = _offset_tool(h)
+    tool.on_point((0.0, 0.0))          # first point of the measurement
+    assert "second point" in h.text
+    tool.on_point((0.0, 3.0))          # 3 units apart
+    assert "Offset distance = 3" in h.text
+    tool.on_point((5.0, 0.0))          # pick the object
+    tool.on_point((5.0, 8.0))          # the side
+    made = [e for e in h.msp if e is not line]
+    assert len(made) == 1
+    assert made[0].dxf.start.y == pytest.approx(3.0)
+
+
+def test_typing_the_distance_still_works_and_sticks():
+    from tools.edit import OffsetTool
+
+    h = OffsetHarness()
+    line = h.msp.add_line((0, 0), (10, 0))
+    h.entity = line
+    tool = _offset_tool(h)
+    assert tool.on_option("2.5") is True
+    tool.on_point((5.0, 0.0))
+    tool.on_point((5.0, 8.0))
+    made = [e for e in h.msp if e is not line]
+    assert made[0].dxf.start.y == pytest.approx(2.5)
+    assert OffsetTool.distance == pytest.approx(2.5)   # sticky for next time
+
+
+def test_enter_accepts_the_current_distance():
+    h = OffsetHarness()
+    line = h.msp.add_line((0, 0), (10, 0))
+    h.entity = line
+    tool = _offset_tool(h)
+    tool.on_enter()                    # <10>
+    tool.on_point((5.0, 0.0))
+    tool.on_point((5.0, 50.0))
+    made = [e for e in h.msp if e is not line]
+    assert made[0].dxf.start.y == pytest.approx(10.0)
+
+
+def test_through_offsets_the_object_to_the_picked_point():
+    h = OffsetHarness()
+    line = h.msp.add_line((0, 0), (10, 0))
+    h.entity = line
+    tool = _offset_tool(h)
+    assert tool.on_option("T") is True
+    tool.on_point((5.0, 0.0))          # the object
+    assert "through point" in h.text
+    tool.on_point((5.0, 7.0))          # it must pass through here
+    made = [e for e in h.msp if e is not line]
+    assert made[0].dxf.start.y == pytest.approx(7.0)
+
+
+def test_the_offset_keeps_the_source_layer_unless_told_otherwise():
+    from tools.edit import OffsetTool
+
+    h = OffsetHarness()
+    h.document.doc.layers.add("MUROS")
+    line = h.msp.add_line((0, 0), (10, 0), dxfattribs={"layer": "MUROS"})
+    h.entity = line
+    tool = _offset_tool(h)
+    tool.on_option("5")
+    tool.on_point((5.0, 0.0))
+    tool.on_point((5.0, 8.0))
+    made = [e for e in h.msp if e is not line]
+    assert made[0].dxf.layer == "MUROS"
+
+    # Layer > Current puts it on the current layer instead.
+    h2 = OffsetHarness()
+    h2.document.doc.layers.add("MUROS")
+    line2 = h2.msp.add_line((0, 0), (10, 0), dxfattribs={"layer": "MUROS"})
+    h2.entity = line2
+    tool2 = _offset_tool(h2)
+    tool2.on_option("L")
+    tool2.on_option("C")
+    tool2.on_option("5")
+    tool2.on_point((5.0, 0.0))
+    tool2.on_point((5.0, 8.0))
+    made2 = [e for e in h2.msp if e is not line2]
+    assert made2[0].dxf.layer == "0"
+    OffsetTool.layer_mode = "source"
+
+
+def test_erase_removes_the_source_after_offsetting():
+    from tools.edit import OffsetTool
+
+    h = OffsetHarness()
+    line = h.msp.add_line((0, 0), (10, 0))
+    h.entity = line
+    tool = _offset_tool(h)
+    tool.on_option("E")
+    tool.on_option("Y")
+    tool.on_option("4")
+    tool.on_point((5.0, 0.0))
+    tool.on_point((5.0, 8.0))
+    remaining = list(h.msp)
+    assert len(remaining) == 1 and remaining[0] is not line
+    OffsetTool.erase_source = False
+
+
+def test_offset_repeats_until_exit():
+    h = OffsetHarness()
+    line = h.msp.add_line((0, 0), (10, 0))
+    h.entity = line
+    tool = _offset_tool(h)
+    tool.on_option("2")
+    for _ in range(3):
+        tool.on_point((5.0, 0.0))
+        tool.on_point((5.0, 8.0))
+    assert len([e for e in h.msp if e is not line]) == 3
+    assert not h.finished
+    tool.on_option("X")
+    assert h.finished
+
+
+def test_the_cursor_switches_between_points_and_objects_within_offset():
+    """Distance is a point phase (crosshair); picking the object is not."""
+    h = OffsetHarness()
+    line = h.msp.add_line((0, 0), (10, 0))
+    h.entity = line
+    tool = _offset_tool(h)
+    assert tool.entity_picker is False        # measuring a distance
+    tool.on_option("5")
+    assert tool.entity_picker is True         # choosing the object
+    tool.on_point((5.0, 0.0))
+    assert tool.entity_picker is False        # aiming at the side

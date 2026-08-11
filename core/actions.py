@@ -141,20 +141,28 @@ class Dispatcher:
 # deletes it. The ezdxf document IS the model — no shadow data structures.
 
 class AddEntityCommand(Command):
-    """Create one entity via a factory(msp) -> entity; undo deletes it."""
+    """Create one entity via a factory(msp) -> entity; undo deletes it.
 
-    def __init__(self, name: str, factory) -> None:
+    ``layer`` overrides the usual "new entities land on the current layer"
+    rule, for the commands that copy an existing object and are asked to
+    keep its layer (OFFSET's Layer > Source, which is AutoCAD's default).
+    """
+
+    def __init__(self, name: str, factory, layer: str | None = None) -> None:
         self.name = name
         self._factory = factory
+        self.layer = layer
         self.entity = None
 
     def do(self, document) -> None:
         self.entity = self._factory(document.modelspace())
         # New entities land on the current layer (AutoCAD/BricsCAD), with
-        # ByLayer color/linetype so they inherit the layer's appearance.
-        current = document.doc.header.get("$CLAYER", "0")
-        if current in document.doc.layers:
-            self.entity.dxf.layer = current
+        # ByLayer color/linetype so they inherit the layer's appearance —
+        # unless the command asked for a specific one.
+        wanted = self.layer if self.layer is not None \
+            else document.doc.header.get("$CLAYER", "0")
+        if wanted in document.doc.layers:
+            self.entity.dxf.layer = wanted
         document.dirty = True
 
     def undo(self, document) -> None:

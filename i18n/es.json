@@ -881,5 +881,14 @@
   "Enter an option [{first}/Width/Reverse/Undo/eXit] <eXit>:": "Indique una opción [{first}/Grosor/Invertir/desHacer/salIr] <salIr>:",
   "Close": "Cerrar",
   "Specify new width for all segments:": "Precise el nuevo grosor para todos los segmentos:",
-  "Polyline direction reversed.": "Dirección de la polilínea invertida."
+  "Polyline direction reversed.": "Dirección de la polilínea invertida.",
+  "Current settings: Erase source = {erase}  Layer = {layer}": "Parámetros actuales: Borrar origen = {erase}  Capa = {layer}",
+  "Specify offset distance or [Through/Erase/Layer] <{d}>:": "Precise la distancia de desfase o [Punto/Borrar/Capa] <{d}>:",
+  "Select object to offset or [Exit/Undo] <Exit>:": "Designe el objeto a desfasar o [salIr/desHacer] <salIr>:",
+  "Specify point on side to offset or [Exit/Multiple/Undo] <Exit>:": "Precise el lado hacia donde desfasar o [salIr/Múltiple/desHacer] <salIr>:",
+  "Specify through point or [Exit/Multiple/Undo] <Exit>:": "Precise el punto de paso o [salIr/Múltiple/desHacer] <salIr>:",
+  "Erase source object after offsetting? [Yes/No] <{cur}>:": "¿Borrar el objeto de origen tras desfasar? [Sí/No] <{cur}>:",
+  "Enter layer option for offset objects [Current/Source] <{cur}>:": "Indique la capa de los objetos desfasados [aCtual/Origen] <{cur}>:",
+  "Offset distance = {d}": "Distancia de desfase = {d}",
+  "Source": "Origen"
 }
