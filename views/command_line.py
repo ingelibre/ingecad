@@ -44,6 +44,9 @@ class _PromptEdit(QLineEdit):
         super().__init__(parent)
         self._history: list[str] = []
         self._cursor = 0
+        # True while the active tool takes literal text (dimension text
+        # override): Space inserts a space instead of executing.
+        self.raw_text_check = lambda: False
 
     def _typed_text(self) -> str:
         """The text the user actually typed, without the inline suggestion.
@@ -66,8 +69,11 @@ class _PromptEdit(QLineEdit):
             and self._space_executes()
         ):
             text = self._typed_text()
-            if text.strip():
-                self._history.append(text.strip())
+            stripped = text.strip()
+            # adjacent duplicates collapse, like AutoCAD's recall list
+            if stripped and (not self._history
+                             or self._history[-1] != stripped):
+                self._history.append(stripped)
             self._cursor = len(self._history)
             self.clear()
             self.submitted.emit(text)
@@ -88,10 +94,9 @@ class _PromptEdit(QLineEdit):
         super().keyPressEvent(event)
 
     def _space_executes(self) -> bool:
-        # Space acts as Enter unless the line already carries an argument
-        # with spaces (file names etc. arrive in later phases; command
-        # tokens never contain spaces).
-        return True
+        # Space acts as Enter — except while the active tool takes literal
+        # text ("Enter dimension text <>:"), where it must stay a space.
+        return not self.raw_text_check()
 
 
 class CommandLine(QWidget):
@@ -115,6 +120,13 @@ class CommandLine(QWidget):
         self.input.setPlaceholderText(tr("Type a command"))
         self.input.submitted.connect(self.submitted)
         self.input.cancelled.connect(self.cancelled)
+
+        # Classic command-line shortcut menu: Recent Commands / Copy /
+        # Copy History / Paste (AutoCAD's own entries).
+        for widget in (self.input, self.history):
+            widget.setContextMenuPolicy(Qt.CustomContextMenu)
+            widget.customContextMenuRequested.connect(
+                lambda pos, w=widget: self._context_menu(w, pos))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -143,3 +155,33 @@ class CommandLine(QWidget):
         """Forward a keystroke typed over the viewport (AutoCAD feel)."""
         self.input.setFocus()
         self.input.keyPressEvent(event)
+
+    def recent_commands(self, count: int = 6) -> list[str]:
+        """Most recent distinct command lines, newest first."""
+        seen: list[str] = []
+        for text in reversed(self.input._history):
+            token = text.split()[0].upper() if text.split() else ""
+            if token and token not in seen:
+                seen.append(token)
+            if len(seen) >= count:
+                break
+        return seen
+
+    def _context_menu(self, widget, pos) -> None:
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        recent = self.recent_commands()
+        if recent:
+            sub = menu.addMenu(tr("Recent Commands"))
+            for name in recent:
+                sub.addAction(name, lambda n=name: self.submitted.emit(n))
+            menu.addSeparator()
+        menu.addAction(tr("Copy"), lambda: (
+            self.history.copy() if widget is self.history else self.input.copy()))
+        menu.addAction(tr("Copy History"), lambda:
+                       QGuiApplication.clipboard().setText(
+                           self.history.toPlainText()))
+        menu.addAction(tr("Paste"), self.input.paste)
+        menu.exec(widget.mapToGlobal(pos))

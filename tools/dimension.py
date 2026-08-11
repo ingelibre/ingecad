@@ -136,6 +136,11 @@ class _DimTextMixin:
             return True
         return False
 
+    def wants_raw_text(self) -> bool:
+        # "Enter dimension text <>:" takes literal text — "<> m" carries a
+        # space, so Space must not execute there (AutoCAD behaves the same).
+        return self._pending == "text"
+
     def _text_enter(self) -> bool:
         """Enter during a pending Text/Angle prompt keeps the default."""
         if self._pending == "text":

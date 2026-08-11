@@ -76,6 +76,11 @@ class Tool:
         """A non-coordinate token from the prompt. True if consumed."""
         return False
 
+    def wants_raw_text(self) -> bool:
+        """True while the tool expects literal text (dimension text
+        override, etc.): Space must insert a space, not execute."""
+        return False
+
     def on_enter(self) -> None:
         """Enter on an empty prompt: finish where that is meaningful."""
         self.ctx.finish()

@@ -541,14 +541,86 @@ class MainWindow(QMainWindow):
         self.command_line.set_completions(self.dispatcher.known_names())
         self.command_line.submitted.connect(self._on_command_submitted)
         self.command_line.cancelled.connect(self._on_prompt_cancelled)
+        self.command_line.input.raw_text_check = (
+            lambda: self.tools.tool is not None
+            and self.tools.tool.wants_raw_text())
+        # F2: the classic expanded text window (command history).
+        from PySide6.QtGui import QShortcut
+        QShortcut(QKeySequence("F2"), self, self._toggle_text_window)
         self.command_line.echo(tr("IngeCAD — type a command (L, C, Z, ...)"))
         self._build_mode_toggles()
 
     def _on_command_submitted(self, text: str) -> None:
         self.command_line.echo_input(text)
+        stripped = text.strip()
+        if stripped.startswith("'"):
+            # Transparent command ('ZOOM, 'PAN, 'REDRAW) — runs without
+            # disturbing the active command, then resumes it.
+            if self.tools.active() or self.dispatcher.pending_prompt \
+                    is not None:
+                self._run_transparent(stripped[1:])
+                return
+            self.dispatcher.submit(stripped[1:])
+            return
         if self.tools.on_text(text):
             return
         self.dispatcher.submit(text)
+
+    def _run_transparent(self, body: str) -> None:
+        from core import aliases as aliases_mod
+
+        tokens = body.split()
+        if not tokens:
+            return
+        name = aliases_mod.resolve(tokens[0], self.dispatcher.aliases)
+        args = tokens[1:]
+        if name == "ZOOM":
+            if not args:
+                self.command_line.echo(
+                    tr("'ZOOM: give an option (Extents/Previous or a "
+                       "scale) — the wheel zooms anytime."))
+            elif args[0].upper().startswith("W"):
+                self.command_line.echo(
+                    tr("ZOOM Window is not available transparently."))
+            else:
+                self._zoom_option(args[0])
+        elif name == "PAN":
+            self.command_line.echo(
+                tr("Pan with the middle mouse button — it works during "
+                   "any command."))
+        elif name in ("REDRAW", "REGEN"):
+            self.regen_in_memory()
+        else:
+            self.command_line.echo(
+                tr("{name} cannot be used transparently.", name=name))
+        active = self.tools.tool
+        if active is not None:
+            self.command_line.echo(tr(">> Resuming {name} command.",
+                                      name=active.name))
+
+    def _toggle_text_window(self) -> None:
+        """F2 — the AutoCAD text window: the full command history, large."""
+        from PySide6.QtWidgets import QDialog, QPlainTextEdit, QVBoxLayout
+
+        dlg = getattr(self, "_text_window", None)
+        if dlg is not None and dlg.isVisible():
+            dlg.close()
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr("IngeCAD Text Window"))
+        dlg.resize(680, 420)
+        text = QPlainTextEdit(dlg)
+        text.setReadOnly(True)
+        text.setStyleSheet("background: #1e1e22; color: #d8d8d8;"
+                           " font-family: monospace;")
+        text.setPlainText(self.command_line.history.toPlainText())
+        scrollbar = text.verticalScrollBar()
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.addWidget(text)
+        dlg.show()
+        scrollbar.setValue(scrollbar.maximum())
+        self._text_window = dlg
 
     def _on_prompt_cancelled(self) -> None:
         # tools.cancel() handles both cases: active tool, or idle selection
@@ -1155,6 +1227,7 @@ class MainWindow(QMainWindow):
         d.register("LAYER", lambda *a: self.toggle_layers_panel())
         d.register("STYLE", lambda *a: self.toggle_styles_panel())
         d.register("DIMSTYLE", lambda *a: self._open_dimstyle_manager())
+        d.register("-LAYER", self._cmd_layer_cli)
         d.register("COPYCLIP", lambda *a: self._cmd_copy())
         d.register("CUTCLIP", lambda *a: self._cmd_cut())
         d.register("PASTECLIP", lambda *a: self._cmd_paste())
@@ -1380,6 +1453,23 @@ class MainWindow(QMainWindow):
             refresh=self._sync_layout_tabs,
             current=lambda: self._active_layout,
             args=args)
+
+    def _cmd_layer_cli(self, *args) -> Prompt | None:
+        """-LAYER — the command-line layer flow (official keywords)."""
+        if self.document is None:
+            self.new_document()
+        from core import layers as layer_ops
+
+        def refresh() -> None:
+            if self._layers_panel is not None:
+                self._layers_panel.refresh()
+            self._refresh_props_toolbar()
+            self.regen_in_memory()
+            self.viewport.update()
+
+        return layer_ops.layer_command(
+            self.document, self.history,
+            echo=self.command_line.echo, refresh=refresh, args=args)
 
     # ZOOM [Extents/Window/Previous/nXP]
     def _cmd_zoom(self, *args) -> Prompt | None:

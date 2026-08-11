@@ -42,7 +42,9 @@ def build_graphics_scene(document, layout_name: str | None = None):
         layout, _name = pick_layout(document)
     scene = QGraphicsScene()
     backend = PyQtBackend(scene)
-    context = RenderContext(document.doc)
+    # export_mode: render as plotted — layers with Plot off are skipped
+    # (they still display on screen, exactly AutoCAD's Plot column).
+    context = RenderContext(document.doc, export_mode=True)
     Frontend(context, backend).draw_layout(layout, finalize=False)
     if getattr(layout, "is_any_paperspace", False):
         # Viewport frames plot only when the page setup asks for them

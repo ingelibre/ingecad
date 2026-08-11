@@ -103,9 +103,12 @@ class LayersPanel(QWidget):
         self.setObjectName("LayersPanel")
         self.setStyleSheet(_PANEL_STYLE)
 
-        # Columns: Cur, Name, On, Freeze, Lock, Color, Linetype, Lineweight
-        self.table = QTableWidget(0, 8, self)
-        self.table.setHorizontalHeaderItem(0, self._header_item("✓", tr("Current")))
+        # Columns mirror the Layer Properties Manager (v0.2 subset): Status,
+        # Name, On, Freeze, Lock, Color, Linetype, Lineweight, Plot,
+        # Description. (Transparency / Plot Style / VP columns: see the
+        # audit in docs/reference/layers-and-command-line.md.)
+        self.table = QTableWidget(0, 10, self)
+        self.table.setHorizontalHeaderItem(0, self._header_item("✓", tr("Status")))
         self.table.setHorizontalHeaderItem(1, self._header_item(tr("Name"), tr("Name")))
         self.table.setHorizontalHeaderItem(2, self._header_item("◍", tr("On/Off")))
         self.table.setHorizontalHeaderItem(3, self._header_item("❄", tr("Freeze")))
@@ -113,6 +116,8 @@ class LayersPanel(QWidget):
         self.table.setHorizontalHeaderItem(5, self._header_item("■", tr("Color")))
         self.table.setHorizontalHeaderItem(6, self._header_item(tr("Linetype"), tr("Linetype")))
         self.table.setHorizontalHeaderItem(7, self._header_item(tr("Lineweight"), tr("Lineweight")))
+        self.table.setHorizontalHeaderItem(8, self._header_item("🖶", tr("Plot")))
+        self.table.setHorizontalHeaderItem(9, self._header_item(tr("Description"), tr("Description")))
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked)
@@ -122,10 +127,11 @@ class LayersPanel(QWidget):
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(1, QHeaderView.Stretch)    # Name takes room
-        for col in (0, 2, 3, 4, 5, 6, 7):
+        header.setSectionResizeMode(9, QHeaderView.Stretch)
+        for col in (0, 2, 3, 4, 5, 6, 7, 8):
             header.setSectionResizeMode(col, QHeaderView.Fixed)
         for col, w in ((0, 22), (2, 26), (3, 26), (4, 26), (5, 40),
-                       (6, 84), (7, 68)):
+                       (6, 84), (7, 68), (8, 26)):
             self.table.setColumnWidth(col, w)
 
         self.table.cellDoubleClicked.connect(self._on_double_click)
@@ -142,7 +148,16 @@ class LayersPanel(QWidget):
         buttons.setSpacing(1)
         for b in (new_btn, del_btn, cur_btn):
             buttons.addWidget(b)
-        buttons.addStretch()
+        # "Search for layer" — filters the list live, like the manager's box.
+        from PySide6.QtWidgets import QLineEdit
+        self.search = QLineEdit(self)
+        self.search.setPlaceholderText(tr("Search for layer"))
+        self.search.setClearButtonEnabled(True)
+        self.search.setStyleSheet(
+            "QLineEdit { background: #1e1e22; border: 1px solid #3a3940;"
+            " color: #d0d0d0; font-size: 11px; padding: 1px 4px; }")
+        self.search.textChanged.connect(lambda *_: self.refresh())
+        buttons.addWidget(self.search, 1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -178,13 +193,25 @@ class LayersPanel(QWidget):
             return
         self._loading = True
         infos = layer_ops.layer_list(self.document)
+        needle = self.search.text().strip().lower() if hasattr(self, "search") else ""
+        if needle:
+            import fnmatch
+            pattern = needle if any(c in needle for c in "*?") else f"*{needle}*"
+            infos = [i for i in infos
+                     if fnmatch.fnmatchcase(i.name.lower(), pattern)]
+        self._rows = [i.name for i in infos]
         self.table.setRowCount(len(infos))
         for row, info in enumerate(infos):
             self._fill_row(row, info)
         self._loading = False
 
     def _fill_row(self, row: int, info: layer_ops.LayerInfo) -> None:
-        cur = QTableWidgetItem("✓" if info.is_current else "")
+        # Status: current / in use / empty (the manager's official trio).
+        status = "✓" if info.is_current else ("▪" if info.in_use else "")
+        cur = QTableWidgetItem(status)
+        cur.setToolTip(tr("Current layer") if info.is_current
+                       else (tr("Layer in use") if info.in_use
+                             else tr("Empty layer")))
         cur.setTextAlignment(Qt.AlignCenter)
         cur.setFlags(Qt.ItemIsEnabled)
         self.table.setItem(row, 0, cur)
@@ -217,6 +244,15 @@ class LayersPanel(QWidget):
         lw.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
         self.table.setItem(row, 7, lw)
 
+        plot = QTableWidgetItem("🖶" if info.plot else "🚫")
+        plot.setTextAlignment(Qt.AlignCenter)
+        plot.setToolTip(tr("Plot") if info.plot else tr("Do not plot"))
+        plot.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.table.setItem(row, 8, plot)
+
+        descr = QTableWidgetItem(info.description)
+        self.table.setItem(row, 9, descr)
+
     @staticmethod
     def _state_glyph(col: int, active: bool) -> str:
         if col == 2:   # on
@@ -226,6 +262,9 @@ class LayersPanel(QWidget):
         return "🔓" if active else "🔒"   # unlocked
 
     def _row_layer(self, row: int) -> str:
+        rows = getattr(self, "_rows", [])
+        if 0 <= row < len(rows):
+            return rows[row]
         item = self.table.item(row, 1)
         return item.text() if item else ""
 
@@ -240,21 +279,32 @@ class LayersPanel(QWidget):
         if self.document is None:
             self.window.new_document()
         name = layer_ops.unique_layer_name(self.document)
-        self._execute(layer_ops.NewLayerCommand(name))
+        # The new layer inherits the selected layer's properties (official).
+        row = self.table.currentRow()
+        base = next((i for i in layer_ops.layer_list(self.document)
+                     if row >= 0 and i.name == self._row_layer(row)), None)
+        if base is not None:
+            self._execute(layer_ops.NewLayerCommand(
+                name, color=base.color, linetype=base.linetype,
+                lineweight=base.lineweight))
+        else:
+            self._execute(layer_ops.NewLayerCommand(name))
 
     def _delete_layer(self) -> None:
         row = self.table.currentRow()
         if row < 0:
             return
         name = self._row_layer(row)
-        if name == "0":
-            self.window.command_line.echo(tr("Layer 0 cannot be deleted."))
+        if name in ("0", "Defpoints"):
+            self.window.command_line.echo(
+                tr("Layer {name} cannot be deleted.", name=name))
             return
         if name == layer_ops.current_layer_name(self.document):
             self.window.command_line.echo(tr("Cannot delete the current layer."))
             return
-        # Refuse if entities use it (AutoCAD refuses too).
-        if any(e.dxf.layer == name for e in self.document.modelspace()):
+        # Referenced layers cannot be deleted — anywhere: every layout and
+        # every block definition (official rule).
+        if name in layer_ops.layers_in_use(self.document):
             self.window.command_line.echo(tr("Layer {name} is in use.", name=name))
             return
         self._execute(layer_ops.DeleteLayerCommand(name))
@@ -300,6 +350,12 @@ class LayersPanel(QWidget):
             self._pick_linetype(name)
         elif col == 7:
             self._pick_lineweight(name)
+        elif col == 8:
+            info = next((i for i in layer_ops.layer_list(self.document)
+                         if i.name == name), None)
+            if info is not None:
+                self._execute(layer_ops.LayerPropertyCommand(
+                    name, "plot", not info.plot))
 
     def _pick_linetype(self, name: str) -> None:
         from PySide6.QtGui import QCursor
@@ -322,18 +378,21 @@ class LayersPanel(QWidget):
         menu.exec(QCursor.pos())
 
     def _on_cell_changed(self, row: int, col: int) -> None:
-        if self._loading or col != 1 or self.document is None:
+        if self._loading or self.document is None:
+            return
+        name = self._row_layer(row)
+        if not name:
+            return
+        if col == 9:                      # Description (free text, undoable)
+            text = self.table.item(row, 9).text()
+            self._execute(layer_ops.LayerPropertyCommand(
+                name, "description", text))
+            return
+        if col != 1:
             return
         new_name = self.table.item(row, 1).text().strip()
-        infos = layer_ops.layer_list(self.document)
-        if row >= len(infos):
-            return
-        old_name = infos[row].name if False else None
-        # find the old name: the row order matches layer_list order
-        names = [i.name for i in infos]
-        if row < len(names):
-            old_name = names[row]
-        if not new_name or new_name == old_name or old_name is None:
+        names = [i.name for i in layer_ops.layer_list(self.document)]
+        if not new_name or new_name == name:
             self.refresh()
             return
         if new_name in names:
@@ -341,4 +400,4 @@ class LayersPanel(QWidget):
                 tr("Layer {name} already exists.", name=new_name))
             self.refresh()
             return
-        self._execute(layer_ops.RenameLayerCommand(old_name, new_name))
+        self._execute(layer_ops.RenameLayerCommand(name, new_name))
