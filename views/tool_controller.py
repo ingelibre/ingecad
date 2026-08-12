@@ -444,16 +444,23 @@ class ToolController(QObject):
 
         top_left = (min(first[0], second[0]), max(first[1], second[1]))
         width = abs(second[0] - first[0])
+        document = self.window.document
+        style = ""
+        if document is not None:
+            style = document.doc.header.get("$TEXTSTYLE", "Standard")
 
-        def commit(content: str) -> None:
+        def commit(content: str, extras: dict) -> None:
             if content.strip():
-                self._execute(actions.add_mtext(first, second, content,
-                                                char_height))
+                self._execute(actions.add_mtext(
+                    first, second, content, char_height,
+                    style=extras.get("style"),
+                    attachment=extras.get("attachment") or 1))
             self.window.viewport.update()
 
         self._mtext_editor = MTextInPlaceEditor(
             self.window.viewport, top_left=top_left, width_world=width,
-            char_height=char_height, text="", on_commit=commit)
+            char_height=char_height, text="", on_commit=commit,
+            document=document, style=style, allow_justify=True)
 
     def open_text_editor_for(self, entity) -> bool:
         """Double-click on a TEXT/MTEXT: edit it in place. True if handled.
@@ -481,18 +488,22 @@ class ToolController(QObject):
             text = entity.dxf.text
             single = True
 
-        def commit(content: str) -> None:
+        def commit(content: str, extras: dict) -> None:
             if kind == "TEXT":
                 new = content.replace("\\P", " ")
             else:
                 new = content
-            if new == text:
+            new_style = extras.get("style")
+            if new == text and not new_style:
                 return                        # untouched: not an edit
+
             def mutate() -> None:
                 if kind == "MTEXT":
                     entity.text = new
                 else:
                     entity.dxf.text = new
+                if new_style:
+                    entity.dxf.style = new_style
             actions.apply_in_place(self.window.history, [entity], mutate)
             self.window.regen_in_memory()
             self.window.viewport.update()
@@ -501,7 +512,9 @@ class ToolController(QObject):
             self.window.viewport,
             top_left=(insert.x, insert.y),
             width_world=width, char_height=char_height, text=text,
-            on_commit=commit, single_line=single)
+            on_commit=commit, single_line=single,
+            document=self.window.document,
+            style=str(entity.dxf.get("style", "Standard")))
         return True
 
     def _ask_text(self, prompt: str, default: str = "") -> Optional[str]:

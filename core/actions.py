@@ -1416,7 +1416,14 @@ class SnapshotCommand(Command):
 
 def _restore_entity(entity, snapshot) -> None:
     """Copy snapshot's DXF attributes back onto entity (keeps its handle)."""
-    for key, value in snapshot.dxf.all_existing_dxf_attribs().items():
+    wanted = snapshot.dxf.all_existing_dxf_attribs()
+    # Attributes the edit ADDED have no entry in the snapshot; copying alone
+    # would leave them behind (setting style on an entity that used the
+    # default survived its own undo this way).
+    for key in list(entity.dxf.all_existing_dxf_attribs()):
+        if key not in wanted and key != "handle":
+            entity.dxf.discard(key)
+    for key, value in wanted.items():
         if key == "handle":
             continue
         entity.dxf.set(key, value)
@@ -1686,15 +1693,29 @@ def add_text(pos, text: str, height: float, rotation: float = 0.0,
     return AddEntityCommand("TEXT", make)
 
 
-def add_mtext(p1, p2, text: str, char_height: float) -> AddEntityCommand:
+def add_mtext(p1, p2, text: str, char_height: float,
+              style: str | None = None,
+              attachment: int = 1) -> AddEntityCommand:
+    """MTEXT in the box the two corners define.
+
+    ``attachment`` is the MText Justification (1..9, TL..BR): the insert
+    point is the matching point OF THE BOX, which is how AutoCAD keeps the
+    text inside the rectangle the user dragged whatever the justification.
+    """
     width = abs(p2[0] - p1[0])
-    top_left = (min(p1[0], p2[0]), max(p1[1], p2[1]))
+    x0, x1 = min(p1[0], p2[0]), max(p1[0], p2[0])
+    y0, y1 = min(p1[1], p2[1]), max(p1[1], p2[1])
+    column = (attachment - 1) % 3          # 0 left, 1 center, 2 right
+    row = (attachment - 1) // 3            # 0 top, 1 middle, 2 bottom
+    insert = ((x0, (x0 + x1) / 2.0, x1)[column],
+              (y1, (y0 + y1) / 2.0, y0)[row])
 
     def make(msp):
-        m = msp.add_mtext(text, dxfattribs={"char_height": char_height,
-                                            "width": width,
-                                            "style": _current_text_style(msp)})
-        m.set_location(top_left)
+        m = msp.add_mtext(text, dxfattribs={
+            "char_height": char_height,
+            "width": width,
+            "style": style or _current_text_style(msp)})
+        m.set_location(insert, attachment_point=attachment)
         return m
     return AddEntityCommand("MTEXT", make)
 

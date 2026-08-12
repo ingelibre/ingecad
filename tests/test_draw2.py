@@ -278,10 +278,15 @@ def test_double_click_edits_the_mtext_where_it_stands(qapp):
 
 
 def test_inline_codes_survive_an_edit_that_does_not_touch_them(qapp):
-    """A colleague's formatted note round-trips: only \\P is translated."""
+    """Codes OUTSIDE the rich subset stay raw and round-trip untouched.
+
+    Bold and height moved INTO the subset with the toolbar, so this now
+    uses a stacked fraction and an oblique code — the kind parse_runs
+    refuses, which is what forces raw mode.
+    """
     win = _editor_window(qapp)
     try:
-        raw = "{\\fArial|b1;TITULO}\\P\\H0.5x;nota chica"
+        raw = "\\Q15;inclinado \\S1/2; resto"
         mtext = win.document.modelspace().add_mtext(
             raw, dxfattribs={"char_height": 2.5, "width": 60.0})
         mtext.set_location((10.0, 40.0))
@@ -314,4 +319,178 @@ def test_the_editor_stays_anchored_through_zoom(qapp):
         assert after[1] > before[1], "the text did not grow with the zoom"
     finally:
         win.tools._mtext_editor.cancel(ask=False)
+        win.close()
+
+
+# -- the Text Formatting toolbar (step 2) --------------------------------------
+
+def test_typing_with_bold_writes_a_real_mtext_code(qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        win.dispatcher.submit("MTEXT")
+        win.tools.tool.on_point((10.0, 40.0))
+        win.tools.tool.on_point((90.0, 10.0))
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        assert editor.rich
+        QTest.keyClicks(editor.edit, "normal ")
+        editor.bold.setChecked(True)
+        QTest.keyClicks(editor.edit, "NEGRITA")
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        assert made.text == "normal {\\fArial|b1|i0;NEGRITA}"
+        # And ezdxf's own parser agrees on what that means.
+        from core.mtext_format import parse_runs
+
+        runs = parse_runs(made.text, 2.5)
+        assert [r.bold for r in runs[0]] == [False, True]
+    finally:
+        win.close()
+
+
+def test_colour_and_height_reach_the_stream(qapp):
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        win.dispatcher.submit("MTEXT")
+        win.tools.tool.on_point((10.0, 40.0))
+        win.tools.tool.on_point((90.0, 10.0))
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        index = editor.color_combo.findData(1)          # red
+        editor.color_combo.setCurrentIndex(index)
+        editor._apply_color(index)
+        editor.height_spin.setValue(5.0)                # 2x the char height
+        editor._apply_height()
+        QTest.keyClicks(editor.edit, "ROJO GRANDE")
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        assert "\\C1;" in made.text
+        assert "\\H2x;" in made.text
+    finally:
+        win.close()
+
+
+def test_editing_a_formatted_text_opens_rich_and_keeps_the_formatting(qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        raw = "{\\fArial|b1|i0;TITULO} resto"
+        mtext = win.document.modelspace().add_mtext(
+            raw, dxfattribs={"char_height": 2.5, "width": 60.0})
+        mtext.set_location((10.0, 40.0))
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.on_canvas_double_click(11.0, 39.0)
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        assert editor.rich
+        # Typing at the end (plain) and committing keeps the bold TITLE.
+        QTest.keyClicks(editor.edit, " y firma")
+        editor.commit()
+        qapp.processEvents()
+        assert mtext.text.startswith("{\\fArial|b1|i0;TITULO}")
+        assert mtext.text.endswith("y firma")
+    finally:
+        win.close()
+
+
+def test_raw_mode_disables_the_formatting_controls(qapp):
+    win = _editor_window(qapp)
+    try:
+        mtext = win.document.modelspace().add_mtext(
+            "antes \\S1/2; despues", dxfattribs={"char_height": 2.5,
+                                                 "width": 60.0})
+        mtext.set_location((10.0, 40.0))
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.on_canvas_double_click(11.0, 39.0)
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        assert not editor.rich
+        assert not editor.bold.isEnabled()
+        assert not editor.color_combo.isEnabled()
+        assert editor.stack.isEnabled()       # Stack lives in raw mode
+        editor.cancel(ask=False)
+    finally:
+        win.close()
+
+
+def test_stack_wraps_the_selection_in_the_code(qapp):
+    win = _editor_window(qapp)
+    try:
+        mtext = win.document.modelspace().add_mtext(
+            "\\Q15;pendiente 1/2 aqui", dxfattribs={"char_height": 2.5,
+                                                    "width": 60.0})
+        mtext.set_location((10.0, 40.0))
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.on_canvas_double_click(11.0, 39.0)
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        cursor = editor.edit.textCursor()
+        start = editor.edit.toPlainText().index("1/2")
+        cursor.setPosition(start)
+        cursor.setPosition(start + 3, cursor.MoveMode.KeepAnchor)
+        editor.edit.setTextCursor(cursor)
+        editor._apply_stack()
+        editor.commit()
+        qapp.processEvents()
+        assert "\\S1/2;" in mtext.text
+    finally:
+        win.close()
+
+
+def test_justify_places_the_new_text_by_the_box_corner(qapp):
+    win = _editor_window(qapp)
+    try:
+        win.dispatcher.submit("MTEXT")
+        win.tools.tool.on_point((10.0, 40.0))
+        win.tools.tool.on_point((90.0, 10.0))
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        assert editor.justify.isEnabled()
+        editor._set_attachment(5)               # Middle Center
+        editor.edit.setPlainText("centrado")
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        assert made.dxf.attachment_point == 5
+        assert (made.dxf.insert.x, made.dxf.insert.y) == (50.0, 25.0)
+    finally:
+        win.close()
+
+
+def test_style_change_applies_to_the_whole_entity(qapp):
+    win = _editor_window(qapp)
+    try:
+        win.document.doc.styles.add("TITULOS", font="arial.ttf")
+        mtext = win.document.modelspace().add_mtext(
+            "nota", dxfattribs={"char_height": 2.5, "width": 60.0})
+        mtext.set_location((10.0, 40.0))
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.on_canvas_double_click(11.0, 39.0)
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        index = editor.style_combo.findText("TITULOS")
+        assert index >= 0
+        editor.style_combo.setCurrentIndex(index)
+        editor.commit()
+        qapp.processEvents()
+        assert mtext.dxf.style == "TITULOS"
+        win.history.undo()
+        assert mtext.dxf.style == "Standard"
+    finally:
         win.close()
