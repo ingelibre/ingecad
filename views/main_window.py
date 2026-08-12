@@ -89,22 +89,34 @@ class RegenWorker(QThread):
         self._revision = revision
 
     def run(self) -> None:
+        import time
+
         from render.backend import build_scene
 
+        t0 = time.perf_counter()
         try:
             scene = build_scene(self._document, self._layout)
         except Exception:
             scene = None    # doc mutated mid-read (or bad data): stale
+        # Measured cost of this layout's regen: the viewport pan/zoom path
+        # uses it to decide whether a live synchronous rebuild is affordable.
+        self.duration_ms = (time.perf_counter() - t0) * 1000.0
         self.done.emit(self._document, scene, self._revision, self._layout)
 
 
 class MainWindow(QMainWindow):
+    # A live viewport regen must fit a frame-ish budget or pan blocks the UI.
+    _VP_LIVE_BUDGET_MS = 33.0
+
     def __init__(self) -> None:
         super().__init__()
         self.document: Document | None = None
         self._regen_worker: RegenWorker | None = None
         self._regen_rerun = False
         self._regen_zoom = False
+        # Measured regen cost per layout (ms): whether a live synchronous
+        # rebuild is affordable during a viewport pan/zoom gesture.
+        self._regen_ms: dict[str, float] = {}
         self._layers_dock = None
         self._layers_panel = None
         self._active_vp = None    # MSPACE-activated viewport entity, if any
@@ -1534,6 +1546,8 @@ class MainWindow(QMainWindow):
         worker, self._regen_worker = self._regen_worker, None
         if worker is not None:
             worker.wait()   # thread has emitted; joins immediately
+            if scene is not None:
+                self._regen_ms[layout] = worker.duration_ms
         if document is not self.document:
             return          # another file was opened meanwhile
         stale = (self._regen_rerun
@@ -1684,7 +1698,7 @@ class MainWindow(QMainWindow):
         layout_ops.zoom_viewport_view(vp, factor, anchor)
         self.document.dirty = True
         self._vp_gesture_timer.start()
-        self.regen_in_memory()          # coalesced; content converges live
+        self._vp_live_regen()
         return True
 
     def vp_view_pan(self, dx_world: float, dy_world: float) -> bool:
@@ -1700,8 +1714,40 @@ class MainWindow(QMainWindow):
         layout_ops.pan_viewport_view(vp, dx_world, dy_world)
         self.document.dirty = True
         self._vp_gesture_timer.start()
-        self.regen_in_memory()
+        self._vp_live_regen()
         return True
+
+    def _vp_live_regen(self) -> None:
+        """A pan/zoom tick inside an active viewport.
+
+        The model content is baked into the sheet scene, so showing the move
+        means a rebuild. Per-tick THREADED regens made pan lag: the display
+        trailed the cursor by a regen (or two) while the mouse streamed
+        events. When the sheet is cheap — measured on its last regen, never
+        guessed — rebuild synchronously instead, and the content tracks the
+        cursor 1:1. A heavy sheet keeps the threaded path: laggy, but the UI
+        never blocks.
+        """
+        import time
+
+        known = self._regen_ms.get(self._active_layout)
+        if (known is None or known > self._VP_LIVE_BUDGET_MS
+                or self._regen_worker is not None):
+            self.regen_in_memory()
+            return
+        from render.backend import build_scene
+
+        t0 = time.perf_counter()
+        try:
+            scene = build_scene(self.document, self._active_layout)
+        except Exception:
+            self.regen_in_memory()
+            return
+        # Keep the measurement fresh: a sheet that grows past the budget
+        # switches back to the threaded path on the next tick.
+        self._regen_ms[self._active_layout] = (time.perf_counter() - t0) * 1000.0
+        self.viewport.set_scene(scene)
+        self.tools.mark_scene_merged()
 
     def _vp_gesture_begin(self, vp) -> None:
         if self._vp_gesture is None:

@@ -1064,3 +1064,33 @@ def test_right_click_accepts_prompt_default(qapp):
     win.on_canvas_right_click(QPoint(0, 0))    # accepts <Extents>
     assert win.dispatcher.pending_prompt is None
     win.close()
+
+
+def test_a_cheap_sheet_pans_synchronously(qapp, monkeypatch):
+    """Per-tick THREADED regens made viewport pan trail the cursor. A sheet
+    whose regen is measured cheap rebuilds inline: the new scene is on the
+    canvas when vp_view_pan returns, no worker involved."""
+    win, t, vp = _layout_window(qapp)
+    win._active_vp = vp
+    win._regen_ms[win._active_layout] = 5.0        # measured: cheap
+    before = win.viewport._scene
+    assert win.vp_view_pan(5.0, 2.0)
+    assert win.viewport._scene is not before       # adopted inline
+    assert win._regen_worker is None               # nothing left in flight
+    assert win._active_layout in win._regen_ms     # measurement refreshed
+    win._vp_gesture_commit()
+    win.close()
+
+
+def test_a_heavy_sheet_keeps_the_threaded_path(qapp, monkeypatch):
+    win, t, vp = _layout_window(qapp)
+    win._active_vp = vp
+    win._regen_ms[win._active_layout] = 500.0      # measured: heavy
+    called = []
+    monkeypatch.setattr(win, "regen_in_memory", lambda *a, **k: called.append(1))
+    scene = win.viewport._scene
+    assert win.vp_view_pan(5.0, 2.0)
+    assert called                                   # threaded fallback
+    assert win.viewport._scene is scene             # no inline adoption
+    win._vp_gesture_commit()
+    win.close()
