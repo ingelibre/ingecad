@@ -312,3 +312,30 @@ def test_matchprop_uses_the_effective_mtext_height(qapp):
     History(doc).execute(match_properties(src, [dst, plain]))
     assert dst.dxf.char_height == pytest.approx(0.15)
     assert plain.dxf.height == pytest.approx(0.15)
+
+
+def test_matchprop_copies_the_effective_text_color(qapp):
+    """The color often lives in an inline \\C code (our editor writes
+    them) while the entity stays ByLayer — matching looked like it did
+    not copy the color. The destination's own inline codes are stripped
+    so the new color governs."""
+    from core.document import Document
+    from core.commands import History
+    from core.modify import match_properties
+
+    doc = Document.new()
+    msp = doc.modelspace()
+    src = msp.add_mtext(r"{\C1;ROJO}", dxfattribs={"char_height": 2.5})
+    src.set_location((0, 0))
+    dst = msp.add_mtext(r"{\C3;verde} destino",
+                        dxfattribs={"char_height": 2.5})
+    dst.set_location((0, 10))
+    plain = msp.add_text("suelto", dxfattribs={"height": 2.5})
+    history = History(doc)
+    history.execute(match_properties(src, [dst, plain]))
+    assert dst.dxf.get("color") == 1
+    assert "\\C3;" not in dst.text            # old inline color gone
+    assert plain.dxf.get("color") == 1        # TEXT gets it too
+    history.undo()
+    assert dst.dxf.get("color", 256) == 256
+    assert "\\C3;" in dst.text                # snapshot restored the content

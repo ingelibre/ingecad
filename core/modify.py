@@ -709,6 +709,28 @@ def _match_style(source, target) -> None:
         # on Marco's plan) — copying the raw attribute shrank the target
         # to that residue.
         height = _effective_text_height(source)
+        # The color crosses the same way: the source's EFFECTIVE color
+        # lands on the destination's entity, and the destination's own
+        # inline color codes are stripped so the new color governs.
+        effective = _effective_text_color(source)
+        if effective is not None:
+            kind, value = effective
+            try:
+                if kind == "aci":
+                    target.dxf.discard("true_color")
+                    target.dxf.color = value
+                elif kind == "rgb":
+                    from ezdxf.colors import rgb2int
+
+                    target.dxf.true_color = rgb2int(value)
+                elif kind == "rgb_raw":
+                    target.dxf.true_color = value
+                if target.dxftype() == "MTEXT":
+                    stripped = _strip_mtext_color_codes(target.text)
+                    if stripped != target.text:
+                        target.text = stripped
+            except Exception:
+                pass
         if height:
             try:
                 if target.dxftype() == "MTEXT":
@@ -724,11 +746,53 @@ def _match_style(source, target) -> None:
             pass
 
 
+_MTEXT_COLOR_CODE = None   # compiled lazily
+
+
+def _strip_mtext_color_codes(text: str) -> str:
+    global _MTEXT_COLOR_CODE
+    if _MTEXT_COLOR_CODE is None:
+        import re
+
+        _MTEXT_COLOR_CODE = re.compile(r"\\[Cc]\d+;")
+    return _MTEXT_COLOR_CODE.sub("", text)
+
+
+def _effective_text_color(entity):
+    """("aci", n) or ("rgb", (r, g, b)) the text DISPLAYS with, or None.
+
+    Like the height, an MTEXT's color often lives in an inline backslash-C (ACI)
+    or backslash-c (true color) code — our own editor writes them — while the
+    entity attribute stays ByLayer. The first visible run decides.
+    """
+    if entity.dxftype() == "MTEXT":
+        try:
+            from ezdxf.tools.text import MTextContext, MTextParser, TokenType
+
+            # seed 256: the parser's default aci is 7, which would read as
+            # an explicit color on every uncolored text
+            ctx = MTextContext()
+            ctx.aci = 256
+            for token in MTextParser(entity.text, ctx):
+                if token.type == TokenType.WORD:
+                    if token.ctx.rgb is not None:
+                        return ("rgb", token.ctx.rgb)
+                    if token.ctx.aci != 256:
+                        return ("aci", int(token.ctx.aci))
+                    break
+        except Exception:
+            pass
+    if entity.dxf.hasattr("true_color"):
+        return ("rgb_raw", int(entity.dxf.true_color))
+    color = int(entity.dxf.get("color", 256))
+    return ("aci", color) if color != 256 else None
+
+
 def _effective_text_height(entity) -> float | None:
     """The height the text DISPLAYS at.
 
     TEXT: the height attribute. MTEXT: char_height unless the content's
-    first visible run overrides it with an inline \H code (absolute or
+    first visible run overrides it with an inline backslash-H code (absolute or
     relative) — the parser resolves either form.
     """
     if entity.dxftype() != "MTEXT":
