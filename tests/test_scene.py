@@ -358,3 +358,22 @@ def test_a_parent_keeps_its_owner_after_a_child_exits():
     assert scene.handle_ranges.keys() == {ins.dxf.handle}
     covered = sum(c for _n, _f, c in scene.handle_ranges[ins.dxf.handle])
     assert covered == scene.lines.vertex_count == 4
+
+
+def test_bold_and_italic_reach_the_canvas():
+    """ezdxf's font matcher filtered by style BEFORE weight, so \\f...|b1
+    resolved to the regular face and bold/italic rendered exactly like
+    plain text (patched in core.ezdxf_patches)."""
+    def glyphs(content):
+        doc = Document.new()
+        mtext = doc.modelspace().add_mtext(
+            content, dxfattribs={"char_height": 2.5, "width": 80.0})
+        mtext.set_location((0.0, 0.0))
+        scene = build_scene(doc)
+        return np.asarray([v[0] for v in scene.triangles.data])
+
+    plain = glyphs("PRUEBA")
+    bold = glyphs(r"{\fArial|b1|i0;PRUEBA}")
+    italic = glyphs(r"{\fArial|b0|i1;PRUEBA}")
+    assert plain.shape != bold.shape or not np.allclose(plain, bold)
+    assert plain.shape != italic.shape or not np.allclose(plain, italic)

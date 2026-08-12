@@ -22,6 +22,7 @@ def apply() -> None:
     _APPLIED = True
     _patch_polygon_transform()
     _patch_mtext_mask_rendering()
+    _patch_bold_italic_font_matching()
 
 
 def _patch_polygon_transform() -> None:
@@ -92,3 +93,39 @@ def _patch_mtext_mask_rendering() -> None:
         return original(mtext)
 
     _frontend.is_complex_mtext = is_complex_mtext
+
+
+def _patch_bold_italic_font_matching() -> None:
+    """``\\fArial|b1;`` renders exactly like regular text.
+
+    The text renderer asks ``fonts.find_best_match`` for the run's font
+    with the right ``weight``/``italic`` — but leaves ``style`` at its
+    default ``"Regular"``. The matcher filters by style FIRST, and when
+    that leaves a single face (the regular one, since bold faces are
+    styled ``"Bold"``) it returns it immediately, never reaching the
+    weight comparison. Result: bold and italic are silently dropped for
+    every font whose family ships separate weight files — i.e. all of
+    them.
+
+    Translate the weight/italic request into the style string the cache
+    actually uses; fall back to the original request when the family has
+    no such face (the sort-by-weight tail then still picks the closest).
+    """
+    from ezdxf.fonts import fonts as _fonts
+
+    original = _fonts.find_best_match
+
+    def find_best_match(*, family="sans-serif", style="Regular", weight=400,
+                        width=5, italic=False):
+        if style == "Regular" and (weight >= 600 or italic):
+            wanted = ("Bold Italic" if weight >= 600 and italic
+                      else "Bold" if weight >= 600 else "Italic")
+            found = original(family=family, style=wanted, weight=weight,
+                             width=width, italic=italic)
+            if found is not None:
+                return found
+        return original(family=family, style=style, weight=weight,
+                        width=width, italic=italic)
+
+    find_best_match._ingecad_patch = True
+    _fonts.find_best_match = find_best_match
