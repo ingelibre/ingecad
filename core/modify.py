@@ -608,9 +608,22 @@ class MatchPropCommand(Command):
         self.targets = list(targets)
         self.properties = tuple(properties)
         self._before: list = []
+        self._before_xdata: list = []
+        # A matched dimension re-renders its block; the overlay cannot
+        # show that, so the display path must run the real regen.
+        self.needs_regen = (
+            source.dxftype() == "DIMENSION"
+            and any(t.dxftype() == "DIMENSION" for t in self.targets))
+
+    def _dim_pair(self, target) -> bool:
+        return (self.source.dxftype() == "DIMENSION"
+                and target.dxftype() == "DIMENSION")
 
     def do(self, document) -> None:
         self._before = [e.copy() for e in self.targets]
+        self._before_xdata = [
+            list(t.get_xdata("ACAD")) if t.has_xdata("ACAD") else None
+            for t in self.targets]
         for target in self.targets:
             for name in self.properties:
                 try:
@@ -624,12 +637,59 @@ class MatchPropCommand(Command):
                 except Exception:
                     pass          # not every property exists on every type
             _match_style(self.source, target)
+            if self._dim_pair(target):
+                # The reference's Dimension special property: the style AND
+                # its overrides (the DSTYLE xdata), and the block re-renders
+                # so the destination actually LOOKS like the source —
+                # setting dimstyle alone changed nothing visible.
+                try:
+                    if self.source.has_xdata("ACAD"):
+                        target.set_xdata("ACAD",
+                                         list(self.source.get_xdata("ACAD")))
+                    else:
+                        target.discard_xdata("ACAD")
+                except Exception:
+                    pass
+                _rerender_dimension(document, target)
         document.dirty = True
 
     def undo(self, document) -> None:
-        for target, snap in zip(self.targets, self._before):
+        for target, snap, xdata in zip(self.targets, self._before,
+                                       self._before_xdata):
+            was_dim = self._dim_pair(target)
+            edited_block = target.dxf.get("geometry", None) if was_dim else None
             _restore_entity(target, snap)
+            if was_dim:
+                try:
+                    if xdata is None:
+                        target.discard_xdata("ACAD")
+                    else:
+                        target.set_xdata("ACAD", xdata)
+                except Exception:
+                    pass
+                # the restored 'geometry' points at the block do() dropped:
+                # render a fresh one and drop the edited block instead
+                target.render()
+                from core.actions import _stamp_dim_block_byblock
+
+                _stamp_dim_block_byblock(document, target)
+                _drop_block(document, edited_block)
         document.dirty = True
+
+
+def _rerender_dimension(document, dim) -> None:
+    from core.actions import _drop_dim_block, _stamp_dim_block_byblock
+
+    old_block = dim.dxf.get("geometry", None)
+    dim.render()
+    _stamp_dim_block_byblock(document, dim)
+    _drop_dim_block(document, old_block)
+
+
+def _drop_block(document, name) -> None:
+    from core.actions import _drop_dim_block
+
+    _drop_dim_block(document, name)
 
 
 def _match_style(source, target) -> None:

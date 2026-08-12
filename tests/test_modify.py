@@ -636,3 +636,40 @@ def test_pedit_declining_the_conversion_leaves_the_line_alone():
     assert h.finished
     kept = entities(h.document)
     assert len(kept) == 1 and kept[0].dxftype() == "LINE"
+
+
+def test_matchprop_dimension_copies_style_overrides_and_rerenders():
+    """The reference's Dimension special property (p. 1081): style AND
+    properties — and the destination must LOOK matched, which means its
+    block re-renders (setting dimstyle alone changed nothing visible)."""
+    from core import styles as styles_mod
+    from core.document import Document
+    from core.commands import History
+    from core.modify import match_properties
+
+    doc = Document.new()
+    styles_mod.install_default_styles(doc, unit_factor=1.0, overwrite=True)
+    msp = doc.modelspace()
+    src = msp.add_linear_dim(base=(0, 30), p1=(0, 0), p2=(20, 0),
+                             dimstyle="Acot-100").render().dimension
+    dst = msp.add_linear_dim(base=(40, 30), p1=(40, 0), p2=(60, 0),
+                             dimstyle="ISO-25").render().dimension
+
+    def text_height(dim):
+        block = doc.doc.blocks.get(dim.dxf.geometry)
+        return [e for e in block if e.dxftype() == "MTEXT"][0].dxf.char_height
+
+    assert text_height(src) == 250.0        # 2.5 x dimscale 100
+    assert text_height(dst) == 2.5
+    old_block = dst.dxf.geometry
+    history = History(doc)
+    command = match_properties(src, [dst])
+    assert command.needs_regen
+    history.execute(command)
+    assert dst.dxf.dimstyle == "Acot-100"
+    assert dst.dxf.geometry != old_block    # re-rendered
+    assert text_height(dst) == 250.0        # LOOKS matched
+    history.undo()
+    assert dst.dxf.dimstyle == "ISO-25"
+    assert text_height(dst) == 2.5          # look restored too
+    assert dst.dxf.geometry in doc.doc.blocks
