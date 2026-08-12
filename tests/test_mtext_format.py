@@ -117,9 +117,10 @@ def test_returning_to_default_properties_emits_a_reset():
     paragraphs = parse_runs(r"\pxl3;lista\P\pi0,l0,r0;normal", 2.5)
     assert paragraphs[1].resolved() == DEFAULT_PROPS
     out = serialize(paragraphs)
-    assert "\\pxl3;" in out
-    # Without a reset the second paragraph would inherit the margin.
-    assert "\\pi0,l0,r0;" in out or "\\px" in out.split("\\P")[1]
+    # Every component spelled out: an omitted i0 would mean "inherit".
+    first, second = out.split("\\P")
+    assert first.startswith("\\pxi0,l3,r0,t;")
+    assert second.startswith("\\pxi0,l0,r0,t;")
 
 
 def test_a_property_change_mid_paragraph_refuses_rich_mode():

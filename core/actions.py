@@ -1695,7 +1695,8 @@ def add_text(pos, text: str, height: float, rotation: float = 0.0,
 
 def add_mtext(p1, p2, text: str, char_height: float,
               style: str | None = None,
-              attachment: int = 1) -> AddEntityCommand:
+              attachment: int = 1,
+              line_spacing: float | None = None) -> AddEntityCommand:
     """MTEXT in the box the two corners define.
 
     ``attachment`` is the MText Justification (1..9, TL..BR): the insert
@@ -1711,10 +1712,14 @@ def add_mtext(p1, p2, text: str, char_height: float,
               (y1, (y0 + y1) / 2.0, y0)[row])
 
     def make(msp):
-        m = msp.add_mtext(text, dxfattribs={
-            "char_height": char_height,
-            "width": width,
-            "style": style or _current_text_style(msp)})
+        attribs = {"char_height": char_height,
+                   "width": width,
+                   "style": style or _current_text_style(msp)}
+        if line_spacing and abs(line_spacing - 1.0) > 1e-9:
+            # Group 44 + style 1 ("At least"), AutoCAD's own default style.
+            attribs["line_spacing_factor"] = float(line_spacing)
+            attribs["line_spacing_style"] = 1
+        m = msp.add_mtext(text, dxfattribs=attribs)
         m.set_location(insert, attachment_point=attachment)
         return m
     return AddEntityCommand("MTEXT", make)

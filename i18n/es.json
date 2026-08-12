@@ -948,5 +948,12 @@
   "This text carries formatting the editor cannot show yet — it is edited as codes so nothing is lost.": "Este texto trae formato que el editor todavía no muestra — se edita como códigos para no perder nada.",
   "Stacking writes \\S codes — available when the text is edited as codes.": "Apilar escribe códigos \\S — disponible cuando el texto se edita como códigos.",
   "Justification of an existing text keeps its insertion point — not supported yet.": "La justificación de un texto existente conserva su punto de inserción — todavía no soportada.",
-  "Click: add a tab stop. Drag the sliders for the indents, the right arrow for the width.": "Clic: agrega un tabulador. Arrastrá los deslizadores para las sangrías, la flecha derecha para el ancho."
+  "Click: add a tab stop. Drag the sliders for the indents, the right arrow for the width.": "Clic: agrega un tabulador. Arrastrá los deslizadores para las sangrías, la flecha derecha para el ancho.",
+  "Line spacing": "Interlineado",
+  "Other...": "Otro...",
+  "Factor (0.25 to 4):": "Factor (0.25 a 4):",
+  "Bullets and numbering": "Viñetas y numeración",
+  "Numbered (1. 2. 3.)": "Numerada (1. 2. 3.)",
+  "Lettered (a. b. c.)": "Con letras (a. b. c.)",
+  "Bulleted (•)": "Con viñetas (•)"
 }

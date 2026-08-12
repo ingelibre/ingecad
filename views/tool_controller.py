@@ -461,7 +461,8 @@ class ToolController(QObject):
                 self._execute(actions.add_mtext(
                     first, box_second, content, char_height,
                     style=extras.get("style"),
-                    attachment=extras.get("attachment") or 1))
+                    attachment=extras.get("attachment") or 1,
+                    line_spacing=extras.get("line_spacing")))
             self.window.viewport.update()
 
         self._mtext_editor = MTextInPlaceEditor(
@@ -502,7 +503,9 @@ class ToolController(QObject):
                 new = content
             new_style = extras.get("style")
             new_width = extras.get("width")
-            if new == text and not new_style and not new_width:
+            new_spacing = extras.get("line_spacing")
+            if new == text and not new_style and not new_width \
+                    and not new_spacing:
                 return                        # untouched: not an edit
 
             def mutate() -> None:
@@ -510,6 +513,9 @@ class ToolController(QObject):
                     entity.text = new
                     if new_width:
                         entity.dxf.width = float(new_width)
+                    if new_spacing:
+                        entity.dxf.line_spacing_factor = float(new_spacing)
+                        entity.dxf.line_spacing_style = 1
                 else:
                     entity.dxf.text = new
                 if new_style:
@@ -524,7 +530,9 @@ class ToolController(QObject):
             width_world=width, char_height=char_height, text=text,
             on_commit=commit, single_line=single,
             document=self.window.document,
-            style=str(entity.dxf.get("style", "Standard")))
+            style=str(entity.dxf.get("style", "Standard")),
+            line_spacing=float(entity.dxf.get("line_spacing_factor", 1.0)
+                               or 1.0))
         return True
 
     def _ask_text(self, prompt: str, default: str = "") -> Optional[str]:

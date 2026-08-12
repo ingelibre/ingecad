@@ -520,7 +520,7 @@ def test_the_ruler_writes_real_paragraph_codes(qapp):
         qapp.processEvents()
         made = [e for e in win.document.modelspace()
                 if e.dxftype() == "MTEXT"][0]
-        assert made.text == "\\pxi2,l1,t4,c8;parrafo con sangria"
+        assert made.text == "\\pxi2,l1,r0,t4,c8;parrafo con sangria"
     finally:
         win.close()
 
@@ -643,6 +643,141 @@ def test_tab_characters_round_trip_through_the_stream(qapp):
         qapp.processEvents()
         made = [e for e in win.document.modelspace()
                 if e.dxftype() == "MTEXT"][0]
-        assert made.text == "\\pxt4;N\t1050"
+        assert made.text == "\\pxi0,l0,r0,t4;N\t1050"
+    finally:
+        win.close()
+
+
+# -- line spacing and lists (the last of the editor plan) ----------------------
+
+def test_line_spacing_reaches_the_entity_and_comes_back(qapp):
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        QTest.keyClicks(editor.edit, "espaciado")
+        editor._set_line_spacing(1.5)
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        assert made.dxf.line_spacing_factor == pytest.approx(1.5)
+        assert made.dxf.line_spacing_style == 1        # "At least"
+
+        # Reopening shows the factor, and leaving it alone changes nothing.
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.on_canvas_double_click(11.0, 39.0)
+        qapp.processEvents()
+        second = win.tools._mtext_editor
+        assert second._line_spacing == pytest.approx(1.5)
+        assert second.spacing.text() == "1.5x"
+        assert second._extras()["line_spacing"] is None
+        second.cancel(ask=False)
+    finally:
+        win.close()
+
+
+def test_the_lists_menu_writes_literal_markers_and_hanging_indents(qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        QTest.keyClicks(editor.edit, "concreto")
+        QTest.keyClick(editor.edit, Qt.Key_Return)
+        QTest.keyClicks(editor.edit, "acero")
+        cursor = editor.edit.textCursor()
+        cursor.select(cursor.SelectionType.Document)
+        editor.edit.setTextCursor(cursor)
+        editor._apply_list("number")
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        # Literal markers + the hanging indent codes: AutoCAD's construction.
+        assert made.text == ("\\pxi-2,l2,r0,t2;1.\tconcreto\\P2.\tacero")
+    finally:
+        win.close()
+
+
+def test_enter_continues_the_numbering(qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        QTest.keyClicks(editor.edit, "1.")
+        QTest.keyClick(editor.edit, Qt.Key_Tab)       # autolist trigger
+        QTest.keyClicks(editor.edit, "primero")
+        QTest.keyClick(editor.edit, Qt.Key_Return)    # continues as 2.
+        QTest.keyClicks(editor.edit, "segundo")
+        QTest.keyClick(editor.edit, Qt.Key_Return)
+        QTest.keyClick(editor.edit, Qt.Key_Return)    # empty item: list ends
+        QTest.keyClicks(editor.edit, "parrafo normal")
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        from core.mtext_format import parse_runs
+
+        paragraphs = parse_runs(made.text, 2.5)
+        texts = ["".join(r.text for r in p.runs) for p in paragraphs]
+        assert texts[0] == "1.\tprimero"
+        assert texts[1] == "2.\tsegundo"
+        assert texts[2] == "parrafo normal"
+        # And the closing paragraph went back to the margin.
+        assert paragraphs[2].resolved().left == 0.0
+        assert paragraphs[0].resolved().left == 2.0
+    finally:
+        win.close()
+
+
+def test_a_dash_and_tab_starts_a_bulleted_list(qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from core.mtext_lists import BULLET
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        QTest.keyClicks(editor.edit, "-")
+        QTest.keyClick(editor.edit, Qt.Key_Tab)
+        QTest.keyClicks(editor.edit, "punto uno")
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        assert BULLET + "\tpunto uno" in made.text
+    finally:
+        win.close()
+
+
+def test_lists_off_strips_markers_and_indents(qapp):
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        mtext = win.document.modelspace().add_mtext(
+            "\\pxi-2,l2,t2;1.\tuno\\P2.\tdos",
+            dxfattribs={"char_height": 2.5, "width": 60.0})
+        mtext.set_location((10.0, 40.0))
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.on_canvas_double_click(11.0, 39.0)
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        assert editor.rich
+        cursor = editor.edit.textCursor()
+        cursor.select(cursor.SelectionType.Document)
+        editor.edit.setTextCursor(cursor)
+        editor._apply_list(None)
+        editor.commit()
+        qapp.processEvents()
+        assert mtext.text == "uno\\Pdos"
     finally:
         win.close()

@@ -302,7 +302,8 @@ class MTextInPlaceEditor(QWidget):
                  on_cancel: Optional[Callable[[], None]] = None,
                  single_line: bool = False,
                  document=None, style: str = "",
-                 allow_justify: bool = False) -> None:
+                 allow_justify: bool = False,
+                 line_spacing: float = 1.0) -> None:
         super().__init__(viewport)
         self._viewport = viewport
         self._top_left = top_left
@@ -315,6 +316,8 @@ class MTextInPlaceEditor(QWidget):
         self._loading = True
         self._last_scale = 0.0
         self._attachment: Optional[int] = None
+        self._line_spacing = float(line_spacing) or 1.0
+        self._initial_spacing = self._line_spacing
 
         runs = None
         if not single_line:
@@ -341,6 +344,8 @@ class MTextInPlaceEditor(QWidget):
             self._load_runs(runs)
         else:
             self.edit.setPlainText(to_editor_text(text))
+        if abs(self._line_spacing - 1.0) > 1e-9:
+            self._apply_spacing_visual()
         self._initial = self._current_content()
         self._loading = False
 
@@ -454,6 +459,35 @@ class MTextInPlaceEditor(QWidget):
                           checkable=False)
         self.stack.clicked.connect(self._apply_stack)
 
+        self.spacing = QToolButton(self._bar)
+        self.spacing.setText(f"{self._line_spacing:g}x")
+        self.spacing.setToolTip(tr("Line spacing"))
+        self.spacing.setFocusPolicy(Qt.NoFocus)
+        self.spacing.setPopupMode(QToolButton.InstantPopup)
+        spacing_menu = QMenu(self.spacing)
+        for factor in (1.0, 1.5, 2.0, 2.5):
+            spacing_menu.addAction(
+                f"{factor:g}x", lambda f=factor: self._set_line_spacing(f))
+        spacing_menu.addAction(tr("Other..."), self._ask_line_spacing)
+        self.spacing.setMenu(spacing_menu)
+        row.addWidget(self.spacing)
+
+        self.lists = QToolButton(self._bar)
+        self.lists.setText(tr("List"))
+        self.lists.setToolTip(tr("Bullets and numbering"))
+        self.lists.setFocusPolicy(Qt.NoFocus)
+        self.lists.setPopupMode(QToolButton.InstantPopup)
+        lists_menu = QMenu(self.lists)
+        lists_menu.addAction(tr("None"), lambda: self._apply_list(None))
+        lists_menu.addAction(tr("Numbered (1. 2. 3.)"),
+                             lambda: self._apply_list("number"))
+        lists_menu.addAction(tr("Lettered (a. b. c.)"),
+                             lambda: self._apply_list("letter"))
+        lists_menu.addAction(tr("Bulleted (•)"),
+                             lambda: self._apply_list("bullet"))
+        self.lists.setMenu(lists_menu)
+        row.addWidget(self.lists)
+
         self.justify = QToolButton(self._bar)
         self.justify.setText(tr("Justify"))
         self.justify.setFocusPolicy(Qt.NoFocus)
@@ -478,7 +512,7 @@ class MTextInPlaceEditor(QWidget):
                         "lost.")
             for widget in (self.font_combo, self.height_spin, self.bold,
                            self.italic, self.under, self.over,
-                           self.color_combo):
+                           self.color_combo, self.lists):
                 widget.setEnabled(False)
                 widget.setToolTip(reason)
         else:
@@ -733,6 +767,124 @@ class MTextInPlaceEditor(QWidget):
             return
         cursor.insertText("\\S" + selected + ";")
 
+    # -- line spacing ----------------------------------------------------------
+    def _set_line_spacing(self, factor: float) -> None:
+        self._line_spacing = max(0.25, min(4.0, float(factor)))
+        self.spacing.setText(f"{self._line_spacing:g}x")
+        self._apply_spacing_visual()
+
+    def _ask_line_spacing(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        value, ok = QInputDialog.getDouble(
+            self, tr("Line spacing"), tr("Factor (0.25 to 4):"),
+            self._line_spacing, 0.25, 4.0, 2)
+        if ok:
+            self._set_line_spacing(value)
+
+    def _apply_spacing_visual(self) -> None:
+        from PySide6.QtGui import QTextBlockFormat
+
+        cursor = QTextCursor(self.edit.document())
+        cursor.select(QTextCursor.SelectionType.Document)
+        fmt = QTextBlockFormat()
+        fmt.setLineHeight(self._line_spacing * 100.0,
+                          QTextBlockFormat.LineHeightTypes
+                          .ProportionalHeight.value)
+        cursor.mergeBlockFormat(fmt)
+
+    # -- bullets and numbering -------------------------------------------------
+    def _apply_list(self, style) -> None:
+        """The Lists menu: rewrite the selected paragraphs as items."""
+        from core import mtext_lists
+
+        if not self.rich:
+            return
+        blocks = self.selected_blocks()
+        cursor = QTextCursor(self.edit.document())
+        cursor.beginEditBlock()
+        if style is None:
+            for block in blocks:
+                self._set_block_marker(block, None)
+            self.apply_paragraph_props(indent=0.0, left=0.0, tab_stops=())
+        else:
+            for index, block in enumerate(blocks, start=1):
+                self._set_block_marker(
+                    block, mtext_lists.marker_for(style, index))
+            self.apply_paragraph_props(
+                indent=mtext_lists.LIST_INDENT, left=mtext_lists.LIST_LEFT,
+                tab_stops=mtext_lists.LIST_TABS)
+        cursor.endEditBlock()
+
+    def _set_block_marker(self, block, marker) -> None:
+        """Replace the paragraph's leading marker (or add/remove it).
+
+        Only the prefix is touched, so the item's own runs keep their
+        character formats.
+        """
+        from core import mtext_lists
+
+        found = mtext_lists.detect_marker(block.text())
+        cursor = QTextCursor(block)
+        prefix_len = 0
+        if found is not None:
+            prefix_len = len(block.text()) - len(found[2])
+        cursor.setPosition(block.position())
+        cursor.setPosition(block.position() + prefix_len,
+                           QTextCursor.MoveMode.KeepAnchor)
+        replacement = (marker + "\t") if marker else ""
+        fmt = QTextCharFormat()
+        fmt.setProperty(PROP_HFACTOR, 1.0)
+        cursor.insertText(replacement, fmt)
+
+    def _list_keys(self, key, modifiers) -> bool:
+        """Enter continues a list, an empty item ends it, Tab starts one."""
+        from core import mtext_lists
+
+        if not self.rich:
+            return False
+        cursor = self.edit.textCursor()
+        block = cursor.block()
+        text = block.text()
+        if key in (Qt.Key_Return, Qt.Key_Enter) and not modifiers:
+            if mtext_lists.is_empty_item(text):
+                # Enter on a bare marker: the list is over.
+                self._set_block_marker(block, None)
+                self.apply_paragraph_props(indent=0.0, left=0.0,
+                                           tab_stops=())
+                return True
+            marker = mtext_lists.next_marker(text)
+            if marker is not None and cursor.atBlockEnd():
+                cursor.insertBlock()
+                fmt = QTextCharFormat()
+                fmt.setProperty(PROP_HFACTOR, 1.0)
+                cursor.insertText(marker + "\t", fmt)
+                self.edit.setTextCursor(cursor)
+                return True
+            return False
+        if key == Qt.Key_Tab and not modifiers:
+            head = text[:cursor.positionInBlock()]
+            started = mtext_lists.autolist_style(head)
+            if started is not None and head == text:
+                style, ordinal = started
+                # REPLACE the typed head ("1.", "-", "a.") with the marker:
+                # inserting beside it would leave "•\t-" behind.
+                replace = QTextCursor(block)
+                replace.setPosition(block.position())
+                replace.setPosition(block.position() + len(head),
+                                    QTextCursor.MoveMode.KeepAnchor)
+                fmt = QTextCharFormat()
+                fmt.setProperty(PROP_HFACTOR, 1.0)
+                replace.insertText(
+                    mtext_lists.marker_for(style, ordinal) + "\t", fmt)
+                self.apply_paragraph_props(
+                    indent=mtext_lists.LIST_INDENT,
+                    left=mtext_lists.LIST_LEFT,
+                    tab_stops=mtext_lists.LIST_TABS)
+                self.edit.setTextCursor(replace)
+                return True
+        return False
+
     def _set_attachment(self, value: int) -> None:
         self._attachment = value
         for number, label in ATTACHMENTS:
@@ -843,6 +995,9 @@ class MTextInPlaceEditor(QWidget):
             "attachment": self._attachment,
             "width": self._width_world if getattr(self, "_width_changed",
                                                   False) else None,
+            "line_spacing": self._line_spacing
+            if abs(self._line_spacing - self._initial_spacing) > 1e-9
+            else None,
         }
 
     def _teardown(self) -> None:
@@ -883,6 +1038,8 @@ class MTextInPlaceEditor(QWidget):
         kind = event.type()
         if obj is self.edit and kind == QEvent.KeyPress:
             key = event.key()
+            if self._list_keys(key, event.modifiers()):
+                return True
             if key in (Qt.Key_Return, Qt.Key_Enter):
                 if event.modifiers() & Qt.ControlModifier or self._single_line:
                     self.commit()

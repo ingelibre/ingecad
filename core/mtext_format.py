@@ -209,6 +209,32 @@ def _height_code(factor: float) -> str:
     return f"\\H{round(factor, 6):g}x;"
 
 
+def _props_code(props) -> str:
+    """A \\px code that FULLY specifies the paragraph state.
+
+    ParagraphProperties.tostring() omits components at their default value —
+    but the codes persist across paragraphs, so an omitted ``i0`` means
+    "keep the -2 from the last paragraph", not zero. Every component is
+    spelled out here, and a bare ``t`` clears the tab list (verified against
+    the parser). Alignment is emitted only when set; a paragraph that
+    RETURNS to default alignment after a non-default one has no reset code
+    we know, and the safety gate sends that case to raw mode.
+    """
+    def number(value: float) -> str:
+        return f"{round(float(value), 6):g}"
+
+    parts = [f"i{number(props.indent)}", f"l{number(props.left)}",
+             f"r{number(props.right)}"]
+    if int(props.align):
+        parts.append("q" + "lrcjd"[int(props.align) - 1])
+    tabs = ",".join(
+        (str(t)[0] + number(float(str(t)[1:]))) if str(t)[0] in "cr"
+        else number(float(t))
+        for t in props.tab_stops)
+    parts.append("t" + tabs if tabs else "t")
+    return "\\px" + ",".join(parts) + ";"
+
+
 def serialize(paragraphs: Paragraphs) -> str:
     """Runs -> MTEXT stream. Formatting is brace-scoped so it self-restores.
 
@@ -222,10 +248,7 @@ def serialize(paragraphs: Paragraphs) -> str:
         line_parts = []
         props = paragraph.resolved()
         if props != previous_props:
-            code = props.tostring()
-            if not code:                      # back to defaults: reset
-                code = "\\pi0,l0,r0;"
-            line_parts.append(code)
+            line_parts.append(_props_code(props))
         previous_props = props
         for run in paragraph.runs:
             if not run.text:
