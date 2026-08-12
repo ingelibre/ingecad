@@ -198,3 +198,68 @@ def test_the_dimension_text_answers_a_click_but_not_a_crossing_window():
     assert len(index.boxes_of({entity.dxf.handle})) == 0
     # ...nor window/crossing: a rect strictly inside the text finds nothing.
     assert index.crossing((4.9, 14.9, 5.1, 15.1)) == []
+
+
+# -- spline and ellipse grips (AutoCAD's sets) --------------------------------
+
+def _msp():
+    from core.document import Document
+
+    doc = Document.new()
+    return doc, doc.modelspace()
+
+
+def test_spline_grips_are_its_fit_points_and_drag_refits():
+    from core.select import apply_grip_edit, entity_grips
+
+    _doc, msp = _msp()
+    spline = msp.add_spline(fit_points=[(0, 0), (10, 5), (20, -3)])
+    grips = entity_grips(spline)
+    assert [(x, y) for x, y, _r in grips] == [(0, 0), (10, 5), (20, -3)]
+    assert all(r == "vertex" for _x, _y, r in grips)
+    assert apply_grip_edit(spline, 1, "vertex", (10.0, 9.0))
+    assert tuple(spline.fit_points[1])[:2] == (10.0, 9.0)
+    assert len(spline.control_points) == 0     # re-fit, no stale frame
+
+
+def test_ellipse_grips_center_plus_axis_ends():
+    from core.select import entity_grips
+
+    _doc, msp = _msp()
+    e = msp.add_ellipse((50, 50), major_axis=(20, 0), ratio=0.5)
+    grips = entity_grips(e)
+    pts = {(round(x), round(y)) for x, y, _r in grips}
+    assert pts == {(50, 50), (70, 50), (30, 50), (50, 60), (50, 40)}
+    roles = [r for _x, _y, r in grips]
+    assert roles[0] == "center" and set(roles[1:]) == {"quadrant"}
+
+
+def test_ellipse_axis_drags_resize_and_keep_ratio_legal():
+    from core.select import apply_grip_edit
+
+    _doc, msp = _msp()
+    e = msp.add_ellipse((50, 50), major_axis=(20, 0), ratio=0.5)
+    # stretch the major axis to 40: minor stays 10, ratio 0.25
+    assert apply_grip_edit(e, 1, "quadrant", (90.0, 50.0))
+    assert round(e.dxf.major_axis.x) == 40 and e.dxf.ratio == 0.25
+    # drag the minor end out to 15: ratio 15/40
+    assert apply_grip_edit(e, 3, "quadrant", (50.0, 65.0))
+    assert abs(e.dxf.ratio - 15.0 / 40.0) < 1e-9
+    # shrink the major below the minor: axes swap, ratio stays <= 1
+    assert apply_grip_edit(e, 1, "quadrant", (58.0, 50.0))
+    assert e.dxf.ratio <= 1.0
+    import math
+    major_len = math.hypot(e.dxf.major_axis.x, e.dxf.major_axis.y)
+    assert round(major_len) == 15              # the old minor took over
+    # and the center never moved
+    assert (round(e.dxf.center.x), round(e.dxf.center.y)) == (50, 50)
+
+
+def test_ellipse_center_grip_moves_it():
+    from core.select import apply_grip_edit
+
+    _doc, msp = _msp()
+    e = msp.add_ellipse((50, 50), major_axis=(20, 0), ratio=0.5)
+    assert apply_grip_edit(e, 0, "center", (80.0, 20.0))
+    assert (e.dxf.center.x, e.dxf.center.y) == (80.0, 20.0)
+    assert e.dxf.major_axis.x == 20.0          # shape untouched

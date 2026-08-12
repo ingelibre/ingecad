@@ -834,6 +834,21 @@ def entity_grips(entity) -> list[tuple[float, float, str]]:
     elif t == "POINT":
         l = entity.dxf.location
         grips.append((l.x, l.y, "center"))
+    elif t == "SPLINE":
+        # AutoCAD: a grip on every fit point (or control point for a CV
+        # spline); dragging one re-fits the curve through the new spot.
+        points = list(entity.fit_points) or list(entity.control_points)
+        for pt in points:
+            grips.append((pt[0], pt[1], "vertex"))
+    elif t == "ELLIPSE":
+        # AutoCAD: center plus the four axis endpoints.
+        c = entity.dxf.center
+        major = entity.dxf.major_axis
+        minor = entity.minor_axis
+        grips.append((c.x, c.y, "center"))
+        for vec in (major, minor):
+            grips.append((c.x + vec.x, c.y + vec.y, "quadrant"))
+            grips.append((c.x - vec.x, c.y - vec.y, "quadrant"))
     elif t == "IMAGE":
         # AutoCAD: four corner grips; dragging one scales the image.
         try:
@@ -879,6 +894,66 @@ def apply_grip_edit(entity, grip_index: int, role: str, new_point):
         entity.dxf.u_pixel = (u.x * factor, u.y * factor, u.z * factor)
         entity.dxf.v_pixel = (v.x * factor, v.y * factor, v.z * factor)
         return True
+    if t == "SPLINE":
+        points = list(entity.fit_points)
+        if points:
+            if grip_index >= len(points):
+                return False
+            points[grip_index] = (nx, ny, 0)
+            entity.fit_points = points
+            # ezdxf keeps stale control points when only the fit points
+            # move; drop them so every renderer re-fits the curve.
+            if entity.control_points:
+                entity.control_points = []
+            return True
+        points = list(entity.control_points)
+        if grip_index >= len(points):
+            return False
+        points[grip_index] = (nx, ny, 0)
+        entity.control_points = points
+        return True
+    if t == "ELLIPSE":
+        c = entity.dxf.center
+        if role == "center":
+            major = entity.dxf.major_axis
+            entity.dxf.center = (nx, ny, 0)
+            return True
+        # quadrant grips: 1,2 = +/- major axis end, 3,4 = +/- minor end.
+        major = entity.dxf.major_axis
+        major_len = math.hypot(major.x, major.y)
+        if major_len <= 0:
+            return False
+        minor_len = major_len * float(entity.dxf.ratio)
+        if grip_index in (1, 2):
+            vx, vy = nx - c.x, ny - c.y
+            if grip_index == 2:
+                vx, vy = -vx, -vy
+            new_len = math.hypot(vx, vy)
+            if new_len <= 1e-12:
+                return False
+            if minor_len > new_len:
+                # DXF wants ratio <= 1: what the user just made shorter IS
+                # the minor axis now — swap (full ellipse semantics).
+                ux, uy = -vy / new_len, vx / new_len
+                entity.dxf.major_axis = (ux * minor_len, uy * minor_len, 0)
+                entity.dxf.ratio = new_len / minor_len
+            else:
+                entity.dxf.major_axis = (vx, vy, 0)
+                entity.dxf.ratio = minor_len / new_len
+            return True
+        if grip_index in (3, 4):
+            # length of the projection onto the minor direction
+            ux, uy = -major.y / major_len, major.x / major_len
+            new_len = abs((nx - c.x) * ux + (ny - c.y) * uy)
+            if new_len <= 1e-12:
+                return False
+            if new_len > major_len:
+                entity.dxf.major_axis = (ux * new_len, uy * new_len, 0)
+                entity.dxf.ratio = major_len / new_len
+            else:
+                entity.dxf.ratio = new_len / major_len
+            return True
+        return False
     if t == "LINE":
         if role == "mid":               # move whole line
             s, e = entity.dxf.start, entity.dxf.end
