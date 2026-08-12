@@ -283,3 +283,23 @@ def test_a_drawing_opened_as_a_template_keeps_no_file_of_its_own(qapp, tmp_path)
         assert recent_mod.load() == []
     finally:
         win.close()
+
+
+def test_the_current_dimstyle_carries_the_plot_scale(qapp):
+    """cota.dwg's bug: a metres drawing dimensioned with plain ISO-25
+    (dimscale 1) drew its 0.0025-unit text at face value — invisible on a
+    20 m dimension. The renderer reads dimscale from the STYLE, so the
+    template must make the scaled style CURRENT, not just set $DIMSCALE."""
+    from core import actions, templates
+    from core.commands import History
+
+    for key, style, height in (("mm", "ISO-25", 2.5),
+                               ("cm", "Acot-10", 2.5),
+                               ("m", "Acot-100", 0.25)):
+        doc = templates.new_document(key)
+        History(doc).execute(actions.dim_linear((0, 0), (0, 20), (4, 10)))
+        dim = doc.modelspace().query("DIMENSION")[0]
+        assert dim.dxf.dimstyle == style, key
+        block = doc.doc.blocks.get(dim.dxf.geometry)
+        mtext = [e for e in block if e.dxftype() == "MTEXT"][0]
+        assert abs(mtext.dxf.char_height - height) < 1e-9, key

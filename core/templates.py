@@ -125,6 +125,18 @@ def apply_to(document, template: Template) -> None:
     doc.header["$LTSCALE"] = float(template.units_per_mm * template.plot_scale)
     styles_mod.install_default_styles(
         document, unit_factor=template.units_per_mm, overwrite=True)
+    # The CURRENT dimension style must carry the plot scale: the renderer
+    # reads dimscale from the STYLE, not from the $DIMSCALE header, so a
+    # metres drawing dimensioned with plain ISO-25 (dimscale 1) drew its
+    # 0.0025-unit text at face value — invisible on a 20 m dimension.
+    scale = float(template.plot_scale)
+    if scale != 1.0:
+        name = f"Acot-{int(scale) if scale.is_integer() else scale}"
+        if name not in doc.dimstyles:
+            attribs = dict(styles_mod.iso25_for(template.units_per_mm))
+            attribs["dimscale"] = scale
+            doc.dimstyles.new(name, dxfattribs=attribs)
+        doc.header["$DIMSTYLE"] = name
 
 
 def new_document(key: str = DEFAULT_TEMPLATE):
