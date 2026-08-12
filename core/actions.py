@@ -945,6 +945,7 @@ class AddDimensionCommand(Command):
         override = self._factory(document.modelspace(), document)
         override.render()
         self.dim = override.dimension
+        _stamp_dim_block_byblock(document, self.dim)
         self._block_name = self.dim.dxf.get("geometry", None)
         current = document.doc.header.get("$CLAYER", "0")
         if current in document.doc.layers:
@@ -1091,6 +1092,81 @@ def _dim_block_shared(document, name: str) -> bool:
     return False
 
 
+def _stamp_dim_block_byblock(document, dim) -> None:
+    """Make a freshly rendered *D block wear AutoCAD's colors.
+
+    AutoCAD writes dimension-block geometry with color BYBLOCK, so it
+    inherits the dimension's own resolved color (a dim on a red layer
+    draws red). ezdxf's renderer leaves entities without an explicit
+    color — BYLAYER on layer 0, i.e. white — which is why re-rendering a
+    colleague's dimension visibly changed its color. Only entities the
+    style did not explicitly color are stamped.
+    """
+    name = dim.dxf.get("geometry", None)
+    if not name or name not in document.doc.blocks:
+        return
+    for entity in document.doc.blocks.get(name):
+        # BYLAYER-on-layer-0 is ezdxf's "no explicit style color" output;
+        # a real ACI written from dimclrd/dimclre/dimclrt stays untouched.
+        if entity.dxf.get("color", 256) == 256 \
+                and entity.dxf.get("layer", "0") == "0":
+            entity.dxf.color = 0          # BYBLOCK
+
+
+def translate_dim_text(document, dim, dx: float, dy: float) -> bool:
+    """Slide the text entities inside the dimension's block by (dx, dy).
+
+    Used by the text grip: a pure translation keeps every other stroke of
+    the block EXACTLY as its author's CAD rendered it — re-rendering a
+    foreign dimension would replace AutoCAD's block with our
+    approximation. Returns False when there is no block to edit.
+    """
+    name = dim.dxf.get("geometry", None)
+    if not name or name not in document.doc.blocks:
+        return False
+    moved = False
+    for entity in document.doc.blocks.get(name):
+        if entity.dxftype() in ("MTEXT", "TEXT"):
+            entity.translate(dx, dy, 0)
+            moved = True
+    if not moved:
+        return False
+    mid = dim.dxf.get("text_midpoint", None)
+    if mid is not None:
+        dim.dxf.text_midpoint = (mid.x + dx, mid.y + dy, mid.z)
+    # AutoCAD's "user positioned text" flag: its own re-render respects
+    # the moved spot instead of snapping the text back.
+    dim.dxf.dimtype = dim.dxf.dimtype | 128
+    return True
+
+
+class DimTextTranslateCommand(Command):
+    """The text grip: exact-fidelity text move, no block swap."""
+
+    name = "GRIP"
+    needs_regen = True
+
+    def __init__(self, dim, target) -> None:
+        self.dim = dim
+        self.target = (float(target[0]), float(target[1]))
+        self._delta: tuple[float, float] | None = None
+
+    def do(self, document) -> None:
+        mid = self.dim.dxf.get("text_midpoint", None)
+        if self._delta is None:
+            if mid is None:
+                self._delta = (0.0, 0.0)
+            else:
+                self._delta = (self.target[0] - mid.x, self.target[1] - mid.y)
+        translate_dim_text(document, self.dim, *self._delta)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        dx, dy = self._delta or (0.0, 0.0)
+        translate_dim_text(document, self.dim, -dx, -dy)
+        document.dirty = True
+
+
 def _drop_dim_block(document, name) -> None:
     if name and name in document.doc.blocks \
             and not _dim_block_shared(document, name):
@@ -1127,6 +1203,7 @@ class DimGripCommand(Command):
         old_block = d.dxf.get("geometry", None)
         setattr(d.dxf, self.attr, (self.point[0], self.point[1], 0.0))
         d.render()
+        _stamp_dim_block_byblock(document, d)
         _drop_dim_block(document, old_block)
         document.dirty = True
 

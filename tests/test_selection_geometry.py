@@ -389,3 +389,54 @@ def test_dim_grip_command_remeasures_and_undoes():
     assert len(block_names()) == len(before_blocks)
     history.redo()
     assert dim.dxf.defpoint3.x == 45.0
+
+
+def test_the_text_grip_never_swaps_a_foreign_block():
+    """Moving a colleague's dimension text must keep every other stroke of
+    the block exactly as their CAD rendered it (the reported bug: text
+    position and colors changed on grip edits)."""
+    from core.actions import DimTextTranslateCommand
+    from core.commands import History
+
+    doc, msp = _msp()
+    dim = msp.add_linear_dim(base=(0, 10), p1=(0, 0), p2=(30, 0)) \
+             .render().dimension
+    block_name = dim.dxf.geometry
+    block = doc.doc.blocks.get(block_name)
+    lines_before = [(tuple(e.dxf.start), tuple(e.dxf.end))
+                    for e in block if e.dxftype() == "LINE"]
+    mid_before = dim.dxf.text_midpoint
+    history = History(doc)
+    history.execute(DimTextTranslateCommand(dim, (mid_before.x + 5.0,
+                                                  mid_before.y + 3.0)))
+    assert dim.dxf.geometry == block_name          # SAME block, no swap
+    lines_after = [(tuple(e.dxf.start), tuple(e.dxf.end))
+                   for e in block if e.dxftype() == "LINE"]
+    assert lines_after == lines_before             # strokes untouched
+    assert dim.dxf.text_midpoint.x == mid_before.x + 5.0
+    assert dim.dxf.dimtype & 128                   # user-positioned flag
+    history.undo()
+    assert dim.dxf.text_midpoint.x == mid_before.x
+
+
+def test_rendered_dim_blocks_wear_byblock_like_autocads():
+    """ezdxf leaves block geometry BYLAYER-on-0 (white); AutoCAD writes
+    BYBLOCK so a dim on a red layer draws red. Both our creation path and
+    the re-measuring grip stamp the block."""
+    from core import actions
+    from core.commands import History
+
+    doc, msp = _msp()
+    doc.doc.layers.add("COTAS", color=1)
+    doc.doc.header["$CLAYER"] = "COTAS"
+    history = History(doc)
+    history.execute(actions.dim_linear((0, 0), (30, 0), (15, 6)))
+    dim = msp.query("DIMENSION")[0]
+    block = doc.doc.blocks.get(dim.dxf.geometry)
+    lines = [e for e in block if e.dxftype() == "LINE"]
+    assert lines and all(e.dxf.get("color", 256) == 0 for e in lines)
+    # the re-measure grip keeps the convention on its fresh block
+    history.execute(actions.DimGripCommand(dim, "defpoint3", (45.0, 0.0)))
+    block = doc.doc.blocks.get(dim.dxf.geometry)
+    lines = [e for e in block if e.dxftype() == "LINE"]
+    assert lines and all(e.dxf.get("color", 256) == 0 for e in lines)

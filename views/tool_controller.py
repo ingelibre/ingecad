@@ -1473,8 +1473,10 @@ class ToolController(QObject):
             # and drops the old one, which the generic snapshot cannot undo.
             self.window.viewport.unhide_handles([handle])
             if role == "dim_text":
-                command = actions.DimTextEditCommand(
-                    entity, location=(wx, wy))
+                # Pure translation: a foreign dimension keeps its author's
+                # block stroke for stroke (DIMTEDIT still offers the full
+                # re-rendering options when asked for them).
+                command = actions.DimTextTranslateCommand(entity, (wx, wy))
             else:
                 command = actions.DimGripCommand(
                     entity, role[len("dim_"):], (wx, wy))
