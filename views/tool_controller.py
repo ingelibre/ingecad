@@ -451,8 +451,15 @@ class ToolController(QObject):
 
         def commit(content: str, extras: dict) -> None:
             if content.strip():
+                box_second = second
+                new_width = extras.get("width")
+                if new_width:
+                    # The ruler's width arrow moved: keep the left edge, put
+                    # the right one where it was dragged to.
+                    direction = 1.0 if second[0] >= first[0] else -1.0
+                    box_second = (first[0] + direction * new_width, second[1])
                 self._execute(actions.add_mtext(
-                    first, second, content, char_height,
+                    first, box_second, content, char_height,
                     style=extras.get("style"),
                     attachment=extras.get("attachment") or 1))
             self.window.viewport.update()
@@ -494,12 +501,15 @@ class ToolController(QObject):
             else:
                 new = content
             new_style = extras.get("style")
-            if new == text and not new_style:
+            new_width = extras.get("width")
+            if new == text and not new_style and not new_width:
                 return                        # untouched: not an edit
 
             def mutate() -> None:
                 if kind == "MTEXT":
                     entity.text = new
+                    if new_width:
+                        entity.dxf.width = float(new_width)
                 else:
                     entity.dxf.text = new
                 if new_style:

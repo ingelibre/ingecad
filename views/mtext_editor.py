@@ -82,6 +82,12 @@ MIN_HEIGHT_PX = 34
 PROP_ACI = QTextFormat.UserProperty          # int ACI, absent = no code
 PROP_HFACTOR = QTextFormat.UserProperty + 1  # float, factor of char_height
 PROP_FAMILY = QTextFormat.UserProperty + 2   # str, "" = style's own font
+# Block-level (paragraph) logical values, in multiples of char_height:
+PROP_P_INDENT = QTextFormat.UserProperty + 3   # first line, relative to left
+PROP_P_LEFT = QTextFormat.UserProperty + 4
+PROP_P_RIGHT = QTextFormat.UserProperty + 5
+PROP_P_TABS = QTextFormat.UserProperty + 6     # "4,c8,r12" string form
+PROP_P_ALIGN = QTextFormat.UserProperty + 7    # kept only to round-trip
 
 # MText Justification: the nine attachment points, AutoCAD's order/names.
 ATTACHMENTS = (
@@ -98,6 +104,189 @@ def to_editor_text(mtext_content: str) -> str:
 
 def from_editor_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\n", "\\P")
+
+
+class _Ruler(QWidget):
+    """The editor's ruler: width arrow, indent sliders, tab stops.
+
+    What each element does is the researched AutoCAD behavior: the TOP
+    slider is the first line, the BOTTOM slider the turnover lines, a click
+    on the ruler drops a tab of the current type (the button at the left
+    end cycles left/center/right), dragging a stop moves it and dragging it
+    off the ruler removes it, the arrow at the right end drags the MTEXT
+    width and double-clicking it fits the box to the text.
+
+    All values live in multiples of char_height (the MTEXT convention);
+    pixels are derived per paint, so zoom costs nothing.
+    """
+
+    HEIGHT = 18
+
+    def __init__(self, editor) -> None:
+        super().__init__(editor)
+        self.editor = editor
+        self.setFixedHeight(self.HEIGHT)
+        self.setMouseTracking(True)
+        self.tab_type = "l"                 # l / c / r, the Tab Selection
+        self._drag = None                   # ("first"|"left"|"width"|("tab",i))
+        self.setToolTip(tr("Click: add a tab stop. Drag the sliders for the "
+                           "indents, the right arrow for the width."))
+
+    # -- unit mapping ----------------------------------------------------------
+    def _base(self) -> float:
+        return max(self.editor._base_px(), 1)
+
+    def _to_px(self, units: float) -> float:
+        return 4 + units * self._base()     # 4 = the text margin offset
+
+    def _to_units(self, px: float) -> float:
+        return max((px - 4) / self._base(), 0.0)
+
+    # -- painting --------------------------------------------------------------
+    def paintEvent(self, event) -> None:
+        from PySide6.QtGui import QPainter, QPen, QPolygonF
+        from PySide6.QtCore import QPointF
+
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(42, 46, 51))
+        height = self.height()
+        base = self._base()
+        painter.setPen(QPen(QColor(110, 116, 124), 1))
+        # Ticks each char_height; long ones at the default stops (4, 8, …).
+        units = 0
+        while self._to_px(units) < self.width() - 8:
+            x = self._to_px(units)
+            long = units and units % 4 == 0
+            painter.drawLine(QPointF(x, height - (9 if long else 5)),
+                             QPointF(x, height - 2))
+            units += 1
+
+        props = self.editor.current_props()
+        painter.setPen(QPen(QColor(0xE8, 0xC8, 0x60), 1))
+        painter.setBrush(QColor(0xE8, 0xC8, 0x60))
+        # Tab stops of the current paragraph.
+        for stop in props.tab_stops:
+            text = str(stop)
+            kind, value = ("l", text)
+            if text[0] in "cr":
+                kind, value = text[0], text[1:]
+            x = self._to_px(float(value))
+            if kind == "l":
+                painter.drawPolyline([QPointF(x, height - 10),
+                                      QPointF(x, height - 3),
+                                      QPointF(x + 4, height - 3)])
+            elif kind == "r":
+                painter.drawPolyline([QPointF(x, height - 10),
+                                      QPointF(x, height - 3),
+                                      QPointF(x - 4, height - 3)])
+            else:
+                painter.drawLine(QPointF(x, height - 10),
+                                 QPointF(x, height - 3))
+                painter.drawLine(QPointF(x - 3, height - 3),
+                                 QPointF(x + 3, height - 3))
+        # First-line slider (top) and left/hanging slider (bottom).
+        first_x = self._to_px(props.left + props.indent)
+        left_x = self._to_px(props.left)
+        painter.setPen(QPen(QColor(0x8F, 0xB8, 0xD8), 1))
+        painter.setBrush(QColor(0x8F, 0xB8, 0xD8))
+        painter.drawPolygon(QPolygonF([
+            QPointF(first_x - 4, 1), QPointF(first_x + 4, 1),
+            QPointF(first_x, 7)]))
+        painter.drawPolygon(QPolygonF([
+            QPointF(left_x, height - 8), QPointF(left_x + 4, height - 2),
+            QPointF(left_x - 4, height - 2)]))
+        # The width arrow at the right end.
+        arrow_x = self.width() - 6
+        painter.setPen(QPen(QColor(0xF0, 0xF4, 0xF6), 1))
+        painter.setBrush(QColor(0xF0, 0xF4, 0xF6))
+        painter.drawPolygon(QPolygonF([
+            QPointF(arrow_x - 5, height / 2 - 5),
+            QPointF(arrow_x + 1, height / 2),
+            QPointF(arrow_x - 5, height / 2 + 5)]))
+        # Tab Selection button, far left.
+        painter.setPen(QPen(QColor(0xB0, 0xB6, 0xBC), 1))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(1, height // 2 - 6, 11, 12)
+        glyph = {"l": "L", "c": "C", "r": "R"}[self.tab_type]
+        painter.drawText(3, height // 2 + 4, glyph)
+        painter.end()
+
+    # -- interaction -----------------------------------------------------------
+    def _hit(self, pos):
+        props = self.editor.current_props()
+        x, y = pos.x(), pos.y()
+        if x <= 13:
+            return ("type",)
+        if x >= self.width() - 12:
+            return ("width",)
+        first_x = self._to_px(props.left + props.indent)
+        left_x = self._to_px(props.left)
+        if abs(x - first_x) <= 5 and y <= 8:
+            return ("first",)
+        if abs(x - left_x) <= 5 and y >= self.height() - 9:
+            return ("left",)
+        for index, stop in enumerate(props.tab_stops):
+            text = str(stop)
+            value = float(text[1:]) if text[0] in "cr" else float(text)
+            if abs(x - self._to_px(value)) <= 4:
+                return ("tab", index)
+        return None
+
+    def mousePressEvent(self, event) -> None:
+        hit = self._hit(event.position())
+        if hit is None:
+            # Click on open ruler: drop a tab of the current type here.
+            value = round(self._to_units(event.position().x()), 2)
+            stop = value if self.tab_type == "l" else \
+                f"{self.tab_type}{value:g}"
+            props = self.editor.current_props()
+            stops = sorted(
+                list(props.tab_stops) + [stop],
+                key=lambda t: float(str(t)[1:]) if str(t)[0] in "cr"
+                else float(t))
+            self.editor.apply_paragraph_props(tab_stops=tuple(stops))
+            self._drag = ("tab", stops.index(stop))
+            return
+        if hit[0] == "type":
+            order = "lcr"
+            self.tab_type = order[(order.index(self.tab_type) + 1) % 3]
+            self.update()
+            return
+        self._drag = hit
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag is None:
+            return
+        value = round(self._to_units(event.position().x()), 2)
+        kind = self._drag[0]
+        props = self.editor.current_props()
+        if kind == "width":
+            self.editor.set_width_px(event.position().x() + 8)
+        elif kind == "first":
+            self.editor.apply_paragraph_props(
+                indent=round(value - props.left, 2))
+        elif kind == "left":
+            self.editor.apply_paragraph_props(left=value)
+        elif kind == "tab":
+            index = self._drag[1]
+            stops = list(props.tab_stops)
+            if 0 <= index < len(stops):
+                old = str(stops[index])
+                prefix = old[0] if old[0] in "cr" else ""
+                if event.position().y() > self.height() + 12:
+                    stops.pop(index)        # dragged off: remove
+                    self._drag = None
+                else:
+                    stops[index] = f"{prefix}{value:g}" if prefix else value
+                self.editor.apply_paragraph_props(tab_stops=tuple(stops))
+        self.update()
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag = None
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if self._hit(event.position()) == ("width",):
+            self.editor.fit_width()
 
 
 class MTextInPlaceEditor(QWidget):
@@ -160,10 +349,16 @@ class MTextInPlaceEditor(QWidget):
         self.edit.cursorPositionChanged.connect(
             lambda: self._pull_format(self.edit.currentCharFormat()))
 
+        self.ruler = _Ruler(self)
+        if not self.rich or single_line:
+            self.ruler.hide()
+        self.edit.cursorPositionChanged.connect(self.ruler.update)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(1)
         layout.addWidget(self._bar)
+        layout.addWidget(self.ruler)
         layout.addWidget(self.edit, 1)
 
         app = QApplication.instance()
@@ -299,6 +494,101 @@ class MTextInPlaceEditor(QWidget):
         if self._single_line:
             self._bar.hide()
 
+    # -- paragraph (block) plumbing --------------------------------------------
+    def _block_format_for(self, props):
+        from PySide6.QtGui import QTextBlockFormat
+
+        fmt = QTextBlockFormat()
+        fmt.setProperty(PROP_P_INDENT, float(props.indent))
+        fmt.setProperty(PROP_P_LEFT, float(props.left))
+        fmt.setProperty(PROP_P_RIGHT, float(props.right))
+        fmt.setProperty(PROP_P_TABS,
+                        ",".join(str(t) for t in props.tab_stops))
+        fmt.setProperty(PROP_P_ALIGN, int(props.align))
+        self._apply_block_visuals(fmt, props)
+        return fmt
+
+    def _apply_block_visuals(self, fmt, props) -> None:
+        """Visual margins/tabs in px from the logical char_height multiples."""
+        base = self._base_px()
+        fmt.setTextIndent(props.indent * base)
+        fmt.setLeftMargin(props.left * base)
+        fmt.setRightMargin(props.right * base)
+        tabs = []
+        for stop in props.tab_stops:
+            text = str(stop)
+            kind = QTextOption.TabType.LeftTab
+            if text.startswith("c"):
+                kind = QTextOption.TabType.CenterTab
+                text = text[1:]
+            elif text.startswith("r"):
+                kind = QTextOption.TabType.RightTab
+                text = text[1:]
+            try:
+                position = float(text)
+            except ValueError:
+                continue
+            tabs.append(QTextOption.Tab(position * base, kind))
+        fmt.setTabPositions(tabs)
+
+    def _props_of_block(self, block):
+        from ezdxf.tools.text import (MTextParagraphAlignment,
+                                      ParagraphProperties)
+
+        fmt = block.blockFormat()
+        if fmt.property(PROP_P_LEFT) is None \
+                and fmt.property(PROP_P_INDENT) is None:
+            return ParagraphProperties()
+        raw_tabs = fmt.property(PROP_P_TABS) or ""
+        tabs = []
+        for piece in raw_tabs.split(","):
+            piece = piece.strip()
+            if not piece:
+                continue
+            if piece[0] in "cr":
+                tabs.append(piece[0] + f"{float(piece[1:]):g}")
+            else:
+                tabs.append(float(piece))
+        return ParagraphProperties(
+            indent=float(fmt.property(PROP_P_INDENT) or 0.0),
+            left=float(fmt.property(PROP_P_LEFT) or 0.0),
+            right=float(fmt.property(PROP_P_RIGHT) or 0.0),
+            align=MTextParagraphAlignment(
+                int(fmt.property(PROP_P_ALIGN) or 0)),
+            tab_stops=tuple(tabs),
+        )
+
+    def selected_blocks(self):
+        """The blocks the selection covers — the ruler's paragraphs."""
+        cursor = self.edit.textCursor()
+        document = self.edit.document()
+        first = document.findBlock(cursor.selectionStart())
+        last = document.findBlock(cursor.selectionEnd())
+        blocks = [first]
+        while blocks[-1] != last and blocks[-1].isValid():
+            blocks.append(blocks[-1].next())
+        return [b for b in blocks if b.isValid()]
+
+    def apply_paragraph_props(self, **changes) -> None:
+        """The ruler's writes: merge into every selected paragraph."""
+        if not self.rich:
+            return
+        cursor = QTextCursor(self.edit.document())
+        cursor.beginEditBlock()
+        for block in self.selected_blocks():
+            props = self._props_of_block(block)
+            props = props._replace(**changes)
+            edit_cursor = QTextCursor(block)
+            edit_cursor.setBlockFormat(self._block_format_for(props))
+        cursor.endEditBlock()
+        self._sync_geometry()
+        if hasattr(self, "ruler"):
+            self.ruler.update()
+
+    def current_props(self):
+        block = self.edit.textCursor().block()
+        return self._props_of_block(block)
+
     # -- rich-mode plumbing ----------------------------------------------------
     def _base_px(self) -> int:
         return max(int(round(self._char_height * self._scale())), 6)
@@ -329,10 +619,11 @@ class MTextInPlaceEditor(QWidget):
     def _load_runs(self, paragraphs) -> None:
         cursor = QTextCursor(self.edit.document())
         cursor.beginEditBlock()
-        for index, line in enumerate(paragraphs):
+        for index, paragraph in enumerate(paragraphs):
             if index:
                 cursor.insertBlock()
-            for run in line:
+            cursor.setBlockFormat(self._block_format_for(paragraph.resolved()))
+            for run in paragraph.runs:
                 cursor.insertText(run.text, self._format_for(run))
         cursor.endEditBlock()
 
@@ -369,7 +660,8 @@ class MTextInPlaceEditor(QWidget):
                         font=family,
                     ))
                 it += 1
-            paragraphs.append(line)
+            paragraphs.append(mtext_format.Paragraph(
+                runs=line, props=self._props_of_block(block)))
             block = block.next()
         return paragraphs
 
@@ -491,6 +783,13 @@ class MTextInPlaceEditor(QWidget):
                         patch.setProperty(QTextFormat.FontPixelSize, wanted)
                         cursor.mergeCharFormat(patch)
                 it += 1
+            # Block visuals (margins, tabs) are pixel values too: re-derive
+            # them from the stored char_height multiples at the new zoom.
+            block_props = self._props_of_block(block)
+            block_cursor = QTextCursor(block)
+            fmt = block.blockFormat()
+            self._apply_block_visuals(fmt, block_props)
+            block_cursor.setBlockFormat(fmt)
             block = block.next()
         cursor.endEditBlock()
 
@@ -525,11 +824,25 @@ class MTextInPlaceEditor(QWidget):
                          height + bar_height + 4)
 
     # -- lifecycle -------------------------------------------------------------
+    def set_width_px(self, px: float) -> None:
+        """The ruler's width arrow: pixels -> world width, live re-wrap."""
+        scale = self._scale()
+        self._width_world = max(px / scale, 5.0 / scale)
+        self._width_changed = True
+        self._sync_geometry()
+
+    def fit_width(self) -> None:
+        """Double-click on the width arrow: confine the box to the text."""
+        ideal = self.edit.document().idealWidth() + 8
+        self.set_width_px(ideal)
+
     def _extras(self) -> dict:
         style = self.style_combo.currentText()
         return {
             "style": style if style != self._initial_style else None,
             "attachment": self._attachment,
+            "width": self._width_world if getattr(self, "_width_changed",
+                                                  False) else None,
         }
 
     def _teardown(self) -> None:

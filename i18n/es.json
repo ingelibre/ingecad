@@ -947,5 +947,6 @@
   "Bottom Right": "Inferior derecha",
   "This text carries formatting the editor cannot show yet — it is edited as codes so nothing is lost.": "Este texto trae formato que el editor todavía no muestra — se edita como códigos para no perder nada.",
   "Stacking writes \\S codes — available when the text is edited as codes.": "Apilar escribe códigos \\S — disponible cuando el texto se edita como códigos.",
-  "Justification of an existing text keeps its insertion point — not supported yet.": "La justificación de un texto existente conserva su punto de inserción — todavía no soportada."
+  "Justification of an existing text keeps its insertion point — not supported yet.": "La justificación de un texto existente conserva su punto de inserción — todavía no soportada.",
+  "Click: add a tab stop. Drag the sliders for the indents, the right arrow for the width.": "Clic: agrega un tabulador. Arrastrá los deslizadores para las sangrías, la flecha derecha para el ancho."
 }

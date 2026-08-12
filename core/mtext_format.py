@@ -24,7 +24,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
-from ezdxf.tools.text import MTextContext, MTextParser, TokenType
+from ezdxf.tools.text import (MTextContext, MTextParser,
+                              ParagraphProperties, TokenType)
 
 # The default font family the parser reports when no \f code is active.
 _DEFAULT_FAMILY = MTextContext().font_face.family
@@ -54,7 +55,28 @@ class Run:
                 other.font)
 
 
-Paragraphs = list[list[Run]]
+DEFAULT_PROPS = ParagraphProperties()
+
+
+@dataclass
+class Paragraph:
+    """One paragraph: its runs plus AutoCAD's paragraph properties.
+
+    Indents and tab stops are MULTIPLES OF char_height (the ezdxf/DXF
+    convention): left=2 in a 2.5-high text is 5 drawing units. ``indent``
+    is the first line, relative to ``left`` — the same relationship Qt's
+    textIndent has to the left margin, which is what makes the ruler
+    mapping direct.
+    """
+
+    runs: list[Run] = field(default_factory=list)
+    props: Optional[ParagraphProperties] = None    # None: inherit/default
+
+    def resolved(self) -> ParagraphProperties:
+        return self.props if self.props is not None else DEFAULT_PROPS
+
+
+Paragraphs = list[Paragraph]
 
 
 def _run_from_ctx(ctx, char_height: float) -> Run:
@@ -83,9 +105,6 @@ def _representable(ctx) -> bool:
         return False
     if abs(ctx.char_tracking_factor - 1.0) > 1e-9:   # \T
         return False
-    paragraph = ctx.paragraph
-    if paragraph != type(paragraph)():           # \pi / \px paragraph props
-        return False
     return True
 
 
@@ -94,7 +113,7 @@ def _tokens_to_paragraphs(content: str, char_height: float):
     # at factor 1.0 and absolute \H codes resolve against the real height.
     base = MTextContext()
     base.cap_height = char_height if char_height > 0 else 1.0
-    paragraphs: Paragraphs = [[]]
+    paragraphs: Paragraphs = [Paragraph()]
     for token in MTextParser(content, base):
         kind = token.type
         if kind in (TokenType.STACK, TokenType.NEW_COLUMN,
@@ -103,7 +122,7 @@ def _tokens_to_paragraphs(content: str, char_height: float):
         if not _representable(token.ctx):
             return None
         if kind == TokenType.NEW_PARAGRAPH:
-            paragraphs.append([])
+            paragraphs.append(Paragraph())
             continue
         piece = {TokenType.WORD: token.data,
                  TokenType.SPACE: " ",
@@ -111,22 +130,35 @@ def _tokens_to_paragraphs(content: str, char_height: float):
                  TokenType.TABULATOR: "\t"}.get(kind)
         if piece is None:
             continue
+        paragraph = paragraphs[-1]
+        if paragraph.props is None:
+            # The first content token fixes the paragraph's properties.
+            paragraph.props = token.ctx.paragraph
+        elif token.ctx.paragraph != paragraph.props:
+            # A property change MID paragraph has no home in this model.
+            return None
         run = _run_from_ctx(token.ctx, char_height)
-        line = paragraphs[-1]
+        line = paragraph.runs
         if line and line[-1].same_format(run):
             line[-1].text += piece
         else:
             run.text = piece
             line.append(run)
+    # Empty paragraphs inherit backwards, like the codes themselves do.
+    previous = DEFAULT_PROPS
+    for paragraph in paragraphs:
+        if paragraph.props is None:
+            paragraph.props = previous
+        previous = paragraph.props
     return paragraphs
 
 
 def _normalize(paragraphs: Paragraphs) -> list:
     """A comparable snapshot: merged runs, empty runs dropped."""
     out = []
-    for line in paragraphs:
+    for paragraph in paragraphs:
         merged = []
-        for run in line:
+        for run in paragraph.runs:
             if not run.text:
                 continue
             if merged and merged[-1].same_format(run):
@@ -134,9 +166,10 @@ def _normalize(paragraphs: Paragraphs) -> list:
                                      text=merged[-1].text + run.text)
             else:
                 merged.append(replace(run))
-        out.append([(r.text, r.bold, r.italic, r.underline, r.overline,
-                     r.strike, r.aci, r.rgb, round(r.height, 4), r.font)
-                    for r in merged])
+        out.append((paragraph.resolved(),
+                    [(r.text, r.bold, r.italic, r.underline, r.overline,
+                      r.strike, r.aci, r.rgb, round(r.height, 4), r.font)
+                     for r in merged]))
     return out
 
 
@@ -177,11 +210,24 @@ def _height_code(factor: float) -> str:
 
 
 def serialize(paragraphs: Paragraphs) -> str:
-    """Runs -> MTEXT stream. Formatting is brace-scoped so it self-restores."""
+    """Runs -> MTEXT stream. Formatting is brace-scoped so it self-restores.
+
+    Paragraph properties are NOT brace-scoped in MTEXT: a ``\\px`` code holds
+    until the next one, so a paragraph that returns to defaults after a
+    formatted one needs an explicit reset.
+    """
     parts = []
-    for line in paragraphs:
+    previous_props = DEFAULT_PROPS
+    for paragraph in paragraphs:
         line_parts = []
-        for run in line:
+        props = paragraph.resolved()
+        if props != previous_props:
+            code = props.tostring()
+            if not code:                      # back to defaults: reset
+                code = "\\pi0,l0,r0;"
+            line_parts.append(code)
+        previous_props = props
+        for run in paragraph.runs:
             if not run.text:
                 continue
             codes = []

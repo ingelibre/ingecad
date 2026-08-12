@@ -348,7 +348,7 @@ def test_typing_with_bold_writes_a_real_mtext_code(qapp):
         from core.mtext_format import parse_runs
 
         runs = parse_runs(made.text, 2.5)
-        assert [r.bold for r in runs[0]] == [False, True]
+        assert [r.bold for r in runs[0].runs] == [False, True]
     finally:
         win.close()
 
@@ -492,5 +492,157 @@ def test_style_change_applies_to_the_whole_entity(qapp):
         assert mtext.dxf.style == "TITULOS"
         win.history.undo()
         assert mtext.dxf.style == "Standard"
+    finally:
+        win.close()
+
+
+# -- the ruler (step 3) --------------------------------------------------------
+
+def _open_new_editor(win, qapp):
+    win.dispatcher.submit("MTEXT")
+    win.tools.tool.on_point((10.0, 40.0))
+    win.tools.tool.on_point((90.0, 10.0))
+    qapp.processEvents()
+    return win.tools._mtext_editor
+
+
+def test_the_ruler_writes_real_paragraph_codes(qapp):
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        assert editor.ruler.isVisible()
+        QTest.keyClicks(editor.edit, "parrafo con sangria")
+        editor.apply_paragraph_props(indent=2.0, left=1.0,
+                                     tab_stops=(4.0, "c8"))
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        assert made.text == "\\pxi2,l1,t4,c8;parrafo con sangria"
+    finally:
+        win.close()
+
+
+def test_a_text_with_paragraph_codes_reopens_rich_with_the_ruler(qapp):
+    win = _editor_window(qapp)
+    try:
+        mtext = win.document.modelspace().add_mtext(
+            "\\pxi-2,l2;colgante", dxfattribs={"char_height": 2.5,
+                                               "width": 60.0})
+        mtext.set_location((10.0, 40.0))
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.on_canvas_double_click(11.0, 39.0)
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        assert editor.rich, "paragraph codes must not force raw mode anymore"
+        props = editor.current_props()
+        assert props.indent == -2.0 and props.left == 2.0
+        editor.cancel(ask=False)
+    finally:
+        win.close()
+
+
+def test_each_paragraph_keeps_its_own_indents(qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        QTest.keyClicks(editor.edit, "primero")
+        editor.apply_paragraph_props(left=2.0)
+        QTest.keyClick(editor.edit, Qt.Key_Return)
+        QTest.keyClicks(editor.edit, "segundo")
+        editor.apply_paragraph_props(left=0.0)   # back to the margin
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        from core.mtext_format import parse_runs
+
+        paragraphs = parse_runs(made.text, 2.5)
+        assert paragraphs[0].resolved().left == 2.0
+        assert paragraphs[1].resolved().left == 0.0
+    finally:
+        win.close()
+
+
+def test_the_width_arrow_changes_the_box_of_a_new_text(qapp):
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        QTest.keyClicks(editor.edit, "ancho nuevo")
+        scale = editor._scale()
+        editor.set_width_px(40.0 * scale)        # drag to 40 units
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        assert made.dxf.width == pytest.approx(40.0, rel=1e-6)
+    finally:
+        win.close()
+
+
+def test_the_width_arrow_resizes_an_existing_text(qapp):
+    win = _editor_window(qapp)
+    try:
+        mtext = win.document.modelspace().add_mtext(
+            "nota para angostar", dxfattribs={"char_height": 2.5,
+                                              "width": 80.0})
+        mtext.set_location((10.0, 40.0))
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.on_canvas_double_click(11.0, 39.0)
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        editor.set_width_px(30.0 * editor._scale())
+        editor.commit()
+        qapp.processEvents()
+        assert mtext.dxf.width == pytest.approx(30.0, rel=1e-6)
+        win.history.undo()
+        assert mtext.dxf.width == pytest.approx(80.0)
+    finally:
+        win.close()
+
+
+def test_double_click_on_the_width_arrow_fits_the_box(qapp):
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        QTest.keyClicks(editor.edit, "corto")
+        editor.fit_width()
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        # The 80-unit drag box shrank to hug the word.
+        assert made.dxf.width < 30.0
+    finally:
+        win.close()
+
+
+def test_tab_characters_round_trip_through_the_stream(qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        editor.apply_paragraph_props(tab_stops=(4.0,))
+        QTest.keyClicks(editor.edit, "N")
+        QTest.keyClick(editor.edit, Qt.Key_Tab)
+        QTest.keyClicks(editor.edit, "1050")
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        assert made.text == "\\pxt4;N\t1050"
     finally:
         win.close()
