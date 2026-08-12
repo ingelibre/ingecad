@@ -419,6 +419,40 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🧭 RUMBO ESTRATÉGICO (2026-08-12) — consolidar, quick wins, y COMPLEMENTOS
+
+Marco revisó los 13 menús de BricsCAD Ultimate (capturas) y validó la dirección. Decisiones:
+
+1. **No perseguir a BricsCAD.** Ultimate marea al usuario (3D, paramétricos, nubes de
+   puntos, sheet sets — el civil 2D usa ~20%). El filtro maestro sigue mandando; IngeCAD
+   compite siendo *el AutoCAD LT que no marea*, no BricsCAD gratis.
+2. **La interfaz clásica se queda** (reafirmado). Ni ribbon ni rediseño: hasta BricsCAD
+   corre en modo "Toolbars (Classic)". El crecimiento por disciplinas NO pasa por más
+   toolbars en el núcleo, pasa por complementos (abajo).
+3. **Quick wins aprobados (en este orden):** barra **Standard** (New/Open/Save/Plot/
+   Undo/Copy/Paste/Zoom…) → **IMAGE** (insertar imágenes raster; ezdxf IMAGE/IMAGEDEF,
+   render = quad con textura) → **TABLE** (tablas; prerrequisito del cuadro de coordenadas
+   de topografía) → **PDF underlay** (calcar sobre PDF; rasterizar con QtPdf, tratar como
+   imagen). De paso: **DRAWORDER** y **LAYISO/LAYOFF** (baratos, uso diario).
+   REVCLOUD ya existía (auditoría de dibujo); faltaba su ícono en la toolbar Draw.
+4. **Arquitectura de COMPLEMENTOS (modelo QGIS) — la decisión estructural.** El núcleo =
+   AutoCAD LT (dibujar/editar/imprimir DWG). Cada disciplina civil — topografía,
+   movimiento de tierras, carreteras, canales, saneamiento — es un complemento que al
+   activarse agrega UN menú propio, opcionalmente una toolbar (apagable), y sus comandos
+   en el dispatcher; al desactivarse desaparece todo (cero contaminación para el que solo
+   dibuja). Gestor tipo QGIS en Herramientas > Complementos; primero complementos
+   incluidos, terceros después. **El principio #4 (acciones headless + dispatcher) ya es
+   la infraestructura**: un plugin = paquete Python que registra comandos y su menú. El
+   contrato del plugin se diseña CON el primer caso real: **Topografía = complemento #1
+   (v0.4)** — no diseñar la API en abstracto.
+5. **Scripting: Python sobre `actions`, no LISP.** El equivalente moderno de AutoLISP
+   (la rutina del cuadro de coordenadas que todos se pasan) es scripting Python sobre la
+   capa de acciones, como QGIS. Un traductor de AutoLISP puede existir algún día; los
+   complementos y las macros salen del mismo mecanismo.
+6. **Consolidar antes que agregar:** el plano real de dogfooding comando a comando
+   (memoria `[[proxima-sesion-plano-vs-bricscad]]`) y la ventana de configuración
+   siguen pendientes y van antes de cualquier feature grande nueva.
+
 ### 🧭 RUMBO ACORDADO (2026-08-09) — próxima sesión: Layout en IngeCAD, cerrar v0.1 con r2004
 
 Marco validó la recomendación estratégica. **Orden de trabajo decidido:**

@@ -994,6 +994,7 @@ class MainWindow(QMainWindow):
 
         draw = [("LINE", tr("Line")), ("PLINE", tr("Polyline")),
                 ("CIRCLE", tr("Circle")), ("ARC", tr("Arc")),
+                ("REVCLOUD", tr("Revision Cloud")),
                 ("ELLIPSE", tr("Ellipse")), ("RECTANG", tr("Rectangle")),
                 ("POLYGON", tr("Polygon")), ("POINT", tr("Point")),
                 ("TEXT", tr("Text")), ("MTEXT", tr("Multiline text")),
@@ -1032,7 +1033,57 @@ class MainWindow(QMainWindow):
             act.triggered.connect(lambda _=False, n=name: self._invoke_command(n))
             self._modify_toolbar.addAction(act)
         self.addToolBar(Qt.TopToolBarArea, self._modify_toolbar)
+        self._build_standard_toolbar()
         self._build_props_toolbar()
+
+    def _build_standard_toolbar(self) -> None:
+        """The classic Standard toolbar, in AutoCAD's own order (the 2011
+        toolbar, filtered to what IngeCAD does): file group, clipboard +
+        Match Properties, undo/redo, then the navigation group."""
+        from PySide6.QtWidgets import QToolBar
+
+        from views.icons import command_icon
+
+        bar = QToolBar(tr("Standard"), self)
+        bar.setObjectName("standard_toolbar")
+        bar.setMovable(True)
+
+        def cmd(name: str, label: str) -> None:
+            act = QAction(command_icon(name), label, self)
+            act.setToolTip(f"{label} ({name})")
+            act.triggered.connect(lambda _=False, n=name: self._invoke_command(n))
+            bar.addAction(act)
+
+        def direct(icon: str, label: str, slot) -> None:
+            act = QAction(command_icon(icon), label, self)
+            act.setToolTip(label)
+            act.triggered.connect(lambda _=False: slot())
+            bar.addAction(act)
+
+        direct("NEW", tr("New"), self.new_document)
+        direct("OPEN", tr("Open"), self._open_dialog)
+        direct("SAVE", tr("Save"), self.save_document)
+        cmd("PLOT", tr("Plot"))
+        bar.addSeparator()
+        cmd("CUTCLIP", tr("Cut"))
+        cmd("COPYCLIP", tr("Copy"))
+        cmd("PASTECLIP", tr("Paste"))
+        cmd("MATCHPROP", tr("Match Properties"))
+        bar.addSeparator()
+        direct("UNDO", tr("Undo"), self._cmd_undo)
+        direct("REDO", tr("Redo"), self._cmd_redo)
+        bar.addSeparator()
+        cmd("PAN", tr("Pan"))
+        direct("ZOOM_WINDOW", tr("Zoom Window"),
+               lambda: self._invoke_command("ZOOM"))
+        direct("ZOOM_PREVIOUS", tr("Zoom Previous"),
+               self.viewport.zoom_previous)
+        direct("ZOOM_EXTENTS", tr("Zoom Extents"), self.viewport.zoom_extents)
+
+        self._standard_toolbar = bar
+        # Above Modify, like AutoCAD stacks them.
+        self.insertToolBar(self._modify_toolbar, bar)
+        self.insertToolBarBreak(self._modify_toolbar)
 
     def _build_props_toolbar(self) -> None:
         """BricsCAD-style quick Layer + Properties bar on top."""

@@ -226,3 +226,20 @@ def test_the_settings_dialog_can_clear_and_select_everything(win):
         assert dialog.modes() == set(osnap_modes.AVAILABLE)
     finally:
         dialog.deleteLater()
+
+
+def test_the_standard_toolbar_exists_with_the_classic_order(qapp):
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        labels = [a.text() for a in win._standard_toolbar.actions()
+                  if not a.isSeparator()]
+        assert labels[:4] == ["New", "Open", "Save", "Plot"]
+        assert "Match Properties" in labels and "Zoom Previous" in labels
+        # and REVCLOUD reached the Draw toolbar (it had a glyph, no button)
+        draw = [a.text() for a in win._draw_toolbar.actions()]
+        assert any("Revision" in t for t in draw)
+    finally:
+        win.close()

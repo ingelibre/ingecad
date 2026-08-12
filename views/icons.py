@@ -559,6 +559,34 @@ def _saveas():
     return pm
 
 
+def _save():
+    """The diskette alone — SAVE, next to Save As's labelled one."""
+    pm, p = _canvas()
+    p.drawRect(QRectF(4, 4, 16, 16))                 # the diskette
+    p.drawRect(QRectF(9, 4, 7, 5))                   # shutter
+    p.drawRect(QRectF(7, 13, 10, 7))                 # label
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.2))
+    p.drawLine(9, 16, 15, 16)                        # a written line
+    p.restore()
+    p.end()
+    return pm
+
+
+def _zoom_previous():
+    """The magnifier with a back arrow — ZOOM Previous."""
+    pm, p = _canvas()
+    _magnifier(p)
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.4))
+    p.drawLine(13, 10, 7, 10)                        # arrow back
+    p.drawLine(7, 10, 10, 7)
+    p.drawLine(7, 10, 10, 13)
+    p.restore()
+    p.end()
+    return pm
+
+
 def _plotprint():
     pm, p = _canvas()
     p.drawRect(QRectF(4, 9, 16, 8))                  # printer body
@@ -969,10 +997,12 @@ _PAINTERS = {
     "MVIEW": _mview, "VPLOCK": _vplock, "PAGESETUP": _pagesetup,
     "LAYOUT": _layout,
     # application menus (File / Edit / View / Insert / Format)
-    "NEW": _new, "OPEN": _open, "SAVEAS": _saveas, "PLOT": _plotprint,
+    "NEW": _new, "OPEN": _open, "SAVE": _save, "SAVEAS": _saveas,
+    "PLOT": _plotprint,
     "UNDO": _undo, "REDO": _redo,
     "CUTCLIP": _cutclip, "COPYCLIP": _copyclip, "PASTECLIP": _pasteclip,
     "ZOOM_EXTENTS": _zoom_extents, "ZOOM_WINDOW": _zoom_window,
+    "ZOOM_PREVIOUS": _zoom_previous,
     "PAN": _pan, "REGEN": _regen,
     "LAYER": _layers, "LINETYPE": _linetype, "STYLE": _textstyle,
     "BLOCK": _block,
