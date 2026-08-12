@@ -158,9 +158,14 @@ class VertexBackend(Backend):
     def draw_filled_paths(
         self, paths: Iterable[BkPath2d], properties: BackendProperties
     ) -> None:
-        # Each path may carry holes as sub-paths (glyphs like "O", hatch
-        # islands). The largest ring is the exterior — the frontend guarantees
-        # holes lie inside their path's exterior.
+        # Each path may carry several sub-paths: holes (the "O", hatch
+        # islands) but ALSO detached outlines — the tilde of an "ñ", the
+        # dot of an "i", a hatch with separate lobes. "Largest ring is the
+        # exterior, the rest are holes" silently DROPPED every detached
+        # outline (an outside "hole" tessellates to nothing): baño drew as
+        # bano. Classify by even-odd nesting instead: a ring inside an even
+        # number of others is an exterior, odd makes it a hole of its
+        # innermost container.
         for path in paths:
             rings = [list(sub.flattening(self._flatten)) for sub in path.sub_paths()]
             rings = [r for r in rings if len(r) >= 3]
@@ -173,7 +178,24 @@ class VertexBackend(Backend):
                 bucket = self._bucket(properties)
                 bucket.text_height_sum += max(ys) - min(ys)
                 bucket.text_count += 1
-            self._fill(rings[0], rings[1:], properties)
+            groups: list[tuple[list, list]] = []   # (exterior, holes)
+            group_of: dict[int, int] = {}          # ring index -> group index
+            for i, ring in enumerate(rings):
+                containers = [j for j in range(i)
+                              if _point_in_ring(ring[0], rings[j])]
+                if len(containers) % 2 == 0:
+                    group_of[i] = len(groups)
+                    groups.append((ring, []))
+                else:
+                    # innermost container: the smallest ring holding it
+                    # (rings are sorted big to small, so the last one).
+                    owner = containers[-1]
+                    while owner not in group_of and containers:
+                        containers.pop()
+                        owner = containers[-1] if containers else 0
+                    groups[group_of.get(owner, 0)][1].append(ring)
+            for exterior, holes in groups:
+                self._fill(exterior, holes, properties)
 
     def _fill(
         self,
@@ -227,6 +249,22 @@ class VertexBackend(Backend):
 
     def finalize(self) -> None:
         pass
+
+
+def _point_in_ring(point, ring) -> bool:
+    """Ray-cast point-in-polygon over a flattened ring (Vec2 list)."""
+    x, y = point.x, point.y
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        yi, yj = ring[i].y, ring[j].y
+        if (yi > y) != (yj > y):
+            xi, xj = ring[i].x, ring[j].x
+            if x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+                inside = not inside
+        j = i
+    return inside
 
 
 def _ring_extent(ring: list[Vec2]) -> float:

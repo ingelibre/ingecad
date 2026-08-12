@@ -377,3 +377,26 @@ def test_bold_and_italic_reach_the_canvas():
     italic = glyphs(r"{\fArial|b0|i1;PRUEBA}")
     assert plain.shape != bold.shape or not np.allclose(plain, bold)
     assert plain.shape != italic.shape or not np.allclose(plain, italic)
+
+
+def test_detached_glyph_parts_render():
+    """baño drew as bano: the filler took the LARGEST ring as the exterior
+    and every other sub-path as a hole — the ñ's tilde and the i's dot are
+    detached outlines, and an outside "hole" tessellates to nothing. The
+    even-odd nesting classifier keeps them (and keeps the O's hole a hole)."""
+    def verts(txt):
+        doc = Document.new()
+        e = doc.modelspace().add_text(txt, dxfattribs={"height": 2.5})
+        scene = build_scene(doc)
+        return sum(n for _b, _s, n in scene.handle_ranges.get(e.dxf.handle, []))
+
+    assert verts("ñ") > verts("n")          # the tilde
+    assert verts("i") > verts("l")          # the dot
+    assert verts("á") > verts("a")          # the accent
+    # and a ring INSIDE another is still a hole: the O is not a filled disc
+    doc = Document.new()
+    o = doc.modelspace().add_text("O", dxfattribs={"height": 2.5})
+    disc = doc.modelspace().add_circle((50, 0), 1.25)  # nothing to compare
+    scene = build_scene(doc)
+    o_verts = sum(n for _b, _s, n in scene.handle_ranges[o.dxf.handle])
+    assert o_verts > 0
