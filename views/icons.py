@@ -505,9 +505,28 @@ def _measure():
 
 
 def _revcloud():
+    """A closed cloud of outward scallops, like BricsCAD's toolbar icon:
+    semicircles bulging outward over the chords of an oval."""
+    import math
+
+    from PySide6.QtGui import QPainterPath
+
     pm, p = _canvas()
-    for cx, cy in ((7, 9), (12, 7), (17, 9), (18, 14), (13, 16), (7, 15)):
-        p.drawArc(QRectF(cx - 3, cy - 3, 6, 6), 0, 300 * 16)
+    cx, cy, rx, ry = 12.0, 12.5, 8.2, 6.2
+    n = 8
+    pts = [(cx + rx * math.cos(2 * math.pi * i / n + 0.4),
+            cy + ry * math.sin(2 * math.pi * i / n + 0.4)) for i in range(n)]
+    path = QPainterPath()
+    for i in range(n):
+        ax, ay = pts[i]
+        bx, by = pts[(i + 1) % n]
+        mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+        r = math.hypot(bx - ax, by - ay) / 2.0
+        start = math.degrees(math.atan2(-(ay - my), ax - mx))
+        if i == 0:
+            path.moveTo(ax, ay)
+        path.arcTo(QRectF(mx - r, my - r, 2 * r, 2 * r), start, -180)
+    p.drawPath(path)
     p.end()
     return pm
 
