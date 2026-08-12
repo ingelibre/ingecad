@@ -65,13 +65,16 @@ _TEXT_TYPES = frozenset(("TEXT", "MTEXT", "ATTRIB", "ATTDEF"))
 class VertexBackend(Backend):
     """Collects frontend primitives into per-(layer, color) buckets."""
 
-    def __init__(self, flatten_distance: float) -> None:
+    def __init__(self, flatten_distance: float,
+                 order_groups: dict[str, int] | None = None) -> None:
         super().__init__()
         self.buckets: dict[tuple, Bucket] = {}
         self._flatten = flatten_distance
+        self._order_groups = order_groups or {}
         self._kind = ""
         self._handle = None
-        # (kind, owner) per open entity. The frontend NESTS these calls: an
+        self._group = 0
+        # (kind, owner, group) per open entity. The frontend NESTS these: an
         # INSERT is entered, then each of its sub-entities, up to three deep in
         # real drawings.
         self._open: list[tuple[str, str | None]] = []
@@ -90,8 +93,11 @@ class VertexBackend(Backend):
         # screen until the next full regen.
         if self._open and self._open[-1][1] is not None:
             handle = self._open[-1][1]
-        self._open.append((kind, handle))
-        self._kind, self._handle = kind, handle
+        # The DRAWORDER group follows the same outermost-owner attribution.
+        group = (self._open[-1][2] if self._open
+                 else self._order_groups.get(handle, 0))
+        self._open.append((kind, handle, group))
+        self._kind, self._handle, self._group = kind, handle, group
 
     def exit_entity(self, entity) -> None:
         super().exit_entity(entity)
@@ -100,16 +106,17 @@ class VertexBackend(Backend):
         # Restore the enclosing entity's context rather than clearing it: a
         # parent keeps emitting primitives after a child exits, and those used
         # to come out unowned (and untyped, which also mis-keyed their bucket).
-        self._kind, self._handle = self._open[-1] if self._open else ("", None)
+        self._kind, self._handle, self._group = (
+            self._open[-1] if self._open else ("", None, 0))
 
     def _bucket(self, properties: BackendProperties) -> Bucket:
-        key = (properties.layer, properties.color, properties.lineweight,
-               self._kind)
+        key = (self._group, properties.layer, properties.color,
+               properties.lineweight, self._kind)
         bucket = self.buckets.get(key)
         if bucket is None:
             bucket = self.buckets[key] = Bucket(
                 properties.layer, properties.color, properties.lineweight,
-                self._kind,
+                self._kind, group=self._group,
             )
         return bucket
 
@@ -412,7 +419,9 @@ def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     else:
         layout, layout_name = pick_layout(document)
     flatten = _flatten_distance(layout)
-    backend = VertexBackend(flatten)
+    from core.draworder import order_groups
+
+    backend = VertexBackend(flatten, order_groups(layout))
     context = TolerantRenderContext(document.doc)
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
     frontend.draw_layout(layout)

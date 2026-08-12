@@ -64,6 +64,10 @@ class Bucket:
     color: str
     lineweight: float = 0.25                              # mm, resolved
     kind: str = ""                                        # "T" = text glyphs
+    # DRAWORDER group: -1 sent to back, +1 brought to front, 0 default. The
+    # packer sorts buckets by their dict key, and the backend puts this group
+    # FIRST in that key, so back draws under everything and front over.
+    group: int = 0
     lines: list[float] = field(default_factory=list)      # x,y per endpoint
     triangles: list[float] = field(default_factory=list)  # x,y per corner
     points: list[float] = field(default_factory=list)     # x,y per point

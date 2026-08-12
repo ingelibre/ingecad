@@ -70,6 +70,7 @@ DEFAULT_ALIASES: dict[str, str] = {
     "P": "PAN",
     "DI": "DIST",
     "AA": "AREA",
+    "DR": "DRAWORDER",
     "LI": "LIST",
     "LS": "LIST",
     "X": "EXPLODE",

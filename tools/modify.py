@@ -551,6 +551,138 @@ def _number(text: str):
         return None
 
 
+class DrawOrderTool(Tool):
+    """DRAWORDER: send the selection to back / bring it to front.
+
+    Above/Under relative to reference objects are not offered — the canvas
+    batches by layer/color and only honors the absolute groups, and the
+    prompt lists only what it can do (the PEDIT rule).
+    """
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "DRAWORDER"
+        self._entities: list = []
+
+    def on_selection(self, entities: list) -> None:
+        if not entities:
+            self.ctx.finish()
+            return
+        self._entities = entities
+        self.ctx.prompt(tr("Enter object ordering option [Front/Back] <Back>:"))
+
+    def _apply(self, mode: str) -> None:
+        from core.draworder import DrawOrderCommand
+
+        self.ctx.execute(DrawOrderCommand(self._entities, mode))
+        self.ctx.echo(tr("{count} object(s) reordered.",
+                         count=len(self._entities)))
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        if not self._entities:
+            return False
+        word = text.strip().upper()
+        if word in ("F", "FRONT"):
+            self._apply("front")
+            return True
+        if word in ("B", "BACK", ""):
+            self._apply("back")
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        if self._entities:
+            self._apply("back")
+
+
+def _layer_names_of(entities: list) -> list[str]:
+    seen: list[str] = []
+    for entity in entities:
+        name = entity.dxf.get("layer", "0")
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _layers_off_command(document, keep: set[str], name: str):
+    """One undo step turning off every layer not in ``keep``."""
+    from core.commands import CompositeCommand
+    from core.layers import LayerPropertyCommand
+
+    commands = []
+    for layer in document.doc.layers:
+        lname = layer.dxf.name
+        if lname not in keep and layer.is_on():
+            commands.append(LayerPropertyCommand(lname, "on", False))
+    return CompositeCommand(name, commands) if commands else None
+
+
+class LayIsoTool(Tool):
+    """LAYISO: hide every layer except those of the selected objects.
+
+    AutoCAD's Off mode (Command Reference p. 1005). The previous on/off
+    state is remembered on the document for LAYUNISO, session-scoped like
+    AutoCAD's.
+    """
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "LAYISO"
+
+    def selection_prompt(self) -> str:
+        return tr("Select objects on the layer(s) to be isolated:")
+
+    def on_selection(self, entities: list) -> None:
+        if not entities:
+            self.ctx.finish()
+            return
+        document = self.ctx.services.window.document
+        keep = set(_layer_names_of(entities))
+        document._layiso_prev = {
+            layer.dxf.name: layer.is_on() for layer in document.doc.layers}
+        command = _layers_off_command(document, keep, tr("isolate layers"))
+        if command is None:
+            self.ctx.echo(tr("All layers were already isolated."))
+        else:
+            self.ctx.execute(command)
+            self.ctx.echo(tr("Isolated: {names}.", names=", ".join(sorted(keep))))
+        self.ctx.finish()
+
+
+class LayOffTool(Tool):
+    """LAYOFF: turn off the layer of each picked object, until Enter."""
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "LAYOFF"
+        self.ctx.prompt(
+            tr("Select an object on the layer to be turned off or [Undo]:"))
+
+    def on_point(self, point: Point) -> None:
+        services = self.ctx.services
+        entity = services.pick_entity(point) if services else None
+        if entity is None:
+            return
+        from core.layers import LayerPropertyCommand
+
+        name = entity.dxf.get("layer", "0")
+        self.ctx.execute(LayerPropertyCommand(name, "on", False))
+        self.ctx.echo(tr('Layer "{name}" has been turned off.', name=name))
+
+    def on_option(self, text: str) -> bool:
+        if text.strip().upper() in ("U", "UNDO"):
+            self.ctx.undo_last()
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        self.ctx.finish()
+
+
 MODIFY_TOOL_CLASSES = {
     "STRETCH": StretchTool,
     "BREAK": BreakTool,
@@ -559,4 +691,7 @@ MODIFY_TOOL_CLASSES = {
     "ARRAY": ArrayTool,
     "MATCHPROP": MatchPropTool,
     "PEDIT": PeditTool,
+    "DRAWORDER": DrawOrderTool,
+    "LAYISO": LayIsoTool,
+    "LAYOFF": LayOffTool,
 }

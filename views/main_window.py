@@ -471,6 +471,11 @@ class MainWindow(QMainWindow):
         item(format_menu, tr("Layers..."), self.toggle_layers_panel,
              icon="LAYER")
         cmd_item(format_menu, tr("Linetype..."), "LINETYPE")
+        layer_tools = format_menu.addMenu(tr("Layer Tools"))
+        cmd_item(layer_tools, tr("Layer Isolate"), "LAYISO", icon=False)
+        cmd_item(layer_tools, tr("Layer Unisolate"), "LAYUNISO", icon=False)
+        cmd_item(layer_tools, tr("Layer Off"), "LAYOFF", icon=False)
+        cmd_item(layer_tools, tr("Turn All Layers On"), "LAYON", icon=False)
         format_menu.addSeparator()
         item(format_menu, tr("Text Style..."), self.toggle_styles_panel,
              icon="STYLE")
@@ -549,6 +554,7 @@ class MainWindow(QMainWindow):
 
         # -- Tools ------------------------------------------------------------
         tools_menu = menu_bar.addMenu(tr("Tools"))
+        cmd_item(tools_menu, tr("Draw Order"), "DRAWORDER", icon=False)
         inquiry_menu = tools_menu.addMenu(tr("Inquiry"))
         cmd_item(inquiry_menu, tr("Distance"), "DIST", icon=False)
         cmd_item(inquiry_menu, tr("Area"), "AREA", icon=False)
@@ -1653,8 +1659,11 @@ class MainWindow(QMainWindow):
                      "REVCLOUD",
                      "DIST", "ID", "AREA", "LIST",
                      "STRETCH", "BREAK", "JOIN",
-                     "CHAMFER", "ARRAY", "MATCHPROP", "PEDIT"):
+                     "CHAMFER", "ARRAY", "MATCHPROP", "PEDIT",
+                     "DRAWORDER", "LAYISO", "LAYOFF"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
+        d.register("LAYON", lambda *a: self._cmd_layon())
+        d.register("LAYUNISO", lambda *a: self._cmd_layuniso())
         d.register("SAVE", lambda *a: self.save_document())
         d.register("QSAVE", lambda *a: self.save_document())
         d.register("UNITS", lambda *a: self._units_dialog())
@@ -2053,6 +2062,48 @@ class MainWindow(QMainWindow):
             return
         self.regen_in_memory()
         self.command_line.echo(tr("Regenerating..."))
+
+    def _cmd_layon(self) -> None:
+        """LAYON: turn on every layer, one undo step."""
+        from core.commands import CompositeCommand
+        from core.layers import LayerPropertyCommand
+
+        if self.document is None:
+            return
+        commands = [LayerPropertyCommand(layer.dxf.name, "on", True)
+                    for layer in self.document.doc.layers
+                    if not layer.is_on()]
+        if not commands:
+            self.command_line.echo(tr("All layers are already on."))
+            return
+        self.history.execute(CompositeCommand(tr("all layers on"), commands))
+        self.command_line.echo(tr("All layers have been turned on."))
+        self.regen_in_memory()
+
+    def _cmd_layuniso(self) -> None:
+        """LAYUNISO: restore the state LAYISO saved (session-scoped)."""
+        from core.commands import CompositeCommand
+        from core.layers import LayerPropertyCommand
+
+        if self.document is None:
+            return
+        prev = getattr(self.document, "_layiso_prev", None)
+        if not prev:
+            self.command_line.echo(
+                tr("No LAYISO state to restore in this session."))
+            return
+        commands = []
+        for layer in self.document.doc.layers:
+            name = layer.dxf.name
+            if name in prev and layer.is_on() != prev[name]:
+                commands.append(LayerPropertyCommand(name, "on", prev[name]))
+        self.document._layiso_prev = None
+        if commands:
+            self.history.execute(
+                CompositeCommand(tr("unisolate layers"), commands))
+        self.command_line.echo(
+            tr("Layers isolated by LAYISO have been restored."))
+        self.regen_in_memory()
 
     def _cmd_undo(self, *args) -> None:
         command = self.history.undo()
