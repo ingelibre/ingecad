@@ -243,3 +243,38 @@ def test_the_standard_toolbar_exists_with_the_classic_order(qapp):
         assert any("Revision" in t for t in draw)
     finally:
         win.close()
+
+
+def test_clean_screen_hides_all_but_the_command_window(qapp):
+    """AutoCAD's CLEANSCREEN rule: toolbars and docks go, the command
+    window, menu and status bar stay — and restoring honors what was
+    already hidden."""
+    from PySide6.QtWidgets import QDockWidget, QToolBar
+
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        win.show()
+        win._draw_toolbar.hide()          # the user had hidden this one
+        menu_before = win.menuBar().isVisible()
+        win.toggle_clean_screen()
+        assert not win._standard_toolbar.isVisible()
+        assert not win._modify_toolbar.isVisible()
+        assert not win._layers_dock.isVisible()
+        assert win._command_dock.isVisible()
+        assert win.menuBar().isVisible() == menu_before   # untouched
+        win.toggle_clean_screen()
+        assert win._standard_toolbar.isVisible()
+        assert win._layers_dock.isVisible()
+        assert not win._draw_toolbar.isVisible()   # stays as the user left it
+        # the explicit commands force a state instead of toggling
+        win.dispatcher.submit("CLEANSCREENON")
+        assert not win._modify_toolbar.isVisible()
+        win.dispatcher.submit("CLEANSCREENON")     # already on: no flip
+        assert not win._modify_toolbar.isVisible()
+        win.dispatcher.submit("CLEANSCREENOFF")
+        assert win._modify_toolbar.isVisible()
+    finally:
+        win.close()

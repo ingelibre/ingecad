@@ -441,6 +441,8 @@ class MainWindow(QMainWindow):
         item(view_menu, tr("Pan"), lambda: self._invoke_command("PAN"),
              icon="PAN")
         item(view_menu, tr("Regenerate"), self.regen_in_memory, icon="REGEN")
+        clean = item(view_menu, tr("Clean Screen"), self.toggle_clean_screen)
+        clean.setShortcut("Ctrl+0")
         view_menu.addSeparator()
         # Classic AutoCAD: View > Viewports (paper-space floating viewports).
         vp_menu = view_menu.addMenu(tr("Viewports"))
@@ -634,6 +636,7 @@ class MainWindow(QMainWindow):
         dock.setFeatures(QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetMovable)
         dock.setTitleBarWidget(QWidget(dock))  # slim: no dock title bar
         self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+        self._command_dock = dock
 
         self.history = History()
         self.dispatcher = Dispatcher(echo=self.command_line.echo)
@@ -1670,6 +1673,8 @@ class MainWindow(QMainWindow):
                      "DRAWORDER", "LAYISO", "LAYOFF", "IMAGEATTACH",
                      "TABLE", "PDFATTACH"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
+        d.register("CLEANSCREENON", lambda *a: self._clean_screen(True))
+        d.register("CLEANSCREENOFF", lambda *a: self._clean_screen(False))
         d.register("LAYON", lambda *a: self._cmd_layon())
         d.register("LAYUNISO", lambda *a: self._cmd_layuniso())
         d.register("SAVE", lambda *a: self.save_document())
@@ -2070,6 +2075,41 @@ class MainWindow(QMainWindow):
             return
         self.regen_in_memory()
         self.command_line.echo(tr("Regenerating..."))
+
+    def toggle_clean_screen(self) -> None:
+        """Ctrl+0 / CLEANSCREENON / CLEANSCREENOFF.
+
+        AutoCAD's rule (Command Reference p. 331): clears toolbars and
+        dockable windows EXCLUDING the command window; the menu bar, the
+        layout tabs and the status bar stay. Toggling back restores each
+        bar to the visibility it had — one the user had already hidden
+        stays hidden.
+        """
+        from PySide6.QtWidgets import QDockWidget, QToolBar
+
+        saved = getattr(self, "_clean_screen_saved", None)
+        if saved is None:
+            bars = [w for w in (
+                        list(self.findChildren(
+                            QToolBar, options=Qt.FindDirectChildrenOnly))
+                        + list(self.findChildren(
+                            QDockWidget, options=Qt.FindDirectChildrenOnly)))
+                    if w is not self._command_dock]
+            self._clean_screen_saved = [(w, w.isVisible()) for w in bars]
+            for w in bars:
+                w.hide()
+            self.command_line.echo(tr("Clean screen ON (Ctrl+0 restores)."))
+        else:
+            self._clean_screen_saved = None
+            for w, visible in saved:
+                w.setVisible(visible)
+            self.command_line.echo(tr("Clean screen off."))
+
+    def _clean_screen(self, on: bool) -> None:
+        """CLEANSCREENON / CLEANSCREENOFF force a state; Ctrl+0 toggles."""
+        active = getattr(self, "_clean_screen_saved", None) is not None
+        if on != active:
+            self.toggle_clean_screen()
 
     def _cmd_layon(self) -> None:
         """LAYON: turn on every layer, one undo step."""
