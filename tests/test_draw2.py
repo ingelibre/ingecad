@@ -963,3 +963,21 @@ def test_the_caret_is_visible_the_moment_the_editor_opens(qapp):
             qapp.processEvents()
     finally:
         win.close()
+
+
+def test_the_editor_shows_a_pointer_over_its_chrome(qapp):
+    """The viewport blanks the OS cursor (the crosshair is the cursor), and
+    child widgets inherit that: the toolbar and ruler were operated with an
+    invisible pointer."""
+    from PySide6.QtCore import Qt
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        assert editor.cursor().shape() == Qt.ArrowCursor
+        assert editor.ruler.cursor().shape() == Qt.SizeHorCursor
+        # And the canvas itself keeps its blank cursor for the crosshair.
+        assert win.viewport.cursor().shape() == Qt.BlankCursor
+        editor.cancel(ask=False)
+    finally:
+        win.close()

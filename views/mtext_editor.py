@@ -127,6 +127,8 @@ class _Ruler(QWidget):
         self.editor = editor
         self.setFixedHeight(self.HEIGHT)
         self.setMouseTracking(True)
+        # Everything on the ruler is dragged horizontally.
+        self.setCursor(Qt.SizeHorCursor)
         self.tab_type = "l"                 # l / c / r, the Tab Selection
         self._drag = None                   # ("first"|"left"|"width"|("tab",i))
         self.setToolTip(tr("Click: add a tab stop. Drag the sliders for the "
@@ -330,6 +332,12 @@ class MTextInPlaceEditor(QWidget):
 
         self.setObjectName("MTextInPlaceEditor")
         self.setStyleSheet(_FRAME)
+        # The viewport hides the OS pointer (the crosshair IS the cursor in
+        # model space) and children inherit that: the toolbar buttons and
+        # the ruler were operated with an invisible pointer. The editor is
+        # ordinary UI — give it an ordinary arrow; the text area keeps the
+        # I-beam QTextEdit sets on its own viewport.
+        self.setCursor(Qt.ArrowCursor)
 
         self.edit = QTextEdit(self)
         self.edit.setAcceptRichText(False)
