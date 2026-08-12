@@ -1422,6 +1422,11 @@ def _restore_entity(entity, snapshot) -> None:
         entity.dxf.set(key, value)
     if entity.dxftype() == "LWPOLYLINE":
         entity.set_points(snapshot.get_points("xyseb"), format="xyseb")
+    elif entity.dxftype() == "MTEXT":
+        # The content lives in the entity's text stream, not in a DXF
+        # attribute — without this, undoing an MTEXT edit restored the
+        # position and silently kept the new words.
+        entity.text = snapshot.text
 
 
 def apply_in_place(history, entities, mutate) -> None:

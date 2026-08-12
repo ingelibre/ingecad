@@ -1748,7 +1748,14 @@ class MainWindow(QMainWindow):
         double-click on empty paper leaves it (PSPACE)."""
         from core import layouts as layout_ops
 
-        if self.document is None or self._active_layout == "Model":
+        if self.document is None:
+            return
+        if self._active_layout == "Model":
+            # Model space: double-click a text and edit it where it stands
+            # (TEXTED 0 / the MTEXT editor — the AutoCAD double-click).
+            entity = self.tools.pick_entity((wx, wy))
+            if entity is not None:
+                self.tools.open_text_editor_for(entity)
             return
         layout = self.document.doc.layouts.get(self._active_layout)
         vp = layout_ops.viewport_hit(layout, wx, wy)

@@ -437,6 +437,73 @@ class ToolController(QObject):
         return tool.live_text() if tool is not None and hasattr(tool, "live_text") \
             else None
 
+    # -- the in-place MTEXT editor ---------------------------------------------
+    def open_mtext_editor(self, first, second, char_height: float) -> None:
+        """MTEXT's two corners placed: edit the new text on the canvas."""
+        from views.mtext_editor import MTextInPlaceEditor
+
+        top_left = (min(first[0], second[0]), max(first[1], second[1]))
+        width = abs(second[0] - first[0])
+
+        def commit(content: str) -> None:
+            if content.strip():
+                self._execute(actions.add_mtext(first, second, content,
+                                                char_height))
+            self.window.viewport.update()
+
+        self._mtext_editor = MTextInPlaceEditor(
+            self.window.viewport, top_left=top_left, width_world=width,
+            char_height=char_height, text="", on_commit=commit)
+
+    def open_text_editor_for(self, entity) -> bool:
+        """Double-click on a TEXT/MTEXT: edit it in place. True if handled.
+
+        The anchor is the entity's insert point; for MTEXT attachment points
+        other than top-left the editor sits close to, not exactly on, the
+        text — a step-1 simplification, not a rule.
+        """
+        from views.mtext_editor import MTextInPlaceEditor
+
+        kind = entity.dxftype()
+        if kind not in ("MTEXT", "TEXT"):
+            return False
+        insert = entity.dxf.insert
+        if kind == "MTEXT":
+            char_height = float(entity.dxf.char_height or 2.5)
+            width = float(entity.dxf.get("width", 0) or 0)
+            if width <= 0:
+                width = 40.0 * char_height    # unwrapped: a workable box
+            text = entity.text
+            single = False
+        else:
+            char_height = float(entity.dxf.height or 2.5)
+            width = max(len(entity.dxf.text), 8) * char_height
+            text = entity.dxf.text
+            single = True
+
+        def commit(content: str) -> None:
+            if kind == "TEXT":
+                new = content.replace("\\P", " ")
+            else:
+                new = content
+            if new == text:
+                return                        # untouched: not an edit
+            def mutate() -> None:
+                if kind == "MTEXT":
+                    entity.text = new
+                else:
+                    entity.dxf.text = new
+            actions.apply_in_place(self.window.history, [entity], mutate)
+            self.window.regen_in_memory()
+            self.window.viewport.update()
+
+        self._mtext_editor = MTextInPlaceEditor(
+            self.window.viewport,
+            top_left=(insert.x, insert.y),
+            width_world=width, char_height=char_height, text=text,
+            on_commit=commit, single_line=single)
+        return True
+
     def _ask_text(self, prompt: str, default: str = "") -> Optional[str]:
         from PySide6.QtWidgets import QInputDialog
 

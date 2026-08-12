@@ -921,5 +921,9 @@
   "{mode}: {state}": "{mode}: {state}",
   "Current {prop}: {value}": "{prop} actual: {value}",
   "Default": "Por defecto",
-  "ByBlock": "PorBloque"
+  "ByBlock": "PorBloque",
+  "OK": "Aceptar",
+  "Save and close (Ctrl+Enter)": "Guardar y cerrar (Ctrl+Intro)",
+  "Text Editor": "Editor de texto",
+  "Discard the changes to this text?": "¿Descartar los cambios de este texto?"
 }

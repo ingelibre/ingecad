@@ -1028,6 +1028,14 @@ class MTextTool(Tool):
             self.last_point = point
             self.ctx.prompt(tr("Specify opposite corner:"))
         else:
+            # The in-place editor when the GUI provides one; the plain text
+            # prompt keeps the tool testable headless.
+            services = self.ctx.services
+            opener = getattr(services, "open_mtext_editor", None)
+            if opener is not None:
+                opener(self._first, point, type(self).default_height)
+                self.ctx.finish()
+                return
             content = self.ctx.ask_text(tr("Enter text:"), "")
             if content:
                 self.ctx.execute(actions.add_mtext(
