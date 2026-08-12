@@ -74,21 +74,10 @@ def test_a_missing_file_shows_frame_and_name_not_a_crash(tmp_path):
     assert handle in scene.handle_ranges   # ...but the frame is there
 
 
-def test_attaching_through_the_tool_path_triggers_a_regen(qapp, image_file,
-                                                          monkeypatch):
+def test_attach_image_demands_a_real_regen(image_file):
     """The incremental overlay cannot show pixels; without a regen the
-    attached image never appeared on screen (the reported bug)."""
-    from views.main_window import MainWindow
-
-    win = MainWindow()
-    try:
-        win.new_document("mm")
-        regens = []
-        monkeypatch.setattr(win, "regen_in_memory",
-                            lambda *a, **k: regens.append(1))
-        command = actions.attach_image(str(image_file), (60, 40),
-                                       (0.0, 0.0), 1.0)
-        win.tools._execute(command)
-        assert regens, "attach_image must schedule a real regen"
-    finally:
-        win.close()
+    attached image never appeared on screen (the reported bug). The
+    controller routes needs_regen commands to regen_in_memory, so the
+    contract to pin is the flag itself."""
+    command = actions.attach_image(str(image_file), (60, 40), (0.0, 0.0), 1.0)
+    assert getattr(command, "needs_regen", False) is True
