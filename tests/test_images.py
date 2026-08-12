@@ -155,3 +155,40 @@ def test_transparency_toggles_the_flag_with_undo(image_file):
     assert image.dxf.flags & Image.USE_TRANSPARENCY
     history.undo()
     assert int(image.dxf.flags) == before
+
+
+def test_the_properties_panel_exposes_image_display_rows(qapp, image_file):
+    """BricsCAD sets image transparency from the Properties panel; ours
+    lists the same block: position, size, brightness/contrast/fade,
+    transparency, show, file."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        win.history.execute(actions.attach_image(str(image_file), (60, 40),
+                                                 (0.0, 0.0), 1.0))
+        image = win.document.modelspace().query("IMAGE")[0]
+        win.tools.selection = {image.dxf.handle}
+        panel = win._properties_panel
+        panel.refresh()                        # adopt the selection
+        sections = panel._schema([image])
+        titles = [t for t, _rows in sections]
+        assert any("Image" in t for t in titles)
+        image_rows = next(rows for t, rows in sections if "Image" in t)
+        labels = [r.label for r in image_rows]
+        for wanted in ("Brightness", "Contrast", "Fade", "Transparency",
+                       "Width", "Height"):
+            assert any(wanted in l for l in labels), wanted
+        # the transparency setter round-trips through the flag
+        transparency = next(r for r in image_rows if "Transparency" in r.label)
+        assert transparency.get(image) is False
+        transparency.apply(True)
+        from ezdxf.entities.image import Image
+        assert image.dxf.flags & Image.USE_TRANSPARENCY
+        assert getattr(win.history._undo[-1], "needs_regen", False) is True
+        win._cmd_undo()
+        assert not (image.dxf.flags & Image.USE_TRANSPARENCY)
+    finally:
+        win.document.dirty = False
+        win.close()

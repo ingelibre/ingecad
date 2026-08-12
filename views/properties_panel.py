@@ -244,10 +244,16 @@ class PropertiesPanel(QWidget):
             self.window.tools._execute(
                 actions.SetPropertyCommand(ents, prop, value))
 
-    def _in_place(self, mutate) -> None:
+    def _in_place(self, mutate, regen: bool = False) -> None:
         ents = self._active()
         if ents:
             actions.apply_in_place(self.window.history, ents, mutate)
+            if regen:
+                # Pixels (an image's shading or frame) only land through the
+                # real regen — and so must undo/redo of this edit.
+                self.window.history._undo[-1].needs_regen = True
+                self.window.regen_in_memory()
+                return
             # instant look while the async regen catches up: hide the stale
             # base copies, show the mutated entities through the overlay
             tools = self.window.tools
@@ -511,6 +517,81 @@ _TYPE_LABEL = {
     "HATCH": "Hatch", "DIMENSION": "Dimension",
 }
 
+def _image_rows(panel, e):
+    from ezdxf.entities.image import Image as _Image
+
+    def adjust(attr):
+        def apply(value):
+            value = int(max(0, min(100, value)))
+            panel._in_place(
+                lambda: [setattr(x.dxf, attr, value) for x in panel._active()],
+                regen=True)
+        return apply
+
+    def set_flag(bit):
+        def apply(on):
+            def mutate():
+                for x in panel._active():
+                    x.dxf.flags = (x.dxf.flags | bit) if on \
+                        else (x.dxf.flags & ~bit)
+            panel._in_place(mutate, regen=True)
+        return apply
+
+    def set_size(axis):
+        def apply(value):
+            def mutate():
+                for x in panel._active():
+                    size = x.dxf.image_size
+                    px = size.x if axis == 0 else size.y
+                    if px <= 0 or value <= 0:
+                        continue
+                    vec = x.dxf.u_pixel if axis == 0 else x.dxf.v_pixel
+                    import math
+                    length = math.hypot(vec.x, vec.y, vec.z)
+                    if length <= 0:
+                        continue
+                    factor = (value / px) / length
+                    scaled = (vec.x * factor, vec.y * factor, vec.z * factor)
+                    if axis == 0:
+                        x.dxf.u_pixel = scaled
+                    else:
+                        x.dxf.v_pixel = scaled
+            panel._in_place(mutate, regen=True)
+        return apply
+
+    def width(x):
+        import math
+        u = x.dxf.u_pixel
+        return x.dxf.image_size.x * math.hypot(u.x, u.y, u.z)
+
+    def height(x):
+        import math
+        v = x.dxf.v_pixel
+        return x.dxf.image_size.y * math.hypot(v.x, v.y, v.z)
+
+    yesno = [(tr("Yes"), True), (tr("No"), False)]
+    rows = _pt_rows(panel, "insert", tr("Position"))
+    rows += [
+        Row(tr("Width"), "num", width, set_size(0)),
+        Row(tr("Height"), "num", height, set_size(1)),
+        Row(tr("Brightness"), "num", lambda x: x.dxf.get("brightness", 50),
+            adjust("brightness")),
+        Row(tr("Contrast"), "num", lambda x: x.dxf.get("contrast", 50),
+            adjust("contrast")),
+        Row(tr("Fade"), "num", lambda x: x.dxf.get("fade", 0),
+            adjust("fade")),
+        Row(tr("Transparency"), "combo",
+            lambda x: bool(x.dxf.flags & _Image.USE_TRANSPARENCY),
+            set_flag(_Image.USE_TRANSPARENCY), yesno),
+        Row(tr("Show image"), "combo",
+            lambda x: bool(x.dxf.flags & _Image.SHOW_IMAGE),
+            set_flag(_Image.SHOW_IMAGE), yesno),
+        Row(tr("File"), "ro",
+            lambda x: x.image_def.dxf.filename if x.image_def else "?"),
+    ]
+    return (tr("Image"), rows)
+
+
 _TYPE_ROWS = {
     "LINE": _line_rows,
     "CIRCLE": _circle_rows,
@@ -522,4 +603,5 @@ _TYPE_ROWS = {
     "MTEXT": _mtext_rows,
     "INSERT": _insert_rows,
     "HATCH": _hatch_rows,
+    "IMAGE": _image_rows,
 }
