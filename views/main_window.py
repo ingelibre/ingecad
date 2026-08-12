@@ -1094,9 +1094,9 @@ class MainWindow(QMainWindow):
         direct("ZOOM_EXTENTS", tr("Zoom Extents"), self.viewport.zoom_extents)
 
         self._standard_toolbar = bar
-        # Above Modify, like AutoCAD stacks them.
+        # One row with Modify — screens are wide; the user can drag them
+        # apart if they prefer AutoCAD's stack.
         self.insertToolBar(self._modify_toolbar, bar)
-        self.insertToolBarBreak(self._modify_toolbar)
 
     def _build_props_toolbar(self) -> None:
         """BricsCAD-style quick Layer + Properties bar on top."""
