@@ -183,9 +183,71 @@ class _TwoPointDim(_DimTextMixin, Tool):
         """A real-looking dimension preview (frame + measurement) or None."""
         if self._p1 is None or self._p2 is None:
             return None
+        cursor = self._adjust_location(cursor)
         d1, d2 = self._frame(cursor)
         return {"p1": self._p1, "p2": self._p2, "d1": d1, "d2": d2,
                 "text": self._preview_text(self._measurement(cursor))}
+
+    # -- dimension-line alignment (the green square) ---------------------------
+    align_marker: Point | None = None
+
+    def _adjust_location(self, point: Point) -> Point:
+        """AutoCAD's chained-dimension aid: placing the line NEAR an
+        existing parallel dimension's line snaps to the same offset, so
+        adjacent dimensions align — announced by a green square marker.
+        One source of truth: the preview and the placing click both come
+        through here, so what the marker promises is what the click does."""
+        self.align_marker = None
+        threshold = self._align_threshold()
+        if threshold is None:
+            return point
+        angle = self._align_angle(point)
+        if angle is None:
+            return point
+        axis = 1 if angle == 0.0 else 0     # horizontal dims share a Y
+        best = None
+        for dim in self._existing_dims():
+            if abs((dim.dxf.get("angle", 0.0) % 180.0) - angle) > 0.01:
+                continue
+            defpoint = dim.dxf.get("defpoint", None)
+            if defpoint is None:
+                continue
+            coord = (defpoint.x, defpoint.y)[axis]
+            distance = abs(point[axis] - coord)
+            if distance <= threshold and (best is None or distance < best[0]):
+                best = (distance, coord)
+        if best is None:
+            return point
+        adjusted = list(point)
+        adjusted[axis] = best[1]
+        self.align_marker = (adjusted[0], adjusted[1])
+        return tuple(adjusted)
+
+    def _align_threshold(self) -> float | None:
+        """SNAP_PX in world units, or None when no view is around."""
+        services = self.ctx.services
+        window = getattr(services, "window", None)
+        view = getattr(getattr(window, "viewport", None), "view", None)
+        if view is None or not getattr(view, "scale", 0):
+            return None
+        return 12.0 / view.scale
+
+    def _align_angle(self, point: Point):
+        """0/90 when this tool draws an axis-parallel dimension line."""
+        angle = getattr(self, "_forced_angle", None)
+        if angle is None and hasattr(self, "_angle_for"):
+            angle = self._angle_for(point)
+        if angle in (0.0, 90.0):
+            return angle
+        return None
+
+    def _existing_dims(self):
+        window = getattr(self.ctx.services, "window", None)
+        document = getattr(window, "document", None)
+        if document is None:
+            return []
+        return [e for e in document.modelspace().query("DIMENSION")
+                if (e.dxf.dimtype & 7) in (0, 1)]
 
     def on_enter(self) -> None:
         if self._text_enter():
@@ -225,6 +287,7 @@ class _TwoPointDim(_DimTextMixin, Tool):
             self.last_point = point
             self.ctx.prompt(self._location_prompt())
         else:
+            point = self._adjust_location(point)
             cmd = self._make(point)
             self.ctx.execute(cmd)
             if cmd.dim is not None and (cmd.dim.dxf.dimtype & 15) in (0, 1):

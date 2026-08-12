@@ -1080,6 +1080,16 @@ class Viewport(QOpenGLWidget):
         dim = delegate.preview_dimension()
         if dim is not None:
             self._draw_dim_preview(p, dim, preview_color)
+            marker = getattr(delegate.tool, "align_marker", None)
+            if marker is not None:
+                # AutoCAD's chained-dimension aid: the green square where
+                # the new line locked onto an existing dimension's line.
+                mx, my = self.view.world_to_screen(*marker)
+                half = self.MARKER_SIZE / 2.0
+                p.save()
+                p.setPen(QPen(QColor(80, 220, 80), 2))
+                p.drawRect(mx - half, my - half, 2 * half, 2 * half)
+                p.restore()
         else:
             for (ax, ay), (bx, by) in delegate.preview_segments():
                 x1, y1 = self.view.world_to_screen(ax, ay)

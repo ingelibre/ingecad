@@ -691,3 +691,88 @@ def test_diagonal_origins_follow_the_side_the_cursor_leaves():
     assert tool._angle_for((15.0, 27.0)) == 0.0     # above it
     assert tool._angle_for((15.0, -6.0)) == 0.0     # below it
     assert tool._angle_for((36.0, 22.0)) == 90.0    # corner: x exceeded more
+
+
+# -- chained-dimension alignment (the green square) ----------------------------
+
+class _AlignServices(Services):
+    """Services with a window exposing the document, like the real app."""
+
+    def __init__(self, document):
+        super().__init__(document)
+        class _View:
+            scale = 1.0
+        class _Viewport:
+            view = _View()
+        class _Window:
+            viewport = _Viewport()
+        self.window = _Window()
+        self.window.document = document
+
+
+def _align_harness():
+    h = Harness()
+    try:
+        h.ctx.services = _AlignServices(h.document)
+    except AttributeError:            # frozen dataclass ToolContext
+        h.ctx = h.ctx.__class__(**{**h.ctx.__dict__,
+                                   "services": _AlignServices(h.document)})
+    return h
+
+
+def test_placing_near_an_existing_dim_line_snaps_to_it():
+    h = _align_harness()
+    first = DimLinearTool(h.ctx)
+    first.start()
+    first.on_point((0.0, 0.0)); first.on_point((10.0, 0.0))
+    first.on_point((5.0, 10.0))                 # dim line at y=10
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((10.0, 0.0)); tool.on_point((20.0, 0.0))
+    # threshold is 12 px / scale 1 = 12 units here; place close to y=10
+    tool.on_point((15.0, 10.4))
+    dims = h.msp.query("DIMENSION")
+    assert len(dims) == 2
+    assert dims[-1].dxf.defpoint.y == pytest.approx(10.0)   # snapped
+
+
+def test_far_from_any_dim_line_no_snap_no_marker():
+    h = _align_harness()
+    first = DimLinearTool(h.ctx)
+    first.start()
+    first.on_point((0.0, 0.0)); first.on_point((10.0, 0.0))
+    first.on_point((5.0, 10.0))
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((10.0, 0.0)); tool.on_point((20.0, 0.0))
+    tool.preview_dimension((15.0, 40.0))
+    assert tool.align_marker is None
+    tool.on_point((15.0, 40.0))
+    assert h.msp.query("DIMENSION")[-1].dxf.defpoint.y == pytest.approx(40.0)
+
+
+def test_the_preview_announces_the_snap_with_a_marker():
+    h = _align_harness()
+    first = DimLinearTool(h.ctx)
+    first.start()
+    first.on_point((0.0, 0.0)); first.on_point((10.0, 0.0))
+    first.on_point((5.0, 10.0))
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((10.0, 0.0)); tool.on_point((20.0, 0.0))
+    dim = tool.preview_dimension((15.0, 9.5))
+    assert tool.align_marker == (15.0, 10.0)
+    assert dim["d1"][1] == pytest.approx(10.0)   # the preview line sits aligned
+
+
+def test_vertical_chains_align_on_x():
+    h = _align_harness()
+    first = DimLinearTool(h.ctx)
+    first.start()
+    first.on_point((0.0, 0.0)); first.on_point((0.0, 8.0))
+    first.on_point((-6.0, 4.0))                  # vertical, line at x=-6
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((0.0, 8.0)); tool.on_point((0.0, 20.0))
+    tool.on_point((-6.3, 14.0))
+    assert h.msp.query("DIMENSION")[-1].dxf.defpoint.x == pytest.approx(-6.0)
