@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import ezdxf
 import pytest
@@ -980,4 +981,114 @@ def test_the_editor_shows_a_pointer_over_its_chrome(qapp):
         assert win.viewport.cursor().shape() == Qt.BlankCursor
         editor.cancel(ask=False)
     finally:
+        win.close()
+
+
+# -- the unsaved-changes prompt (AutoCAD's CLOSE rule) -------------------------
+
+def test_a_clean_drawing_closes_without_asking(qapp, monkeypatch):
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QMessageBox
+
+    win = _editor_window(qapp)
+    try:
+        monkeypatch.setattr(QMessageBox, "warning",
+                            lambda *a, **k: pytest.fail("asked on a clean doc"))
+        event = QCloseEvent()
+        win.closeEvent(event)
+        assert event.isAccepted()
+    finally:
+        win.close()
+
+
+def test_a_dirty_drawing_asks_and_cancel_keeps_it_open(qapp, monkeypatch):
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QMessageBox
+
+    win = _editor_window(qapp)
+    try:
+        win.document.dirty = True
+        monkeypatch.setattr(QMessageBox, "warning",
+                            lambda *a, **k: QMessageBox.Cancel)
+        event = QCloseEvent()
+        win.closeEvent(event)
+        assert not event.isAccepted()
+        assert win.document.dirty
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_discard_closes_without_saving(qapp, monkeypatch):
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QMessageBox
+
+    win = _editor_window(qapp)
+    try:
+        win.document.dirty = True
+        monkeypatch.setattr(QMessageBox, "warning",
+                            lambda *a, **k: QMessageBox.Discard)
+        event = QCloseEvent()
+        win.closeEvent(event)
+        assert event.isAccepted()
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_save_writes_the_file_and_then_closes(qapp, monkeypatch, tmp_path):
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QMessageBox
+
+    win = _editor_window(qapp)
+    try:
+        target = tmp_path / "obra.dxf"
+        win.document.save_as(target)          # give it a home first
+        win.document.dirty = True
+        monkeypatch.setattr(QMessageBox, "warning",
+                            lambda *a, **k: QMessageBox.Save)
+        event = QCloseEvent()
+        win.closeEvent(event)
+        assert event.isAccepted()
+        assert target.exists() and not win.document.dirty
+    finally:
+        win.close()
+
+
+def test_a_cancelled_save_as_keeps_the_window_open(qapp, monkeypatch):
+    """Save on an unnamed drawing opens Save As; cancelling THAT must also
+    cancel the close — otherwise the work is lost through the back door."""
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    win = _editor_window(qapp)
+    try:
+        win.document.dirty = True
+        monkeypatch.setattr(QMessageBox, "warning",
+                            lambda *a, **k: QMessageBox.Save)
+        monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                            lambda *a, **k: ("", ""))
+        event = QCloseEvent()
+        win.closeEvent(event)
+        assert not event.isAccepted()
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_open_and_new_are_guarded_too(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    win = _editor_window(qapp)
+    try:
+        win.document.dirty = True
+        doc = win.document
+        monkeypatch.setattr(QMessageBox, "warning",
+                            lambda *a, **k: QMessageBox.Cancel)
+        win.new_document("mm")
+        assert win.document is doc            # Cancel kept the drawing
+        win.open_path(Path("no-importa.dxf"))
+        assert win.document is doc
+    finally:
+        win.document.dirty = False
         win.close()

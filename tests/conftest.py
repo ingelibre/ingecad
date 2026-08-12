@@ -27,3 +27,19 @@ def qapp():
 
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+@pytest.fixture(autouse=True)
+def _no_modal_close_prompt(monkeypatch):
+    """A modal dialog in a headless test is a hang, not a question.
+
+    The unsaved-changes prompt (MainWindow.closeEvent) would block every
+    ``win.close()`` on a dirtied document. Default to Discard; the tests
+    that exercise the prompt monkeypatch ``QMessageBox.warning`` again
+    themselves, which overrides this fixture for that test.
+    """
+    mod = sys.modules.get("PySide6.QtWidgets")
+    if mod is not None:
+        monkeypatch.setattr(mod.QMessageBox, "warning",
+                            lambda *a, **k: mod.QMessageBox.Discard)
+    yield

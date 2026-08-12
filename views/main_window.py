@@ -956,6 +956,8 @@ class MainWindow(QMainWindow):
     def new_document(self, template: str | None = None) -> None:
         from core import templates as templates_mod
 
+        if not self.maybe_save_changes():
+            return
         self.document = templates_mod.new_document(
             template or self.startup_template())
         self._active_layout = "Model"
@@ -2206,10 +2208,10 @@ class MainWindow(QMainWindow):
         if filename:
             self.open_path(Path(filename))
 
-    def _save_as_dialog(self) -> None:
+    def _save_as_dialog(self) -> bool:
         if self.document is None:
             self.command_line.echo(tr("Nothing to save yet"))
-            return
+            return False
         filename, selected = QFileDialog.getSaveFileName(
             self,
             tr("Save Drawing As"),
@@ -2217,31 +2219,57 @@ class MainWindow(QMainWindow):
             tr("DWG (*.dwg);;DXF (*.dxf)"),
         )
         if not filename:
-            return
+            return False
         path = Path(filename)
         if path.suffix.lower() not in (".dwg", ".dxf"):
             path = path.with_suffix(".dwg" if "dwg" in selected.lower() else ".dxf")
-        self._write_document(path)
+        return self._write_document(path)
 
-    def save_document(self) -> None:
+    def save_document(self) -> bool:
         """SAVE / QSAVE / Ctrl+S — write over the file that is open.
 
         A drawing that has never been written has nowhere to go, so it falls
         through to Save As, which is what AutoCAD does with an unnamed
-        drawing.
+        drawing. Returns True when the drawing actually reached disk, so the
+        close-time prompt knows whether it is safe to go.
         """
         if self.document is None:
             self.command_line.echo(tr("Nothing to save yet"))
-            return
+            return False
         if self.document.path is None:
-            self._save_as_dialog()
-            return
-        self._write_document(self.document.path)
+            return self._save_as_dialog()
+        return self._write_document(self.document.path)
 
-    def _write_document(self, path: Path) -> None:
+    def maybe_save_changes(self) -> bool:
+        """True when it is safe to replace or discard the current drawing.
+
+        AutoCAD's rule (CLOSE, Command Reference p. 335): "If you modified
+        the drawing since it was last saved, you are prompted to save or
+        discard the changes." Cancel keeps the drawing as it was.
+        """
+        if self.document is None or not self.document.dirty:
+            return True
+        answer = QMessageBox.warning(
+            self,
+            tr("IngeCAD"),
+            tr("Save changes to {name}?", name=self.document.name),
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+        if answer == QMessageBox.Save:
+            return self.save_document()
+        return answer == QMessageBox.Discard
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if self.maybe_save_changes():
+            event.accept()
+        else:
+            event.ignore()
+
+    def _write_document(self, path: Path) -> bool:
         """The shared tail of SAVE and SAVEAS: write, report, warn."""
         if self.document is None:
-            return
+            return False
         try:
             engine, warnings = self.document.save_as(path)
         except Exception as exc:
@@ -2250,7 +2278,7 @@ class MainWindow(QMainWindow):
                 tr("Save Drawing"),
                 tr("Cannot save {name}: {error}", name=path.name, error=str(exc)),
             )
-            return
+            return False
         from core import recent as recent_mod
 
         recent_mod.add(path)
@@ -2276,6 +2304,7 @@ class MainWindow(QMainWindow):
                    "as DXF instead — DXF is always exact.",
                    name=path.name, detail=detail),
             )
+        return True
 
     def open_path(self, path: Path, as_template: bool = False) -> None:
         """OS file associations, argv[1], and File > Open land here.
@@ -2283,6 +2312,8 @@ class MainWindow(QMainWindow):
         ``as_template`` keeps the content and drops the origin, so the drawing
         becomes an unnamed new one.
         """
+        if not self.maybe_save_changes():
+            return
         self._open_as_template = bool(as_template)
         if path.suffix.lower() == ".dwg":
             from formats.dwg_bridge import have_dwg_support
