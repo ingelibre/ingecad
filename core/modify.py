@@ -606,6 +606,8 @@ class MatchPropCommand(Command):
     def __init__(self, source, targets, properties=MATCH_PROPERTIES) -> None:
         self.source = source
         self.targets = list(targets)
+        # the display paths collect touched entities from .entities
+        self.entities = self.targets
         self.properties = tuple(properties)
         self._before: list = []
         self._before_xdata: list = []
@@ -700,6 +702,19 @@ def _match_style(source, target) -> None:
             target.dxf.style = source.dxf.style
         except Exception:
             pass
+        # "changes the text style AND PROPERTIES" (Text special property,
+        # p. 1081) — the height crosses TEXT<->MTEXT too.
+        height = (source.dxf.char_height
+                  if source.dxftype() == "MTEXT"
+                  else source.dxf.get("height", None))
+        if height:
+            try:
+                if target.dxftype() == "MTEXT":
+                    target.dxf.char_height = height
+                else:
+                    target.dxf.height = height
+            except Exception:
+                pass
     if source.dxftype() == "DIMENSION" and target.dxftype() == "DIMENSION":
         try:
             target.dxf.dimstyle = source.dxf.dimstyle

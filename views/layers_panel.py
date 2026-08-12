@@ -44,8 +44,13 @@ ACI_NAMES = {
 
 
 def aci_to_qcolor(index: int) -> QColor:
-    r, g, b = ACI_RGB.get(index, (160, 160, 160))
-    return QColor(r, g, b)
+    rgb = ACI_RGB.get(index)
+    if rgb is None:
+        # the full 255-color ACI palette, ezdxf's table
+        from views.color_dialog import aci_qcolor
+
+        return aci_qcolor(index)
+    return QColor(*rgb)
 
 
 def swatch_icon(index: int, size: int = 13):
@@ -109,14 +114,48 @@ def lineweight_icon(value: int, width: int = 34, height: int = 12):
     return QIcon(pm)
 
 
+_PICK_COLOR = -999
+
+
 def fill_color_combo(combo, include_bylayer: bool = True) -> None:
-    """Populate a color combo with swatches (not "Color N" text)."""
+    """Populate a color combo with swatches (not "Color N" text).
+
+    The last entry opens the Select Color dialog (the full ACI palette);
+    the picked color joins the combo as a normal item and the consumer's
+    activated/currentIndexChanged flow fires as if it had been listed all
+    along — so every color combo in the app gains the palette for free.
+    """
     from views.properties_panel import BYLAYER_COLOR
     if include_bylayer:
         combo.addItem(tr("ByLayer"), BYLAYER_COLOR)
     for aci in sorted(ACI_RGB):
         name = tr(ACI_NAMES[aci]) if aci in ACI_NAMES else str(aci)
         combo.addItem(swatch_icon(aci), name, aci)
+    combo.addItem(tr("Select Color..."), _PICK_COLOR)
+
+    state = {"last": 0}
+
+    def on_activated(index: int) -> None:
+        if combo.itemData(index) != _PICK_COLOR:
+            state["last"] = index
+            return
+        from views.color_dialog import SelectColorDialog
+
+        dialog = SelectColorDialog(combo.window(),
+                                   include_bylayer=include_bylayer)
+        if not dialog.exec():
+            combo.setCurrentIndex(state["last"])
+            return
+        aci = dialog.result_aci()
+        found = combo.findData(aci)
+        if found < 0:
+            found = combo.count() - 1     # insert before "Select Color..."
+            combo.insertItem(found, swatch_icon(aci), tr("Color {n}", n=aci),
+                             aci)
+        combo.setCurrentIndex(found)
+        combo.activated.emit(found)
+
+    combo.activated.connect(on_activated)
 
 
 def nearest_aci(color: QColor) -> int:

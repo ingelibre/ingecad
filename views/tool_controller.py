@@ -851,9 +851,10 @@ class ToolController(QObject):
             old_handles = []
             if isinstance(command, (actions.EraseCommand,
                                     actions.TransformCommand,
-                                    actions.SetPropertyCommand)):
-                # property edits too: hide the stale-look base copy and show
-                # the restyled entity via the overlay (async regen catches up)
+                                    actions.SetPropertyCommand)) \
+                    or getattr(command, "targets", None) is not None:
+                # property edits too (MATCHPROP included): hide the stale-look
+                # base copy and show the restyled entity via the overlay
                 old_handles = [e.dxf.handle for e in command.entities]
             elif isinstance(command, actions.ReplaceEntitiesCommand):
                 old_handles = [e.dxf.handle for e in command.old_entities]

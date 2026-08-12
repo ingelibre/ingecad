@@ -236,3 +236,58 @@ def test_the_linetype_list_offers_what_the_drawing_carries(qapp):
         assert "DASHED" in names and "CENTER" in names
     finally:
         win.close()
+
+
+def test_matchprop_copies_text_height_and_style_across_text_types(qapp):
+    from core.document import Document
+    from core.commands import History
+    from core.modify import match_properties
+
+    doc = Document.new()
+    msp = doc.modelspace()
+    src = msp.add_mtext("GRANDE", dxfattribs={"char_height": 5.0, "color": 1})
+    src.set_location((0, 0))
+    dst = msp.add_mtext("normal", dxfattribs={"char_height": 2.5})
+    dst.set_location((0, 20))
+    plain = msp.add_text("suelto", dxfattribs={"height": 2.0})
+    history = History(doc)
+    history.execute(match_properties(src, [dst, plain]))
+    assert dst.dxf.char_height == 5.0
+    assert plain.dxf.height == 5.0            # crosses MTEXT -> TEXT
+    assert dst.dxf.get("color") == 1
+    history.undo()
+    assert dst.dxf.char_height == 2.5 and plain.dxf.height == 2.0
+
+
+def test_matchprop_command_exposes_entities_for_the_display_paths(qapp):
+    """MATCHPROP looked like it did nothing: the display refresh collects
+    touched entities from .entities, which the command never exposed."""
+    from core.document import Document
+    from core.modify import match_properties
+
+    doc = Document.new()
+    msp = doc.modelspace()
+    a = msp.add_line((0, 0), (1, 1))
+    b = msp.add_line((2, 0), (3, 1))
+    command = match_properties(a, [b])
+    assert command.entities == [b]
+
+
+def test_the_color_combo_offers_the_full_palette(qapp):
+    from PySide6.QtWidgets import QComboBox
+
+    from views.layers_panel import _PICK_COLOR, fill_color_combo
+
+    combo = QComboBox()
+    fill_color_combo(combo)
+    assert combo.itemData(combo.count() - 1) == _PICK_COLOR
+
+
+def test_select_color_dialog_returns_any_aci(qapp):
+    from views.color_dialog import SelectColorDialog
+
+    dialog = SelectColorDialog(None, current=7)
+    dialog._pick(142)
+    assert dialog.result_aci() == 142
+    dialog._pick(256)
+    assert dialog.result_aci() == 256
