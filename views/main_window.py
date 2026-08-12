@@ -460,6 +460,10 @@ class MainWindow(QMainWindow):
         cmd_item(insert_menu, tr("Block..."), "INSERT")
         cmd_item(insert_menu, tr("Create Block..."), "BLOCK")
         insert_menu.addSeparator()
+        # Classic AutoCAD: Insert > Raster Image Reference.
+        cmd_item(insert_menu, tr("Raster Image Reference..."), "IMAGEATTACH",
+                 icon=False)
+        insert_menu.addSeparator()
         # Classic AutoCAD: Insert > Layout.
         layout_menu = insert_menu.addMenu(tr("Layout"))
         item(layout_menu, tr("New Layout"), self._new_layout_tab,
@@ -1660,7 +1664,7 @@ class MainWindow(QMainWindow):
                      "DIST", "ID", "AREA", "LIST",
                      "STRETCH", "BREAK", "JOIN",
                      "CHAMFER", "ARRAY", "MATCHPROP", "PEDIT",
-                     "DRAWORDER", "LAYISO", "LAYOFF"):
+                     "DRAWORDER", "LAYISO", "LAYOFF", "IMAGEATTACH"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
         d.register("LAYON", lambda *a: self._cmd_layon())
         d.register("LAYUNISO", lambda *a: self._cmd_layuniso())

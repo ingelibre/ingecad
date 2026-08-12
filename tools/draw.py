@@ -2061,6 +2061,76 @@ class PolygonTool(Tool):
         return []
 
 
+class ImageAttachTool(Tool):
+    """IMAGEATTACH: file dialog, insertion point, scale — AutoCAD's flow.
+
+    The image is referenced, never embedded (the DXF stores the path, like
+    AutoCAD). Base size with no resolution info: one unit per pixel.
+    """
+
+    def start(self) -> None:
+        self.name = "IMAGEATTACH"
+        self._path = None
+        self._size = None
+        self._insert = None
+        window = getattr(self.ctx.services, "window", None)
+        from PySide6.QtWidgets import QFileDialog
+
+        filename, _ = QFileDialog.getOpenFileName(
+            window, tr("Select Image File"), "",
+            tr("Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.gif);;"
+               "All files (*)"))
+        if not filename:
+            self.ctx.finish()
+            return
+        try:
+            import PIL.Image
+
+            with PIL.Image.open(filename) as im:
+                self._size = im.size
+        except Exception:
+            self.ctx.echo(tr("Cannot read {name} as an image.",
+                             name=filename))
+            self.ctx.finish()
+            return
+        self._path = filename
+        self.ctx.prompt(tr("Specify insertion point <0,0>:"))
+
+    def wants_raw_text(self) -> bool:
+        return self._insert is not None
+
+    def on_point(self, point: Point) -> None:
+        if self._path is None or self._insert is not None:
+            return
+        self._insert = (point[0], point[1])
+        width, height = self._size
+        self.ctx.prompt(tr(
+            "Base image size: {w} x {h} units. Specify scale factor <1>:",
+            w=width, h=height))
+
+    def _place(self, scale: float) -> None:
+        self.ctx.execute(actions.attach_image(
+            self._path, self._size, self._insert, scale))
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        if self._insert is None:
+            return False
+        try:
+            scale = float(text)
+        except ValueError:
+            return False
+        if scale <= 0:
+            self.ctx.echo(tr("Value must be positive."))
+            return True
+        self._place(scale)
+        return True
+
+    def on_enter(self) -> None:
+        if self._insert is not None:
+            self._place(1.0)
+
+
 TOOL_CLASSES = {
     "LINE": LineTool,
     "CIRCLE": CircleTool,
@@ -2072,4 +2142,5 @@ TOOL_CLASSES = {
     "POINT": PointTool,
     "TEXT": TextTool,
     "MTEXT": MTextTool,
+    "IMAGEATTACH": ImageAttachTool,
 }

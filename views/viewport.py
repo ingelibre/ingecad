@@ -169,6 +169,9 @@ class Viewport(QOpenGLWidget):
         self._scene_dirty = False
         # Per-primitive GPU buffers: name -> (vao, vbo, vertex_count)
         self._scene_bufs: dict[str, tuple] = {}
+        # Raster IMAGEs: [(texture, vao, vbo, group, handle)] per scene.
+        self._image_bufs: list[tuple] = []
+        self._hidden_images: set = set()
         # Paper sheet of a layout tab (shadow + white sheet + margin dashes),
         # drawn under the geometry. Rebuilt with the scene buffers.
         self._paper_bufs: dict[str, tuple] = {}
@@ -223,6 +226,7 @@ class Viewport(QOpenGLWidget):
         self._scene = scene
         self._scene_dirty = True
         self._hidden_rgba = {}   # saved alphas referenced the old scene
+        self._hidden_images = set()
         self.update()
 
     # -- stamps (committed ghost geometry, zero re-tessellation) --------------
@@ -316,7 +320,12 @@ class Viewport(QOpenGLWidget):
         this hides their vertices in the existing buffers — a few KB of GPU
         update instead of seconds of regen (surgical display).
         """
-        if self._scene is None or not self._scene.handle_ranges:
+        if self._scene is None:
+            return
+        for image in getattr(self._scene, "images", []):
+            if image.handle is not None and image.handle in set(handles):
+                self._hidden_images.add(image.handle)
+        if not self._scene.handle_ranges:
             return
         touched = False
         for h in handles:
@@ -351,6 +360,9 @@ class Viewport(QOpenGLWidget):
         MOVE): the base-scene copy at the original position is still valid."""
         touched = False
         for h in handles:
+            if h in self._hidden_images:
+                self._hidden_images.discard(h)
+                touched = True
             saved = self._hidden_rgba.pop(h, None)
             if not saved:
                 continue
@@ -422,6 +434,8 @@ class Viewport(QOpenGLWidget):
         self._thick_program = self._compile_program("thick.vert", "line.frag")
         self._loc_thick_mvp = self._thick_program.uniformLocation("u_mvp")
         self._loc_half_world = self._thick_program.uniformLocation("u_half_world")
+        self._image_program = self._compile_program("image.vert", "image.frag")
+        self._loc_image_mvp = self._image_program.uniformLocation("u_mvp")
 
         data = _axes_vertices()
         self._axes_vao, self._axes_vbo, self._axes_count = self._make_vao(data)
@@ -490,10 +504,17 @@ class Viewport(QOpenGLWidget):
             vbo.destroy()
             vao.destroy()
         self._paper_bufs.clear()
+        for tex, vao, vbo, _group, _handle in self._image_bufs:
+            tex.destroy()
+            vbo.destroy()
+            vao.destroy()
+        self._image_bufs.clear()
         self._scene_dirty = False
         self._pending_hide.clear()  # a full upload carries any zeroed rgba
         if self._scene is None:
             return
+        for image in getattr(self._scene, "images", []):
+            self._image_bufs.append(self._make_image_buf(image))
         if self._scene.paper is not None:
             tris, lines = _paper_vertices(self._scene.paper, self._scene.origin)
             self._paper_bufs["triangles"] = self._make_vao(tris)
@@ -529,6 +550,74 @@ class Viewport(QOpenGLWidget):
             vbo.bind()
             vbo.write(first * data.dtype.itemsize, raw, len(raw))
             vbo.release()
+
+    def _make_image_buf(self, image) -> tuple:
+        """Texture + quad VBO for one raster IMAGE (pos f32x2 + uv f32x2)."""
+        from PySide6.QtOpenGL import QOpenGLTexture
+
+        pixels = np.ascontiguousarray(image.pixels)
+        height, width = pixels.shape[:2]
+        tex = QOpenGLTexture(QOpenGLTexture.Target2D)
+        tex.create()
+        tex.setSize(width, height)
+        tex.setFormat(QOpenGLTexture.RGBA8_UNorm)
+        tex.allocateStorage()
+        tex.setData(QOpenGLTexture.RGBA, QOpenGLTexture.UInt8,
+                    pixels.tobytes())
+        tex.setMinMagFilters(QOpenGLTexture.LinearMipMapLinear,
+                             QOpenGLTexture.Linear)
+        tex.setWrapMode(QOpenGLTexture.ClampToEdge)
+        tex.generateMipMaps()
+
+        # The wcs transform maps pixel (0,0) to where the picture's BOTTOM
+        # row belongs (ezdxf's own PyQt backend flips the array before
+        # applying it). The texture is uploaded unflipped — row 0 = the
+        # picture's top — so v runs 1 at pixel y=0 and 0 at pixel y=h.
+        c = image.corners
+        quad = np.array([
+            [c[0][0], c[0][1], 0.0, 1.0],
+            [c[1][0], c[1][1], 1.0, 1.0],
+            [c[2][0], c[2][1], 1.0, 0.0],
+            [c[0][0], c[0][1], 0.0, 1.0],
+            [c[2][0], c[2][1], 1.0, 0.0],
+            [c[3][0], c[3][1], 0.0, 0.0],
+        ], dtype=np.float32)
+        vao = QOpenGLVertexArrayObject(self)
+        vao.create()
+        vao.bind()
+        vbo = QOpenGLBuffer(QOpenGLBuffer.VertexBuffer)
+        vbo.create()
+        vbo.bind()
+        raw = quad.tobytes()
+        vbo.allocate(raw, len(raw))
+        prog = self._image_program
+        prog.bind()
+        prog.enableAttributeArray(0)
+        prog.setAttributeBuffer(0, GL_FLOAT, 0, 2, 16)
+        prog.enableAttributeArray(1)
+        prog.setAttributeBuffer(1, GL_FLOAT, 8, 2, 16)
+        prog.release()
+        vao.release()
+        vbo.release()
+        return (tex, vao, vbo, image.group, image.handle)
+
+    def _draw_images(self, gl, mvp, front: bool) -> None:
+        """The raster quads: group <= 0 under the vectors, > 0 over them."""
+        if not self._image_bufs:
+            return
+        prog = self._image_program
+        prog.bind()
+        prog.setUniformValue(self._loc_image_mvp, mvp)
+        for tex, vao, _vbo, group, handle in self._image_bufs:
+            if (group > 0) != front or handle in self._hidden_images:
+                continue
+            tex.bind(0)
+            prog.setUniformValue("u_tex", 0)
+            vao.bind()
+            gl.glDrawArrays(GL_TRIANGLES, 0, 6)
+            vao.release()
+            tex.release(0)
+        prog.release()
 
     def _compile_program(self, vert: str, frag: str) -> QOpenGLShaderProgram:
         prog = QOpenGLShaderProgram(self)
@@ -640,6 +729,9 @@ class Viewport(QOpenGLWidget):
         if self._scene is not None and self._scene_bufs:
             scene_mvp = self._mvp(*self._scene.origin)
             view_rect = self._view_world_rect()
+            self._program.release()
+            self._draw_images(gl, scene_mvp, front=False)
+            self._program.bind()
             self._program.setUniformValue(self._loc_mvp, scene_mvp)
             # Fills first, then lines and points on top of them.
             for name, mode in (("triangles", GL_TRIANGLES),
@@ -657,6 +749,7 @@ class Viewport(QOpenGLWidget):
                 vao.release()
             self._program.release()
             self._draw_thick(gl, scene_mvp, view_rect)
+            self._draw_images(gl, scene_mvp, front=True)
         else:
             self._program.release()
 

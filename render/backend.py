@@ -74,6 +74,8 @@ class VertexBackend(Backend):
         self._kind = ""
         self._handle = None
         self._group = 0
+        # Raster IMAGEs: [{"pixels", "corners" (4 wcs xy), "handle", "group"}]
+        self.images: list[dict] = []
         # (kind, owner, group) per open entity. The frontend NESTS these: an
         # INSERT is entered, then each of its sub-entities, up to three deep in
         # real drawings.
@@ -191,7 +193,25 @@ class VertexBackend(Backend):
             bucket.triangles_owner.append(self._handle)
 
     def draw_image(self, image_data, properties: BackendProperties) -> None:
-        pass  # raster underlays: out of F1 scope
+        """Capture the pixels and the world-space quad; GL textures them.
+
+        The transform maps pixel coordinates (top-left origin, y down) to
+        WCS. Non-rectangular clip boundaries still show the full quad — the
+        clip FRAME is drawn by the frontend either way; pixel-exact clipping
+        can come later without touching the format.
+        """
+        w, h = image_data.image_size()
+        if not w or not h:
+            return
+        m = image_data.transform
+        corners = [m.transform((x, y, 0.0))
+                   for (x, y) in ((0.0, 0.0), (w, 0.0), (w, h), (0.0, h))]
+        self.images.append({
+            "pixels": image_data.image,
+            "corners": [(c.x, c.y) for c in corners],
+            "handle": self._handle,
+            "group": self._group,
+        })
 
     # -- lifecycle --------------------------------------------------------------
     def configure(self, config: Configuration) -> None:
@@ -285,6 +305,17 @@ class TolerantRenderContext(RenderContext):
     raises ZeroDivisionError there and would blank the whole drawing. Fall
     back to plain defaults for that entity and keep drawing.
     """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # An unsaved drawing has no document_dir, and the frontend refuses
+        # to load IMAGE files without one — even when the IMAGEDEF stores an
+        # absolute path (pathlib joins absolute onto anything cleanly). Any
+        # directory unlocks that case; relative paths resolve on save.
+        if self.document_dir is None:
+            import pathlib
+
+            self.document_dir = pathlib.Path.cwd()
 
     def resolve_all(self, entity):
         try:
@@ -427,7 +458,8 @@ def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     frontend.draw_layout(layout)
     if layout_name is not None:
         _draw_viewport_borders(layout, context, backend)
-    scene = pack(backend.buckets, _declared_extents(document))
+    scene = pack(backend.buckets, _declared_extents(document),
+                 images=backend.images)
     scene.skipped = list(frontend.skipped)
     scene.layout_name = layout_name
     scene.flatten = flatten

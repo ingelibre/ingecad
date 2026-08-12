@@ -1381,6 +1381,25 @@ def copy_entities(entities, dx: float, dy: float) -> CopyEntitiesCommand:
     return CopyEntitiesCommand(entities, Matrix44.translate(dx, dy, 0.0))
 
 
+def attach_image(path: str, size_px: tuple[int, int],
+                 insert, scale: float) -> AddEntityCommand:
+    """IMAGEATTACH: an IMAGE entity referencing ``path`` (never embedded).
+
+    AutoCAD's base size with no resolution info: one drawing unit per
+    pixel, times the scale factor. The IMAGEDEF object is created by the
+    factory; undo removes the entity and leaves the def, which is inert.
+    """
+    width, height = size_px
+
+    def factory(msp):
+        image_def = msp.doc.add_image_def(filename=str(path),
+                                          size_in_pixel=(width, height))
+        return msp.add_image(image_def, insert=insert,
+                             size_in_units=(width * scale, height * scale))
+
+    return AddEntityCommand("IMAGEATTACH", factory)
+
+
 class SnapshotCommand(Command):
     """Undo via full DXF-tag snapshots of the edited entities.
 

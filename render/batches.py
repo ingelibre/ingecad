@@ -161,6 +161,18 @@ def _empty_batch(dtype=VERTEX_DTYPE) -> Batch:
 
 
 @dataclass
+class SceneImage:
+    """One raster IMAGE: a textured quad, positioned like everything else
+    (float64 corners minus the scene origin, stored float32)."""
+
+    pixels: "np.ndarray"          # (H, W, 4) uint8 RGBA, row 0 = top
+    corners: "np.ndarray"         # (4, 2) float32, origin-relative, CCW from
+                                  # the image's top-left pixel corner
+    handle: str | None = None
+    group: int = 0                # DRAWORDER group, like Bucket.group
+
+
+@dataclass
 class Scene:
     """Everything the viewport needs to draw one document."""
 
@@ -185,6 +197,9 @@ class Scene:
     handle_ranges: dict = field(default_factory=dict)
     # Handles currently hidden (edited entities awaiting the next regen).
     hidden: set = field(default_factory=set)
+    # Raster IMAGE entities, drawn as textured quads (under the vectors for
+    # group <= 0, over them for group > 0 — the DRAWORDER split).
+    images: list = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -452,7 +467,8 @@ def _world_extents(
 
 
 def pack(buckets: dict[tuple, Bucket],
-         extents_hint: Optional[tuple[float, float, float, float]] = None) -> Scene:
+         extents_hint: Optional[tuple[float, float, float, float]] = None,
+         images: Optional[list] = None) -> Scene:
     """Pack backend buckets into a Scene, origin at the drawing's center.
 
     ``extents_hint`` is the drawing's declared ``$EXTMIN``/``$EXTMAX``, used to
@@ -462,6 +478,16 @@ def pack(buckets: dict[tuple, Bucket],
     # future visibility toggle.
     ordered = [buckets[k] for k in sorted(buckets)]
     extents = _world_extents(ordered, extents_hint)
+    if images:
+        # Image corners count as geometry: zoom extents must include them
+        # even in a drawing that is nothing but the scanned sheet.
+        xs = [c[0] for im in images for c in im["corners"]]
+        ys = [c[1] for im in images for c in im["corners"]]
+        if not ordered:
+            extents = (min(xs), min(ys), max(xs), max(ys))
+        else:
+            extents = (min(extents[0], *xs), min(extents[1], *ys),
+                       max(extents[2], *xs), max(extents[3], *ys))
     origin = ((extents[0] + extents[2]) / 2.0, (extents[1] + extents[3]) / 2.0)
     hr: dict = {}
     scene = Scene(
@@ -474,4 +500,11 @@ def pack(buckets: dict[tuple, Bucket],
         points=_pack_standard(ordered, "points", 1, origin, extents, "points", hr),
     )
     scene.handle_ranges = hr
+    for im in images or []:
+        corners = np.asarray(im["corners"], dtype=np.float64)
+        corners[:, 0] -= origin[0]
+        corners[:, 1] -= origin[1]
+        scene.images.append(SceneImage(
+            pixels=im["pixels"], corners=corners.astype(np.float32),
+            handle=im.get("handle"), group=im.get("group", 0)))
     return scene
