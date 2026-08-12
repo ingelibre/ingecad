@@ -339,3 +339,29 @@ def test_matchprop_copies_the_effective_text_color(qapp):
     history.undo()
     assert dst.dxf.get("color", 256) == 256
     assert "\\C3;" in dst.text                # snapshot restored the content
+
+
+def test_matchprop_copies_bylayer_itself(qapp):
+    """A ByLayer source has NO color attribute; the old .get with no
+    default skipped it and a ByBlock destination stayed ByBlock (Marco's
+    report). AutoCAD copies "ByLayer" as the value."""
+    from core.document import Document
+    from core.commands import History
+    from core.modify import match_properties
+
+    doc = Document.new()
+    msp = doc.modelspace()
+    src = msp.add_mtext("fuente", dxfattribs={"char_height": 2.5})
+    src.set_location((0, 0))                     # color ByLayer (unset)
+    dst = msp.add_mtext("destino", dxfattribs={"char_height": 2.5,
+                                               "color": 0})   # ByBlock
+    dst.set_location((0, 10))
+    from ezdxf.colors import rgb2int
+    dst.dxf.true_color = rgb2int((10, 20, 30))   # stale override too
+    history = History(doc)
+    history.execute(match_properties(src, [dst]))
+    assert dst.dxf.get("color", 256) == 256      # ByLayer now
+    assert not dst.dxf.hasattr("true_color")     # override gone
+    history.undo()
+    assert dst.dxf.get("color") == 0
+    assert dst.dxf.hasattr("true_color")

@@ -597,6 +597,10 @@ def array_polar(entities, center: Point, count: int,
 MATCH_PROPERTIES = ("layer", "color", "linetype", "ltscale", "lineweight",
                     "thickness", "transparency", "true_color")
 
+# What an ABSENT attribute means — AutoCAD copies these as values.
+_MATCH_DEFAULTS = {"color": 256, "linetype": "ByLayer", "lineweight": -1,
+                   "ltscale": 1.0, "thickness": 0.0}
+
 
 class MatchPropCommand(Command):
     """Copy the source object's properties onto the destination objects."""
@@ -628,10 +632,27 @@ class MatchPropCommand(Command):
             for t in self.targets]
         for target in self.targets:
             for name in self.properties:
-                try:
-                    value = self.source.dxf.get(name)
-                except Exception:
+                if name in ("true_color", "transparency"):
+                    # ABSENCE is a value here: a source without true color
+                    # or explicit transparency means ByLayer, and leaving
+                    # the destination's old override in place would keep
+                    # overriding the ACI we just copied.
+                    try:
+                        if self.source.dxf.hasattr(name):
+                            target.dxf.set(name, self.source.dxf.get(name))
+                        else:
+                            target.dxf.discard(name)
+                    except Exception:
+                        pass
                     continue
+                # An unset attribute still IS the property: no color attr
+                # means ByLayer (256), and AutoCAD copies "ByLayer" itself —
+                # the old .get(name) with no default skipped it and a
+                # ByBlock destination stayed ByBlock.
+                try:
+                    value = self.source.dxf.get(name, _MATCH_DEFAULTS.get(name))
+                except Exception:
+                    continue      # attribute not valid for the source type
                 if value is None:
                     continue
                 try:
