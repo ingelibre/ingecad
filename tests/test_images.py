@@ -72,3 +72,23 @@ def test_a_missing_file_shows_frame_and_name_not_a_crash(tmp_path):
     assert scene.images == []          # nothing to texture...
     handle = doc.modelspace().query("IMAGE")[0].dxf.handle
     assert handle in scene.handle_ranges   # ...but the frame is there
+
+
+def test_attaching_through_the_tool_path_triggers_a_regen(qapp, image_file,
+                                                          monkeypatch):
+    """The incremental overlay cannot show pixels; without a regen the
+    attached image never appeared on screen (the reported bug)."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        regens = []
+        monkeypatch.setattr(win, "regen_in_memory",
+                            lambda *a, **k: regens.append(1))
+        command = actions.attach_image(str(image_file), (60, 40),
+                                       (0.0, 0.0), 1.0)
+        win.tools._execute(command)
+        assert regens, "attach_image must schedule a real regen"
+    finally:
+        win.close()

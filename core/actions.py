@@ -1397,7 +1397,13 @@ def attach_image(path: str, size_px: tuple[int, int],
         return msp.add_image(image_def, insert=insert,
                              size_in_units=(width * scale, height * scale))
 
-    return AddEntityCommand("IMAGEATTACH", factory)
+    command = AddEntityCommand("IMAGEATTACH", factory)
+    # The incremental-display overlay only tessellates vectors: it would
+    # show the frame and never the pixels, and below the merge threshold
+    # no regen is ever scheduled — the image simply never appeared. Like
+    # a dimension's block, an image needs the real regen.
+    command.needs_regen = True
+    return command
 
 
 class SnapshotCommand(Command):
