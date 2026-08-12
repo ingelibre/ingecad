@@ -834,6 +834,14 @@ def entity_grips(entity) -> list[tuple[float, float, str]]:
     elif t == "POINT":
         l = entity.dxf.location
         grips.append((l.x, l.y, "center"))
+    elif t == "IMAGE":
+        # AutoCAD: four corner grips; dragging one scales the image.
+        try:
+            corners = list(entity.boundary_path_wcs())[:4]
+        except Exception:
+            corners = []
+        for v in corners:
+            grips.append((v.x, v.y, "corner"))
     return grips
 
 
@@ -845,6 +853,32 @@ def apply_grip_edit(entity, grip_index: int, role: str, new_point):
 
     t = entity.dxftype()
     nx, ny = new_point
+    if t == "IMAGE":
+        # Uniform scale about the OPPOSITE corner (aspect locked, like
+        # AutoCAD's image grips): the drag point projects onto the diagonal
+        # and the whole frame follows.
+        try:
+            corners = list(entity.boundary_path_wcs())[:4]
+        except Exception:
+            return False
+        if grip_index >= len(corners):
+            return False
+        fixed = corners[(grip_index + 2) % 4]
+        moved = corners[grip_index]
+        dx, dy = moved.x - fixed.x, moved.y - fixed.y
+        length_sq = dx * dx + dy * dy
+        if length_sq <= 0:
+            return False
+        factor = ((nx - fixed.x) * dx + (ny - fixed.y) * dy) / length_sq
+        if factor <= 0.01:
+            return False              # collapsing/inverting: ignore the drop
+        ins = entity.dxf.insert
+        entity.dxf.insert = (fixed.x + (ins.x - fixed.x) * factor,
+                             fixed.y + (ins.y - fixed.y) * factor, 0)
+        u, v = entity.dxf.u_pixel, entity.dxf.v_pixel
+        entity.dxf.u_pixel = (u.x * factor, u.y * factor, u.z * factor)
+        entity.dxf.v_pixel = (v.x * factor, v.y * factor, v.z * factor)
+        return True
     if t == "LINE":
         if role == "mid":               # move whole line
             s, e = entity.dxf.start, entity.dxf.end

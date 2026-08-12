@@ -81,3 +81,77 @@ def test_attach_image_demands_a_real_regen(image_file):
     contract to pin is the flag itself."""
     command = actions.attach_image(str(image_file), (60, 40), (0.0, 0.0), 1.0)
     assert getattr(command, "needs_regen", False) is True
+
+
+# -- grips, adjust, transparency ----------------------------------------------
+
+def _attached(image_file, scale=1.0):
+    doc = Document.new()
+    history = History(doc)
+    history.execute(actions.attach_image(str(image_file), (60, 40),
+                                         (100.0, 50.0), scale))
+    return doc, history, doc.modelspace().query("IMAGE")[0]
+
+
+def test_an_image_has_four_corner_grips(image_file):
+    from core.select import entity_grips
+
+    _doc, _h, image = _attached(image_file)
+    grips = entity_grips(image)
+    assert len(grips) == 4
+    assert all(role == "corner" for _x, _y, role in grips)
+    xs = sorted({round(x, 6) for x, _y, _r in grips})
+    ys = sorted({round(y, 6) for _x, y, _r in grips})
+    assert xs == [100.0, 160.0] and ys == [50.0, 90.0]
+
+
+def test_dragging_a_corner_scales_about_the_opposite_one(image_file):
+    from core.select import apply_grip_edit, entity_grips
+
+    _doc, _h, image = _attached(image_file)
+    grips = entity_grips(image)
+    # find the corner at (160, 90); its opposite is (100, 50)
+    index = next(i for i, (x, y, _r) in enumerate(grips)
+                 if round(x) == 160 and round(y) == 90)
+    # drag outward along the diagonal to double the size
+    assert apply_grip_edit(image, index, "corner", (220.0, 130.0))
+    grips = entity_grips(image)
+    xs = sorted({round(x, 4) for x, _y, _r in grips})
+    ys = sorted({round(y, 4) for _x, y, _r in grips})
+    assert xs == [100.0, 220.0] and ys == [50.0, 130.0]   # fixed corner held
+
+
+def test_a_collapsing_drag_is_refused(image_file):
+    from core.select import apply_grip_edit, entity_grips
+
+    _doc, _h, image = _attached(image_file)
+    grips_before = entity_grips(image)
+    assert not apply_grip_edit(image, 0, "corner",
+                               entity_grips(image)[2][:2])   # onto opposite
+    assert entity_grips(image) == grips_before
+
+
+def test_imageadjust_writes_values_with_undo(image_file):
+    from core.image_ops import ImageAdjustCommand
+
+    doc, history, image = _attached(image_file)
+    history.execute(ImageAdjustCommand([image], fade=80))
+    assert image.dxf.fade == 80
+    assert getattr(ImageAdjustCommand([image]), "needs_regen") is True
+    history.undo()
+    assert image.dxf.fade == 0
+    history.redo()
+    assert image.dxf.fade == 80
+
+
+def test_transparency_toggles_the_flag_with_undo(image_file):
+    from ezdxf.entities.image import Image
+
+    from core.image_ops import ImageTransparencyCommand
+
+    doc, history, image = _attached(image_file)
+    before = int(image.dxf.flags)
+    history.execute(ImageTransparencyCommand([image], True))
+    assert image.dxf.flags & Image.USE_TRANSPARENCY
+    history.undo()
+    assert int(image.dxf.flags) == before

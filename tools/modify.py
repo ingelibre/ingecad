@@ -683,6 +683,127 @@ class LayOffTool(Tool):
         self.ctx.finish()
 
 
+class ImageAdjustTool(Tool):
+    """-IMAGEADJUST: option, then a 0-100 value, applied to the selection.
+
+    The reference's tree: Contrast/Fade/Brightness, defaults 50/50/0;
+    fade 100 blends the image into the background (the tracing setup).
+    """
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "IMAGEADJUST"
+        self._images: list = []
+        self._attr = None
+
+    def selection_prompt(self) -> str:
+        return tr("Select image(s):")
+
+    def on_selection(self, entities: list) -> None:
+        self._images = [e for e in entities if e.dxftype() == "IMAGE"]
+        if not self._images:
+            self.ctx.echo(tr("No images selected."))
+            self.ctx.finish()
+            return
+        self.ctx.prompt(tr(
+            "Enter image option [Contrast/Fade/Brightness] <Brightness>:"))
+
+    def wants_raw_text(self) -> bool:
+        return bool(self._images)
+
+    def _current(self, attr: str) -> int:
+        return int(self._images[0].dxf.get(attr, 0 if attr == "fade" else 50))
+
+    def on_option(self, text: str) -> bool:
+        if not self._images:
+            return False
+        word = text.strip().upper()
+        if self._attr is None:
+            named = {"C": "contrast", "CONTRAST": "contrast",
+                     "F": "fade", "FADE": "fade",
+                     "B": "brightness", "BRIGHTNESS": "brightness",
+                     "": "brightness"}
+            if word not in named:
+                return False
+            self._attr = named[word]
+            self.ctx.prompt(tr("Enter {name} value (0-100) <{value}>:",
+                               name=self._attr, value=self._current(self._attr)))
+            return True
+        try:
+            value = int(float(text)) if text.strip() else self._current(self._attr)
+        except ValueError:
+            return False
+        if not 0 <= value <= 100:
+            self.ctx.echo(tr("Value must be between 0 and 100."))
+            return True
+        from core.image_ops import ImageAdjustCommand
+
+        self.ctx.execute(ImageAdjustCommand(self._images,
+                                            **{self._attr: value}))
+        self.ctx.finish()
+        return True
+
+    def on_enter(self) -> None:
+        if not self._images:
+            self.ctx.finish()
+        elif self._attr is None:
+            self.on_option("")
+        else:
+            self.on_option(" ")
+
+
+class ImageTransparencyTool(Tool):
+    """TRANSPARENCY: background pixels of the selected images ON/OFF."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "TRANSPARENCY"
+        self._images: list = []
+
+    def selection_prompt(self) -> str:
+        return tr("Select image(s):")
+
+    def on_selection(self, entities: list) -> None:
+        self._images = [e for e in entities if e.dxftype() == "IMAGE"]
+        if not self._images:
+            self.ctx.echo(tr("No images selected."))
+            self.ctx.finish()
+            return
+        from ezdxf.entities.image import Image
+
+        current = "ON" if (self._images[0].dxf.flags
+                           & Image.USE_TRANSPARENCY) else "OFF"
+        self.ctx.prompt(tr("Enter transparency mode [ON/OFF] <{current}>:",
+                           current=current))
+
+    def _apply(self, on: bool) -> None:
+        from core.image_ops import ImageTransparencyCommand
+
+        self.ctx.execute(ImageTransparencyCommand(self._images, on))
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        if not self._images:
+            return False
+        word = text.strip().upper()
+        if word in ("ON",):
+            self._apply(True)
+            return True
+        if word in ("OFF",):
+            self._apply(False)
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        if self._images:
+            from ezdxf.entities.image import Image
+
+            self._apply(not (self._images[0].dxf.flags
+                             & Image.USE_TRANSPARENCY) == 0)
+
+
 MODIFY_TOOL_CLASSES = {
     "STRETCH": StretchTool,
     "BREAK": BreakTool,
@@ -694,4 +815,6 @@ MODIFY_TOOL_CLASSES = {
     "DRAWORDER": DrawOrderTool,
     "LAYISO": LayIsoTool,
     "LAYOFF": LayOffTool,
+    "IMAGEADJUST": ImageAdjustTool,
+    "TRANSPARENCY": ImageTransparencyTool,
 }

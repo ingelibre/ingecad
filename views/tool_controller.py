@@ -1412,6 +1412,10 @@ class ToolController(QObject):
         if entity is None:
             return
         snap = SnapshotCommand([entity])   # captures the pre-grab state
+        if entity.dxftype() == "IMAGE":
+            # Undo/redo of an image grip must regen: the overlay cannot
+            # move pixels, only the frame.
+            snap.needs_regen = True
         self._grip_drag = (handle, index, role, snap)
         # Hide the base-scene copy ONCE (a full-scene re-upload); from here
         # the live entity rides the cheap 1-entity overlay each frame.
@@ -1475,7 +1479,12 @@ class ToolController(QObject):
                 self.index.remove_handles([handle])
                 self.index.add_entities([entity])
             self._refresh_overlay()
-            self._merge_timer.start()
+            if entity.dxftype() == "IMAGE":
+                # The overlay shows only the frame; the pixels need the
+                # real regen to land at their new size.
+                self.window.regen_in_memory()
+            else:
+                self._merge_timer.start()
 
     def grip_overlay_entities(self):
         if self._grip_drag is None:

@@ -556,6 +556,10 @@ class MainWindow(QMainWindow):
             cmd_item(modify_menu, label, name)
         modify_menu.addSeparator()
         cmd_item(modify_menu, tr("Match Properties"), "MATCHPROP")
+        object_menu = modify_menu.addMenu(tr("Object"))
+        image_menu = object_menu.addMenu(tr("Image"))
+        cmd_item(image_menu, tr("Adjust..."), "IMAGEADJUST", icon=False)
+        cmd_item(image_menu, tr("Transparency"), "TRANSPARENCY", icon=False)
         object_menu = QMenu(tr("Object"), self)
         modify_menu.addMenu(object_menu)
         cmd_item(object_menu, tr("Polyline"), "PEDIT")
@@ -1671,8 +1675,9 @@ class MainWindow(QMainWindow):
                      "STRETCH", "BREAK", "JOIN",
                      "CHAMFER", "ARRAY", "MATCHPROP", "PEDIT",
                      "DRAWORDER", "LAYISO", "LAYOFF", "IMAGEATTACH",
-                     "TABLE", "PDFATTACH"):
+                     "TABLE", "PDFATTACH", "IMAGEADJUST", "TRANSPARENCY"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
+        d.register("ADJUST", lambda *a: self.tools.start_tool("IMAGEADJUST"))
         d.register("CLEANSCREENON", lambda *a: self._clean_screen(True))
         d.register("CLEANSCREENOFF", lambda *a: self._clean_screen(False))
         d.register("LAYON", lambda *a: self._cmd_layon())
