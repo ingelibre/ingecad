@@ -580,7 +580,15 @@ def _image_rows(panel, e):
             adjust("contrast")),
         Row(tr("Fade"), "num", lambda x: x.dxf.get("fade", 0),
             adjust("fade")),
-        Row(tr("Transparency"), "combo",
+        # Entity transparency, AutoCAD's 0-90 % (group 440); the render
+        # multiplies it into the alpha channel.
+        Row(tr("Transparency %"), "num",
+            lambda x: round(x.transparency * 100),
+            lambda v: panel._in_place(
+                lambda: [setattr(x, "transparency",
+                                 max(0.0, min(90.0, float(v))) / 100.0)
+                         for x in panel._active()], regen=True)),
+        Row(tr("Transparent background"), "combo",
             lambda x: bool(x.dxf.flags & _Image.USE_TRANSPARENCY),
             set_flag(_Image.USE_TRANSPARENCY), yesno),
         Row(tr("Show image"), "combo",

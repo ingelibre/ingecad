@@ -180,8 +180,17 @@ def test_the_properties_panel_exposes_image_display_rows(qapp, image_file):
         for wanted in ("Brightness", "Contrast", "Fade", "Transparency",
                        "Width", "Height"):
             assert any(wanted in l for l in labels), wanted
-        # the transparency setter round-trips through the flag
-        transparency = next(r for r in image_rows if "Transparency" in r.label)
+        # the transparency DEGREE reaches the alpha channel (0-90 %)
+        degree = next(r for r in image_rows if r.label == "Transparency %")
+        degree.apply(60)
+        assert image.transparency == pytest.approx(0.6)
+        from render.backend import build_scene
+        assert build_scene(win.document).images[0].pixels[0, 0, 3] == 102
+        degree.apply(120)                       # clamps to AutoCAD's 90
+        assert image.transparency == pytest.approx(0.9, abs=0.005)
+        # and the bitonal flag round-trips too
+        transparency = next(r for r in image_rows
+                            if "Transparent background" in r.label)
         assert transparency.get(image) is False
         transparency.apply(True)
         from ezdxf.entities.image import Image
