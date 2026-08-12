@@ -1432,8 +1432,10 @@ def _restore_entity(entity, snapshot) -> None:
     elif entity.dxftype() == "MTEXT":
         # The content lives in the entity's text stream, not in a DXF
         # attribute — without this, undoing an MTEXT edit restored the
-        # position and silently kept the new words.
+        # position and silently kept the new words. The column layout is
+        # object state too, not a DXF attribute.
         entity.text = snapshot.text
+        entity._columns = snapshot._columns
 
 
 def apply_in_place(history, entities, mutate) -> None:
@@ -1693,10 +1695,45 @@ def add_text(pos, text: str, height: float, rotation: float = 0.0,
     return AddEntityCommand("TEXT", make)
 
 
+def apply_mtext_bg(entity, bg) -> None:
+    """("off",) removes the mask; (aci | "canvas", scale) sets it."""
+    if bg is None:
+        return
+    if bg[0] == "off":
+        entity.set_bg_color(None)
+    else:
+        colour, scale = bg
+        entity.set_bg_color("canvas" if colour == "canvas" else int(colour),
+                            scale=float(scale))
+
+
+def apply_mtext_columns(entity, columns) -> None:
+    """("off",) clears the layout; (count, height, gutter) sets static ones."""
+    if columns is None:
+        return
+    if columns[0] == "off":
+        entity._columns = None
+        return
+    from ezdxf.entities.mtext import MTextColumns
+
+    count, height, gutter = columns
+    count = int(count)
+    # The user's box width is the TOTAL width, as in AutoCAD's Column
+    # Settings; each column gets its share after the gutters.
+    total = float(entity.dxf.width or 10.0)
+    column_width = max((total - (count - 1) * float(gutter)) / count,
+                       total / (count * 4.0))
+    entity.setup_columns(
+        MTextColumns.new_static_columns(
+            count, column_width, float(gutter), float(height)),
+        linked=False)
+
+
 def add_mtext(p1, p2, text: str, char_height: float,
               style: str | None = None,
               attachment: int = 1,
-              line_spacing: float | None = None) -> AddEntityCommand:
+              line_spacing: float | None = None,
+              bg=None, columns=None) -> AddEntityCommand:
     """MTEXT in the box the two corners define.
 
     ``attachment`` is the MText Justification (1..9, TL..BR): the insert
@@ -1721,6 +1758,8 @@ def add_mtext(p1, p2, text: str, char_height: float,
             attribs["line_spacing_style"] = 1
         m = msp.add_mtext(text, dxfattribs=attribs)
         m.set_location(insert, attachment_point=attachment)
+        apply_mtext_bg(m, bg)
+        apply_mtext_columns(m, columns)
         return m
     return AddEntityCommand("MTEXT", make)
 

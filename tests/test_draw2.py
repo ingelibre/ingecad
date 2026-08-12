@@ -781,3 +781,160 @@ def test_lists_off_strips_markers_and_indents(qapp):
         assert mtext.text == "uno\\Pdos"
     finally:
         win.close()
+
+
+# -- background mask and static columns ----------------------------------------
+
+def test_the_mask_lands_on_the_entity_with_its_scale(qapp):
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        QTest.keyClicks(editor.edit, "NOTA IMPORTANTE")
+        editor._bg = (2, 1.8)                    # yellow, factor 1.8
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        assert made.dxf.bg_fill == 1
+        assert made.dxf.bg_fill_color == 2
+        assert made.dxf.box_fill_scale == pytest.approx(1.8)
+    finally:
+        win.close()
+
+
+def test_the_canvas_colour_mask_and_its_removal(qapp):
+    win = _editor_window(qapp)
+    try:
+        mtext = win.document.modelspace().add_mtext(
+            "tapado", dxfattribs={"char_height": 2.5, "width": 40.0})
+        mtext.set_location((10.0, 40.0))
+        mtext.set_bg_color("canvas", scale=2.0)
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.on_canvas_double_click(11.0, 39.0)
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        # The editor reads the existing mask...
+        assert editor._current_bg() == ("canvas", 2.0)
+        # ...and turning it off removes the attributes.
+        editor._bg = ("off",)
+        editor.commit()
+        qapp.processEvents()
+        assert not mtext.dxf.hasattr("bg_fill")
+        win.history.undo()
+        assert mtext.dxf.bg_fill == 3            # canvas = bits 0+1
+    finally:
+        win.close()
+
+
+def test_static_columns_land_and_round_trip(qapp):
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        editor = _open_new_editor(win, qapp)
+        QTest.keyClicks(editor.edit, "texto largo " * 20)
+        editor._set_columns((3, 60.0, 12.5))
+        editor.commit()
+        qapp.processEvents()
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        assert made.has_columns
+        assert made.columns.count == 3
+        assert made.columns.gutter_width == pytest.approx(12.5)
+
+        # Reopen: the editor knows the layout; removing it clears the entity.
+        win.tools.index.invalidate()
+        win.tools.index._build()
+        win.on_canvas_double_click(11.0, 39.0)
+        qapp.processEvents()
+        second = win.tools._mtext_editor
+        assert getattr(second, "_initial_columns", None) is not None
+        second._set_columns(None)
+        second.commit()
+        qapp.processEvents()
+        assert not made.has_columns
+        win.history.undo()
+        assert made.has_columns and made.columns.count == 3
+    finally:
+        win.close()
+
+
+def test_columns_survive_the_dxf_round_trip(qapp, tmp_path):
+    import ezdxf
+
+    win = _editor_window(qapp)
+    try:
+        from core import actions
+
+        win.history.execute(actions.add_mtext(
+            (0, 40), (40, 0), "flujo " * 30, 2.5, columns=(3, 60.0, 12.5)))
+        path = tmp_path / "columnas.dxf"
+        win.document.save_as(path)
+        again = ezdxf.readfile(path)
+        mtext = [e for e in again.modelspace() if e.dxftype() == "MTEXT"][0]
+        assert mtext.has_columns and mtext.columns.count == 3
+    finally:
+        win.close()
+
+
+def test_a_masked_plain_mtext_renders_its_fill(qapp):
+    """The ezdxf frontend only draws the mask via its complex renderer; the
+    patch routes bg_fill there. Without it the mask shows in AutoCAD and
+    not on our canvas — the silent kind of wrong."""
+    from core.document import Document
+    from render.backend import build_scene
+
+    document = Document.new()
+    mtext = document.modelspace().add_mtext(
+        "NOTA", dxfattribs={"char_height": 2.5, "width": 20})
+    mtext.set_location((0, 0))
+    bare = len(build_scene(document).triangles.data)
+    mtext.set_bg_color(2, scale=1.5)
+    masked = len(build_scene(document).triangles.data)
+    assert masked > bare, "the mask fill did not reach the canvas"
+
+
+def test_column_width_divides_the_box_not_multiplies_it(qapp):
+    """3 columns of an 80-wide box must fit in 80, not become 240."""
+    win = _editor_window(qapp)
+    try:
+        from core import actions
+
+        win.history.execute(actions.add_mtext(
+            (0, 40), (80, 0), "flujo " * 30, 2.5, columns=(3, 30.0, 4.0)))
+        made = [e for e in win.document.modelspace()
+                if e.dxftype() == "MTEXT"][0]
+        columns = made.columns
+        total = columns.count * columns.width \
+            + (columns.count - 1) * columns.gutter_width
+        assert total == pytest.approx(80.0, rel=1e-6)
+    finally:
+        win.close()
+
+
+def test_a_masked_text_survives_the_lod_cull(qapp):
+    """The mask quad carries no glyph-height metric; culling only where the
+    metric exists — otherwise the mask vanished at EVERY zoom while its
+    text drew, the silent kind of wrong."""
+    import numpy as np
+
+    from core.document import Document
+    from render.backend import build_scene
+    from views.viewport import MIN_TEXT_PX
+
+    document = Document.new()
+    mtext = document.modelspace().add_mtext(
+        "NOTA", dxfattribs={"char_height": 2.5, "width": 20})
+    mtext.set_location((0, 0))
+    mtext.set_bg_color(2, scale=1.5)
+    scene = build_scene(document)
+    batch = scene.triangles
+    runs = batch.visible_runs((-100, -100, 100, 100), 10.0, MIN_TEXT_PX)
+    drawn = sum(count for _first, count in runs)
+    assert drawn == len(batch.data), "some triangles were culled at a zoom " \
+        "where everything is legible"
+    # And the yellow quad is among what draws (first range starts at 0).
+    assert runs[0][0] == 0

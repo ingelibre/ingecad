@@ -130,7 +130,13 @@ class Batch:
             & (self.bounds[:, 1] <= y1) & (self.bounds[:, 3] >= y0)
         )
         if self.is_text is not None and min_text_px > 0.0:
-            legible = self.text_height * px_per_unit >= min_text_px
+            # A zero height means the metric was never fed for that range —
+            # an MTEXT's background-mask quad arrives through a path that
+            # carries no glyph height. Culling must act only where the
+            # metric exists, or the mask vanishes at EVERY zoom while its
+            # text draws.
+            legible = ((self.text_height <= 0.0)
+                       | (self.text_height * px_per_unit >= min_text_px))
             vis &= ~self.is_text | legible
         idx = np.nonzero(vis)[0]
         if len(idx) == 0:

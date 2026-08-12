@@ -955,5 +955,22 @@
   "Bullets and numbering": "Viñetas y numeración",
   "Numbered (1. 2. 3.)": "Numerada (1. 2. 3.)",
   "Lettered (a. b. c.)": "Con letras (a. b. c.)",
-  "Bulleted (•)": "Con viñetas (•)"
+  "Bulleted (•)": "Con viñetas (•)",
+  "Mask": "Máscara",
+  "Background mask (opaque behind the text)": "Máscara de fondo (opaca detrás del texto)",
+  "Background Mask": "Máscara de fondo",
+  "Use background mask": "Usar máscara de fondo",
+  "Border offset factor:": "Factor de desplazamiento del borde:",
+  "Border around the text, as a factor of the text height": "Borde alrededor del texto, como factor de la altura del texto",
+  "Fill Color": "Color de relleno",
+  "Color:": "Color:",
+  "Use drawing background color": "Usar el color de fondo del dibujo",
+  "Columns": "Columnas",
+  "Static columns": "Columnas estáticas",
+  "No Columns": "Sin columnas",
+  "Static Columns...": "Columnas estáticas...",
+  "Column Settings": "Configuración de columnas",
+  "Column Number:": "Número de columnas:",
+  "Height:": "Altura:",
+  "Gutter:": "Medianil:"
 }

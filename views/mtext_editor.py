@@ -318,6 +318,10 @@ class MTextInPlaceEditor(QWidget):
         self._attachment: Optional[int] = None
         self._line_spacing = float(line_spacing) or 1.0
         self._initial_spacing = self._line_spacing
+        # ("off") | (aci:int|"canvas", scale) | None = untouched
+        self._bg: Optional[tuple] = None
+        # (count, height, gutter) | ("off",) | None = untouched
+        self._columns: Optional[tuple] = None
 
         runs = None
         if not single_line:
@@ -487,6 +491,25 @@ class MTextInPlaceEditor(QWidget):
                              lambda: self._apply_list("bullet"))
         self.lists.setMenu(lists_menu)
         row.addWidget(self.lists)
+
+        self.mask = QToolButton(self._bar)
+        self.mask.setText(tr("Mask"))
+        self.mask.setToolTip(tr("Background mask (opaque behind the text)"))
+        self.mask.setFocusPolicy(Qt.NoFocus)
+        self.mask.clicked.connect(self._mask_dialog)
+        row.addWidget(self.mask)
+
+        self.columns = QToolButton(self._bar)
+        self.columns.setText(tr("Columns"))
+        self.columns.setToolTip(tr("Static columns"))
+        self.columns.setFocusPolicy(Qt.NoFocus)
+        self.columns.setPopupMode(QToolButton.InstantPopup)
+        columns_menu = QMenu(self.columns)
+        columns_menu.addAction(tr("No Columns"),
+                               lambda: self._set_columns(None))
+        columns_menu.addAction(tr("Static Columns..."), self._columns_dialog)
+        self.columns.setMenu(columns_menu)
+        row.addWidget(self.columns)
 
         self.justify = QToolButton(self._bar)
         self.justify.setText(tr("Justify"))
@@ -885,6 +908,41 @@ class MTextInPlaceEditor(QWidget):
                 return True
         return False
 
+    # -- background mask -------------------------------------------------------
+    def _mask_dialog(self) -> None:
+        from views.mtext_dialogs import BackgroundMaskDialog
+
+        dialog = BackgroundMaskDialog(self, self._current_bg())
+        if dialog.exec():
+            self._bg = dialog.result_bg()
+
+    def _current_bg(self):
+        if self._bg is not None:
+            return self._bg
+        return getattr(self, "_initial_bg", ("off",))
+
+    def set_initial_bg(self, bg) -> None:
+        self._initial_bg = bg
+
+    # -- columns ---------------------------------------------------------------
+    def _set_columns(self, value) -> None:
+        self._columns = ("off",) if value is None else value
+
+    def _columns_dialog(self) -> None:
+        from views.mtext_dialogs import StaticColumnsDialog
+
+        current = self._columns if self._columns \
+            and self._columns[0] != "off" else getattr(
+                self, "_initial_columns", None)
+        dialog = StaticColumnsDialog(self, current,
+                                     char_height=self._char_height,
+                                     width=self._width_world)
+        if dialog.exec():
+            self._columns = dialog.result_columns()
+
+    def set_initial_columns(self, columns) -> None:
+        self._initial_columns = columns
+
     def _set_attachment(self, value: int) -> None:
         self._attachment = value
         for number, label in ATTACHMENTS:
@@ -998,6 +1056,8 @@ class MTextInPlaceEditor(QWidget):
             "line_spacing": self._line_spacing
             if abs(self._line_spacing - self._initial_spacing) > 1e-9
             else None,
+            "bg": self._bg,
+            "columns": self._columns,
         }
 
     def _teardown(self) -> None:

@@ -462,7 +462,9 @@ class ToolController(QObject):
                     first, box_second, content, char_height,
                     style=extras.get("style"),
                     attachment=extras.get("attachment") or 1,
-                    line_spacing=extras.get("line_spacing")))
+                    line_spacing=extras.get("line_spacing"),
+                    bg=extras.get("bg"),
+                    columns=extras.get("columns")))
             self.window.viewport.update()
 
         self._mtext_editor = MTextInPlaceEditor(
@@ -504,8 +506,11 @@ class ToolController(QObject):
             new_style = extras.get("style")
             new_width = extras.get("width")
             new_spacing = extras.get("line_spacing")
+            new_bg = extras.get("bg")
+            new_columns = extras.get("columns")
             if new == text and not new_style and not new_width \
-                    and not new_spacing:
+                    and not new_spacing and new_bg is None \
+                    and new_columns is None:
                 return                        # untouched: not an edit
 
             def mutate() -> None:
@@ -516,6 +521,8 @@ class ToolController(QObject):
                     if new_spacing:
                         entity.dxf.line_spacing_factor = float(new_spacing)
                         entity.dxf.line_spacing_style = 1
+                    actions.apply_mtext_bg(entity, new_bg)
+                    actions.apply_mtext_columns(entity, new_columns)
                 else:
                     entity.dxf.text = new
                 if new_style:
@@ -533,6 +540,18 @@ class ToolController(QObject):
             style=str(entity.dxf.get("style", "Standard")),
             line_spacing=float(entity.dxf.get("line_spacing_factor", 1.0)
                                or 1.0))
+        if kind == "MTEXT":
+            fill = int(entity.dxf.get("bg_fill", 0) or 0)
+            if fill & 1:
+                colour = "canvas" if (fill & 3) == 3 else \
+                    int(entity.dxf.get("bg_fill_color", 7) or 7)
+                self._mtext_editor.set_initial_bg(
+                    (colour, float(entity.dxf.get("box_fill_scale", 1.5))))
+            if entity.has_columns:
+                cols = entity.columns
+                self._mtext_editor.set_initial_columns(
+                    (cols.count, cols.defined_height or cols.total_height,
+                     cols.gutter_width))
         return True
 
     def _ask_text(self, prompt: str, default: str = "") -> Optional[str]:

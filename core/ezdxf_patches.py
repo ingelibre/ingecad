@@ -21,6 +21,7 @@ def apply() -> None:
         return
     _APPLIED = True
     _patch_polygon_transform()
+    _patch_mtext_mask_rendering()
 
 
 def _patch_polygon_transform() -> None:
@@ -67,3 +68,27 @@ def _patch_polygon_transform() -> None:
 
     transform._ingecad_patch = True  # marker for tests / idempotence
     DXFPolygon.transform = transform
+
+
+def _patch_mtext_mask_rendering() -> None:
+    """A background mask on a PLAIN mtext never renders.
+
+    The drawing add-on draws the mask only in its complex-mtext renderer,
+    and ``is_complex_mtext`` routes there on columns, inline codes or an
+    exotic text style — not on ``bg_fill``. An MTEXT with a mask but no
+    formatting takes the simple path, which ignores the mask entirely, so
+    AutoCAD shows the opaque background and our canvas does not.
+
+    Route masked mtext through the complex renderer, whose mask support is
+    complete (ACI, true colour, canvas colour, text frame).
+    """
+    from ezdxf.addons.drawing import frontend as _frontend
+
+    original = _frontend.is_complex_mtext
+
+    def is_complex_mtext(mtext) -> bool:
+        if mtext.dxf.get("bg_fill", 0):
+            return True
+        return original(mtext)
+
+    _frontend.is_complex_mtext = is_complex_mtext
