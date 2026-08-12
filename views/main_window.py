@@ -463,6 +463,8 @@ class MainWindow(QMainWindow):
         # Classic AutoCAD: Insert > Raster Image Reference.
         cmd_item(insert_menu, tr("Raster Image Reference..."), "IMAGEATTACH",
                  icon=False)
+        cmd_item(insert_menu, tr("PDF as Raster Image..."), "PDFATTACH",
+                 icon=False)
         insert_menu.addSeparator()
         # Classic AutoCAD: Insert > Layout.
         layout_menu = insert_menu.addMenu(tr("Layout"))
@@ -504,6 +506,7 @@ class MainWindow(QMainWindow):
         cmd_item(point_menu, tr("Divide"), "DIVIDE")
         cmd_item(point_menu, tr("Measure"), "MEASURE")
         cmd_item(draw_menu, tr("Revision Cloud"), "REVCLOUD")
+        cmd_item(draw_menu, tr("Table..."), "TABLE", icon=False)
         draw_menu.addSeparator()
         cmd_item(draw_menu, tr("Text"), "TEXT")
         cmd_item(draw_menu, tr("Multiline text"), "MTEXT")
@@ -1664,7 +1667,8 @@ class MainWindow(QMainWindow):
                      "DIST", "ID", "AREA", "LIST",
                      "STRETCH", "BREAK", "JOIN",
                      "CHAMFER", "ARRAY", "MATCHPROP", "PEDIT",
-                     "DRAWORDER", "LAYISO", "LAYOFF", "IMAGEATTACH"):
+                     "DRAWORDER", "LAYISO", "LAYOFF", "IMAGEATTACH",
+                     "TABLE", "PDFATTACH"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
         d.register("LAYON", lambda *a: self._cmd_layon())
         d.register("LAYUNISO", lambda *a: self._cmd_layuniso())

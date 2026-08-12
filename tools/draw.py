@@ -2131,6 +2131,152 @@ class ImageAttachTool(Tool):
             self._place(1.0)
 
 
+class TableTool(Tool):
+    """TABLE: the Insert Table dialog, then the top-left corner on canvas.
+
+    The grid is plain LINEs and TEXTs (see core.tables) — the construction
+    every coordinate-chart LISP uses, and it round-trips everywhere.
+    """
+
+    def start(self) -> None:
+        self.name = "TABLE"
+        self._spec = None
+        window = getattr(self.ctx.services, "window", None)
+        from views.table_dialog import InsertTableDialog
+
+        char_height = 2.5
+        try:
+            char_height = float(
+                window.document.doc.header.get("$TEXTSIZE", 2.5)) or 2.5
+        except Exception:
+            pass
+        dialog = InsertTableDialog(window, char_height)
+        if not dialog.exec():
+            self.ctx.finish()
+            return
+        self._spec = dialog.result_table()
+        self.ctx.prompt(tr("Specify insertion point:"))
+
+    def on_point(self, point: Point) -> None:
+        if self._spec is None:
+            return
+        from core import tables
+
+        self.ctx.execute(tables.insert_table((point[0], point[1]),
+                                             self._spec["cols"],
+                                             self._spec["col_width"],
+                                             self._spec["data_rows"],
+                                             self._spec["row_height"],
+                                             self._spec["text_height"],
+                                             title=self._spec["title"],
+                                             headers=self._spec["headers"]))
+        self.ctx.echo(tr("Table created. Fill the cells with TEXT."))
+        self.ctx.finish()
+
+
+class PdfAttachTool(Tool):
+    """PDFATTACH, the raster way: rasterize one page with QtPdf and attach
+    it as a plain IMAGE — good enough to trace over, honest about what it
+    is (the canvas shows exactly what every other CAD will see: an image).
+
+    Base size = the page's physical size, one drawing unit per millimetre.
+    """
+
+    DPI = 150.0
+
+    def start(self) -> None:
+        self.name = "PDFATTACH"
+        self._png = None
+        self._size_px = None
+        self._insert = None
+        self._scale_unit = 25.4 / self.DPI     # world units (mm) per pixel
+        window = getattr(self.ctx.services, "window", None)
+        from PySide6.QtWidgets import QFileDialog
+
+        filename, _ = QFileDialog.getOpenFileName(
+            window, tr("Select PDF File"), "", tr("PDF (*.pdf)"))
+        if not filename:
+            self.ctx.finish()
+            return
+        from PySide6.QtCore import QSize
+        from PySide6.QtPdf import QPdfDocument
+
+        pdf = QPdfDocument(window)
+        pdf.load(filename)
+        if pdf.pageCount() < 1:
+            self.ctx.echo(tr("Cannot read {name} as a PDF.", name=filename))
+            self.ctx.finish()
+            return
+        page = 0
+        if pdf.pageCount() > 1:
+            page = self._ask_page(pdf.pageCount())
+            if page is None:
+                self.ctx.finish()
+                return
+        points = pdf.pagePointSize(page)
+        px = QSize(max(1, round(points.width() / 72.0 * self.DPI)),
+                   max(1, round(points.height() / 72.0 * self.DPI)))
+        image = pdf.render(page, px)
+        import pathlib
+
+        source = pathlib.Path(filename)
+        target = source.with_name(f"{source.stem}-p{page + 1}.png")
+        try:
+            image.save(str(target))
+        except Exception:
+            target = None
+        if target is None or not target.exists():
+            cache = pathlib.Path.home() / ".cache" / "ingecad" / "pdf"
+            cache.mkdir(parents=True, exist_ok=True)
+            target = cache / f"{source.stem}-p{page + 1}.png"
+            image.save(str(target))
+        self._png = str(target)
+        self._size_px = (px.width(), px.height())
+        self.ctx.prompt(tr("Specify insertion point:"))
+
+    def _ask_page(self, count: int):
+        window = getattr(self.ctx.services, "window", None)
+        from PySide6.QtWidgets import QInputDialog
+
+        page, ok = QInputDialog.getInt(
+            window, tr("PDF Page"),
+            tr("Page (1-{count}):", count=count), 1, 1, count)
+        return page - 1 if ok else None
+
+    def on_point(self, point: Point) -> None:
+        if self._png is None or self._insert is not None:
+            return
+        self._insert = (point[0], point[1])
+        width_mm = self._size_px[0] * self._scale_unit
+        height_mm = self._size_px[1] * self._scale_unit
+        self.ctx.prompt(tr(
+            "Page size: {w:.0f} x {h:.0f} units. Specify scale factor <1>:",
+            w=width_mm, h=height_mm))
+
+    def _place(self, factor: float) -> None:
+        self.ctx.execute(actions.attach_image(
+            self._png, self._size_px, self._insert,
+            self._scale_unit * factor))
+        self.ctx.finish()
+
+    def on_option(self, text: str) -> bool:
+        if self._insert is None:
+            return False
+        try:
+            factor = float(text)
+        except ValueError:
+            return False
+        if factor <= 0:
+            self.ctx.echo(tr("Value must be positive."))
+            return True
+        self._place(factor)
+        return True
+
+    def on_enter(self) -> None:
+        if self._insert is not None:
+            self._place(1.0)
+
+
 TOOL_CLASSES = {
     "LINE": LineTool,
     "CIRCLE": CircleTool,
@@ -2143,4 +2289,6 @@ TOOL_CLASSES = {
     "TEXT": TextTool,
     "MTEXT": MTextTool,
     "IMAGEATTACH": ImageAttachTool,
+    "TABLE": TableTool,
+    "PDFATTACH": PdfAttachTool,
 }
