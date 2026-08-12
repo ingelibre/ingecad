@@ -219,17 +219,49 @@ class GeometryIndex:
             pass
 
     @staticmethod
+    def _text_extents(e):
+        """(x0, y0, x1, y1) respecting an MTEXT's EFFECTIVE height, or None.
+
+        ezdxf's bbox lays the MTEXT out at char_height — for an AutoCAD
+        text whose real height lives in an inline backslash-H code: the attribute
+        holds a residue and the box collapses to a point far smaller than
+        the visible glyphs: clicking the text picked whatever lay behind
+        it. Scale the box about the insert point by effective/attribute.
+        """
+        box = ezbbox.extents([e], fast=True)
+        if not box.has_data:
+            return None
+        x0, y0 = box.extmin.x, box.extmin.y
+        x1, y1 = box.extmax.x, box.extmax.y
+        if e.dxftype() == "MTEXT":
+            base = float(e.dxf.get("char_height", 0.0) or 0.0)
+            try:
+                from core.modify import _effective_text_height
+
+                effective = _effective_text_height(e) or base
+            except Exception:
+                effective = base
+            if base > 0 and effective > 0 \
+                    and abs(effective - base) > base * 1e-6:
+                factor = effective / base
+                ins = e.dxf.insert
+                x0 = ins.x + (x0 - ins.x) * factor
+                y0 = ins.y + (y0 - ins.y) * factor
+                x1 = ins.x + (x1 - ins.x) * factor
+                y1 = ins.y + (y1 - ins.y) * factor
+        return (x0, y0, x1, y1)
+
+    @staticmethod
     def _text_box_segments(e, oid, segs, seg_o) -> bool:
         """A closed rectangle around a text/arrow, as four real segments.
 
         A text IS picked by its box, in AutoCAD too — but the box must be the
         TEXT's, not the whole owner's.
         """
-        box = ezbbox.extents([e], fast=True)
-        if not box.has_data:
+        extents = GeometryIndex._text_extents(e)
+        if extents is None:
             return False
-        x0, y0 = box.extmin.x, box.extmin.y
-        x1, y1 = box.extmax.x, box.extmax.y
+        x0, y0, x1, y1 = extents
         for a, b in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)),
                      ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))):
             segs.append((a[0], a[1], b[0], b[1]))
@@ -342,10 +374,9 @@ class GeometryIndex:
     @staticmethod
     def _box(e, oid, boxes, box_o) -> None:
         """The last-resort bounding box (see BOXED_TYPES)."""
-        box = ezbbox.extents([e], fast=True)
-        if box.has_data:
-            boxes.append((box.extmin.x, box.extmin.y,
-                          box.extmax.x, box.extmax.y))
+        extents = GeometryIndex._text_extents(e)
+        if extents is not None:
+            boxes.append(extents)
             box_o.append(oid)
 
     @staticmethod

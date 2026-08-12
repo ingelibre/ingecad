@@ -440,3 +440,20 @@ def test_rendered_dim_blocks_wear_byblock_like_autocads():
     block = doc.doc.blocks.get(dim.dxf.geometry)
     lines = [e for e in block if e.dxftype() == "LINE"]
     assert lines and all(e.dxf.get("color", 256) == 0 for e in lines)
+
+
+def test_a_small_autocad_text_is_pickable_on_its_visible_glyphs():
+    """The \\H-in-content text again: ezdxf's bbox used the residual
+    char_height (0.0019) and the pick box collapsed to a point — clicking
+    the visible glyphs picked whatever lay behind (Marco: matchprop kept
+    grabbing the big text next to it)."""
+    from core.select import GeometryIndex
+
+    doc, msp = _msp()
+    big = msp.add_text("NIVEL", dxfattribs={"height": 2.5, "insert": (0, 0)})
+    small = msp.add_mtext(r"\H0.15;npt", dxfattribs={"char_height": 0.0019})
+    small.set_location((5.0, 5.0))
+    index = GeometryIndex(doc)
+    index._build()
+    assert index.pick((5.15, 4.93), 0.05) == small.dxf.handle
+    assert index.pick((3.0, 0.8), 0.05) == big.dxf.handle
