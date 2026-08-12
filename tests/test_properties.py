@@ -291,3 +291,24 @@ def test_select_color_dialog_returns_any_aci(qapp):
     assert dialog.result_aci() == 142
     dialog._pick(256)
     assert dialog.result_aci() == 256
+
+
+def test_matchprop_uses_the_effective_mtext_height(qapp):
+    """AutoCAD MTEXTs often carry the real height as an inline \\H code
+    while char_height holds a residue; copying the raw attribute shrank
+    the destination to 0.0019 (the reported bug)."""
+    from core.document import Document
+    from core.commands import History
+    from core.modify import match_properties
+
+    doc = Document.new()
+    msp = doc.modelspace()
+    src = msp.add_mtext(r"\H0.15;NPT +2.50",
+                        dxfattribs={"char_height": 0.0019})
+    src.set_location((0, 0))
+    dst = msp.add_mtext("nivel", dxfattribs={"char_height": 2.5})
+    dst.set_location((0, 20))
+    plain = msp.add_text("suelto", dxfattribs={"height": 2.5})
+    History(doc).execute(match_properties(src, [dst, plain]))
+    assert dst.dxf.char_height == pytest.approx(0.15)
+    assert plain.dxf.height == pytest.approx(0.15)

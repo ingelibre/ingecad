@@ -703,10 +703,12 @@ def _match_style(source, target) -> None:
         except Exception:
             pass
         # "changes the text style AND PROPERTIES" (Text special property,
-        # p. 1081) — the height crosses TEXT<->MTEXT too.
-        height = (source.dxf.char_height
-                  if source.dxftype() == "MTEXT"
-                  else source.dxf.get("height", None))
+        # p. 1081) — the height crosses TEXT<->MTEXT too, and it must be
+        # the EFFECTIVE height: AutoCAD MTEXTs often carry the real height
+        # as an inline \H code while char_height holds a residue (0.0019
+        # on Marco's plan) — copying the raw attribute shrank the target
+        # to that residue.
+        height = _effective_text_height(source)
         if height:
             try:
                 if target.dxftype() == "MTEXT":
@@ -720,6 +722,30 @@ def _match_style(source, target) -> None:
             target.dxf.dimstyle = source.dxf.dimstyle
         except Exception:
             pass
+
+
+def _effective_text_height(entity) -> float | None:
+    """The height the text DISPLAYS at.
+
+    TEXT: the height attribute. MTEXT: char_height unless the content's
+    first visible run overrides it with an inline \H code (absolute or
+    relative) — the parser resolves either form.
+    """
+    if entity.dxftype() != "MTEXT":
+        return entity.dxf.get("height", None)
+    base = float(entity.dxf.get("char_height", 0.0)) or None
+    try:
+        from ezdxf.tools.text import MTextContext, MTextParser, TokenType
+
+        ctx = MTextContext()
+        if base:
+            ctx.cap_height = base
+        for token in MTextParser(entity.text, ctx):
+            if token.type == TokenType.WORD:
+                return float(token.ctx.cap_height) or base
+    except Exception:
+        pass
+    return base
 
 
 def match_properties(source, targets, properties=MATCH_PROPERTIES):
