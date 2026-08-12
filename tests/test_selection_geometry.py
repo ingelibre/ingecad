@@ -263,3 +263,82 @@ def test_ellipse_center_grip_moves_it():
     assert apply_grip_edit(e, 0, "center", (80.0, 20.0))
     assert (e.dxf.center.x, e.dxf.center.y) == (80.0, 20.0)
     assert e.dxf.major_axis.x == 20.0          # shape untouched
+
+
+def test_every_selectable_type_has_grips_now():
+    """The audit: anything IngeCAD can create and select shows grips —
+    except DIMENSION, whose grip editing means regenerating its block
+    (its own project, deferred honestly)."""
+    from core.select import entity_grips
+    from ezdxf.enums import TextEntityAlignment
+
+    _doc, msp = _msp()
+    _doc.doc.blocks.new("B1").add_line((0, 0), (1, 1))
+    entities = [
+        msp.add_text("T", dxfattribs={"height": 2.0, "insert": (1, 2)}),
+        msp.add_mtext("M", dxfattribs={"insert": (3, 4)}),
+        msp.add_blockref("B1", (5, 6)),
+        msp.add_xline((7, 8), (1, 0)),
+        msp.add_ray((9, 10), (0, 1)),
+        msp.add_solid([(0, 0), (4, 0), (0, 4), (4, 4)]),
+    ]
+    hatch = msp.add_hatch()
+    hatch.paths.add_polyline_path([(0, 0), (4, 0), (4, 4), (0, 4)],
+                                  is_closed=True)
+    entities.append(hatch)
+    for entity in entities:
+        assert entity_grips(entity), entity.dxftype()
+
+
+def test_moving_the_single_grip_translates_the_entity():
+    from core.select import apply_grip_edit, entity_grips
+
+    _doc, msp = _msp()
+    text = msp.add_text("T", dxfattribs={"height": 2.0, "insert": (1.0, 2.0)})
+    assert apply_grip_edit(text, 0, "center", (11.0, 22.0))
+    assert (text.dxf.insert.x, text.dxf.insert.y) == (11.0, 22.0)
+
+    xline = msp.add_xline((0.0, 0.0), (1.0, 0.0))
+    assert apply_grip_edit(xline, 0, "center", (5.0, 5.0))
+    assert (xline.dxf.start.x, xline.dxf.start.y) == (5.0, 5.0)
+    assert xline.dxf.unit_vector.x == 1.0        # direction untouched
+
+
+def test_aligned_text_grips_at_its_align_point():
+    from ezdxf.enums import TextEntityAlignment
+
+    from core.select import apply_grip_edit, entity_grips
+
+    _doc, msp = _msp()
+    text = msp.add_text("C", dxfattribs={"height": 2.0})
+    text.set_placement((10.0, 10.0), align=TextEntityAlignment.MIDDLE_CENTER)
+    (gx, gy, role), = entity_grips(text)
+    assert (gx, gy) == (10.0, 10.0) and role == "center"
+    assert apply_grip_edit(text, 0, "center", (20.0, 30.0))
+    (gx, gy, _), = entity_grips(text)
+    assert (gx, gy) == (20.0, 30.0)
+
+
+def test_solid_corners_move_individually():
+    from core.select import apply_grip_edit
+
+    _doc, msp = _msp()
+    solid = msp.add_solid([(0, 0), (4, 0), (0, 4), (4, 4)])
+    assert apply_grip_edit(solid, 3, "vertex", (9.0, 9.0))
+    assert (solid.dxf.vtx3.x, solid.dxf.vtx3.y) == (9.0, 9.0)
+    assert (solid.dxf.vtx0.x, solid.dxf.vtx0.y) == (0.0, 0.0)
+
+
+def test_hatch_grip_moves_the_whole_hatch():
+    import ezdxf.bbox as bbox_mod
+
+    from core.select import apply_grip_edit, entity_grips
+
+    _doc, msp = _msp()
+    hatch = msp.add_hatch()
+    hatch.paths.add_polyline_path([(0, 0), (4, 0), (4, 4), (0, 4)],
+                                  is_closed=True)
+    (gx, gy, role), = entity_grips(hatch)
+    assert (gx, gy) == (2.0, 2.0) and role == "center"
+    assert apply_grip_edit(hatch, 0, "center", (12.0, 2.0))
+    assert bbox_mod.extents([hatch]).center.x == 12.0

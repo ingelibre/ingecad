@@ -792,6 +792,16 @@ def _circle_intersects_rect(c, x0, y0, x1, y1) -> bool:
     return True
 
 
+def _text_anchor(entity):
+    """Where a TEXT visually hangs: the align point when aligned, else
+    the insert point (an aligned TEXT's insert is often stale)."""
+    align = entity.dxf.get("align_point", None)
+    if align is not None and (entity.dxf.get("halign", 0)
+                              or entity.dxf.get("valign", 0)):
+        return align
+    return entity.dxf.insert
+
+
 def entity_grips(entity) -> list[tuple[float, float, str]]:
     """Grip points of an entity: (x, y, role).
 
@@ -834,6 +844,29 @@ def entity_grips(entity) -> list[tuple[float, float, str]]:
     elif t == "POINT":
         l = entity.dxf.location
         grips.append((l.x, l.y, "center"))
+    elif t == "TEXT":
+        p = _text_anchor(entity)
+        grips.append((p.x, p.y, "center"))
+    elif t in ("MTEXT", "INSERT"):
+        p = entity.dxf.insert
+        grips.append((p.x, p.y, "center"))
+    elif t in ("XLINE", "RAY"):
+        # Root point only: moving it slides the line; direction stays a
+        # command-level edit (the prompt-honesty rule).
+        p = entity.dxf.start
+        grips.append((p.x, p.y, "center"))
+    elif t == "SOLID":
+        for i in range(4):
+            p = getattr(entity.dxf, f"vtx{i}")
+            grips.append((p.x, p.y, "vertex"))
+    elif t == "HATCH":
+        try:
+            import ezdxf.bbox as _bbox
+
+            c = _bbox.extents([entity]).center
+            grips.append((c.x, c.y, "center"))
+        except Exception:
+            pass
     elif t == "SPLINE":
         # AutoCAD: a grip on every fit point (or control point for a CV
         # spline); dragging one re-fits the curve through the new spot.
@@ -893,6 +926,32 @@ def apply_grip_edit(entity, grip_index: int, role: str, new_point):
         u, v = entity.dxf.u_pixel, entity.dxf.v_pixel
         entity.dxf.u_pixel = (u.x * factor, u.y * factor, u.z * factor)
         entity.dxf.v_pixel = (v.x * factor, v.y * factor, v.z * factor)
+        return True
+    if t == "TEXT":
+        p = _text_anchor(entity)
+        entity.translate(nx - p.x, ny - p.y, 0)
+        return True
+    if t in ("MTEXT", "INSERT"):
+        p = entity.dxf.insert
+        entity.translate(nx - p.x, ny - p.y, 0)
+        return True
+    if t in ("XLINE", "RAY"):
+        p = entity.dxf.start
+        entity.translate(nx - p.x, ny - p.y, 0)
+        return True
+    if t == "SOLID":
+        if grip_index >= 4:
+            return False
+        setattr(entity.dxf, f"vtx{grip_index}", (nx, ny, 0))
+        return True
+    if t == "HATCH":
+        try:
+            import ezdxf.bbox as _bbox
+
+            c = _bbox.extents([entity]).center
+        except Exception:
+            return False
+        entity.translate(nx - c.x, ny - c.y, 0)
         return True
     if t == "SPLINE":
         points = list(entity.fit_points)
