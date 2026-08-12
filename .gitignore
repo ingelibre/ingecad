@@ -31,3 +31,4 @@ capturas/
 # hermanos: un cambio de copy no debe disparar el CI del producto.
 /web/
 docs/reference/
+crash_report.txt

@@ -1,5 +1,88 @@
 # Changelog
 
+## v0.3.0 — 2026-08-11
+
+A day of dogfooding against AutoCAD and BricsCAD V26, command by command:
+Marco drew in IngeCAD with BricsCAD open beside it and every divergence
+became a fix or a feature. The headline is the MTEXT in-place editor,
+built from the official In-Place Text Editor chapter of the AutoCAD 2011
+Command Reference (pp. 1221–1244).
+
+### Added — the MTEXT in-place editor
+- **Edit on the canvas**, at the text's real size and position, drawing
+  visible behind: Enter is a paragraph break, Ctrl+Enter / OK / clicking
+  outside commits, Esc asks before discarding. Double-click an MTEXT to
+  edit it; TEXT keeps its single-line in-place editing.
+- **The Text Formatting toolbar**: style, font, height, bold, italic,
+  underline, overline, colour, justification (all nine positions) — each
+  written as AutoCAD's own inline codes (`\f`, `\H`, `\L`, `\O`, `\C`),
+  so the file reads identically in AutoCAD.
+- **The ruler**: first-line and hanging indent sliders, tab stops with the
+  L/C/R tab-type button, the width arrow (drag to resize, double-click to
+  fit), all stored as `\px` paragraph codes.
+- **Line spacing** (1.0x/1.5x/2.0x/2.5x/More…/Clear) and **bullets and
+  numbered/lettered lists**: Enter continues the list, Enter on an empty
+  item ends it, `1.` or `-` plus Tab starts one — plain text plus indents,
+  exactly the construction AutoCAD writes.
+- **Background mask** (border offset factor, fill colour or drawing
+  background) and **static columns** with the Column Settings dialog.
+- Formatting the editor cannot represent losslessly (stacked fractions,
+  fields, oblique/width/tracking overrides) opens in a raw-code mode
+  instead of being silently mangled — by-construction: the rich mode only
+  opens when serializing back reproduces the original bytes.
+- Fixed along the way: bold/italic rendered exactly like regular text on
+  the canvas (ezdxf's font matcher filtered by style before weight and
+  never reached the bold face — runtime-patched); a background mask on
+  unformatted text never rendered; masks vanished at low zoom (the LOD
+  culling treated the mask quad as illegible text); the caret opened
+  below the visible area; the mouse pointer vanished over the toolbar
+  and ruler (the canvas hides the OS cursor — the crosshair is the
+  cursor — and child widgets inherited it).
+
+### Added — editing, to AutoCAD's prompt trees
+- **STRETCH** (crossing selection semantics), **BREAK** (first/second
+  point, `@` for break-at-point), **JOIN**, **CHAMFER** (distances,
+  angle, polyline, Undo), **ARRAY** (rectangular/polar), **MATCHPROP**
+  with its Settings list, **PEDIT** (open/close, join, width, and vertex
+  editing).
+- **OFFSET grown to the full tree**: distance by mouse (two picks),
+  Through, Erase, Layer — and it offsets **polylines as one entity**,
+  arcs included, like AutoCAD.
+- **ROTATE and SCALE preview live**: the selection turns/scales under the
+  cursor around the base point, with Reference and Copy options.
+- Object snaps work **on curves** (circles, arcs, ellipses, splines,
+  polyline arc segments), plus **QUA** on every round shape, **TAN**,
+  **INS** and **GCE** (geometric center) — with their AutoSnap markers.
+- **The running object snap list** on the status bar, AutoCAD's own
+  (right-click the OSNAP button): per-mode checkboxes, Select All /
+  Clear All, and the Drafting Settings dialog.
+
+### Added — the working session
+- **SAVE / Ctrl+S** (with save-as when untitled), **UNITS** (mm/cm/m,
+  the AutoCAD dialog), and the inquiry commands **DIST / ID / AREA /
+  LIST**.
+- **A startup window** like BricsCAD's: pick the template unit, or reopen
+  a recent drawing from its thumbnail.
+- **Command prefix autocomplete**: an unambiguous prefix runs the command
+  (`OFF` → OFFSET), aliases still win, ambiguity resolves alphabetically
+  — AutoCAD's AutoComplete rule.
+- **Properties bar completed**: linetype, lineweight and colour of the
+  selection, and the current-properties defaults for new entities
+  ($CECOLOR/$CELTYPE/$CELWEIGHT round-trip to the DXF header).
+- **The Modify toolbar icons redrawn from AutoCAD's own** (traced from a
+  screenshot, not from memory — the first attempt proved memory draws
+  the wrong icons).
+- The crosshair yields to AutoCAD's pickbox-only cursor while a command
+  is choosing objects, and returns for point picks.
+- Fixed: Ctrl+Y did nothing (the redo key was bound twice, so Qt fired
+  neither); selecting an ellipse highlighted its bounding rectangle.
+
+### Packaging
+- **New artifact: a plain tarball** (`IngeCAD-<version>-linux-x86_64.tar.gz`)
+  — the same self-contained build as the AppImage without the FUSE
+  requirement: extract and run `./ingecad`. Ships the desktop file and
+  icon for manual integration.
+
 ## v0.2.0 — 2026-08-10
 
 Paper space and the complete dimension family. Everything in this release was

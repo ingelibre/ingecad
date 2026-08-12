@@ -60,16 +60,27 @@ What works today:
 - **Layers like AutoCAD's**: the properties table (status, on, freeze, lock,
   colour, linetype, lineweight, plot, description) with live search, and the
   `-LAYER` command line with wildcards for the keyboard-only flow.
-- **Editing**: ERASE / MOVE / COPY / ROTATE / SCALE / MIRROR / OFFSET /
-  TRIM / EXTEND / FILLET / EXPLODE, grips, window/crossing selection,
-  clipboard copy/paste.
+- **Editing**: ERASE / MOVE / COPY / ROTATE / SCALE / MIRROR / OFFSET
+  (polylines and arcs included, distance by mouse) / TRIM / EXTEND / FILLET /
+  CHAMFER / STRETCH / BREAK / JOIN / ARRAY / MATCHPROP / PEDIT / EXPLODE,
+  grips, window/crossing selection, clipboard copy/paste, and ROTATE/SCALE
+  show the result turning live under the cursor.
+- **The MTEXT in-place editor**: text edits on the canvas at its real size
+  with the classic Text Formatting toolbar (style, font, height, bold,
+  italic, underline, overline, colour), the ruler with indents, tab stops
+  and the width arrow, line spacing, bullets and numbered lists, background
+  mask and static columns — all stored as AutoCAD's own inline codes.
 - **The AutoCAD feel**: object snaps with AutoSnap markers (END, MID, CEN,
-  NOD, INT, PER, NEA), ORTHO / POLAR, absolute / relative / polar
-  coordinate input, blocks (`B` / `I`), undo/redo of everything.
+  NOD, INT, PER, TAN, QUA, INS, GCE — on curves too) with the status-bar
+  running-snap list, ORTHO / POLAR, absolute / relative / polar coordinate
+  input, command prefix autocomplete (`OFF` runs OFFSET), inquiry commands
+  (DIST / ID / AREA / LIST), UNITS, blocks (`B` / `I`), a startup window
+  with template units and recent drawings with thumbnails, and undo/redo of
+  everything.
 - **Output**: print / export PDF and PNG to exact scale, from model or
   layout.
 
-Planned next (v0.3): survey-point import with elevations, coordinate
+Planned next (v0.4): survey-point import with elevations, coordinate
 tables, elevation profiles. See `CLAUDE.md` for the roadmap.
 
 ## Install (Linux, x86_64)
@@ -83,6 +94,14 @@ are inside:
 chmod +x IngeCAD-*-x86_64.AppImage
 ./IngeCAD-*-x86_64.AppImage            # or double-click it
 ./IngeCAD-*-x86_64.AppImage --check    # if something misbehaves
+```
+
+If your distro lacks FUSE (the one thing an AppImage needs), each release
+also ships the same build as a plain tarball — extract and run:
+
+```bash
+tar -xzf IngeCAD-*-linux-x86_64.tar.gz
+IngeCAD-*/ingecad
 ```
 
 `--check` prints where the app found its shaders, translations and converters,

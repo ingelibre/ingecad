@@ -49,6 +49,32 @@ echo "==> the bundle finds its own data"
 # converter starts fine and only fails when the user opens a drawing.
 "$WORK/pyi/ingecad/ingecad" --check
 
+echo "==> tarball"
+# The same bundle, without the AppImage wrapper: extract and run. For users
+# whose distro lacks FUSE (the classic AppImage complaint) or who want to
+# unpack under /opt. Ships the desktop file and icon for manual integration.
+TARDIR="$WORK/IngeCAD-$VERSION"
+TARBALL="$OUT/IngeCAD-$VERSION-linux-$ARCH.tar.gz"
+rm -rf "$TARDIR"
+mkdir -p "$TARDIR" "$OUT"
+cp -a "$WORK/pyi/ingecad/." "$TARDIR/"
+cp resources/ingecad.desktop resources/icons/ingecad_256.png "$TARDIR/"
+cat > "$TARDIR/README.txt" <<'TXT'
+IngeCAD — portable Linux build
+==============================
+
+Run it:            ./ingecad            (or: ./ingecad drawing.dwg)
+Self-diagnosis:    ./ingecad --check
+
+No installation required. To add a launcher and the .dwg/.dxf icons,
+edit the Exec= line of ingecad.desktop to this folder's path and copy
+it to ~/.local/share/applications/.
+
+Prefer the AppImage from the same release if your distro has FUSE.
+TXT
+tar -C "$WORK" -czf "$TARBALL" "IngeCAD-$VERSION"
+printf '%s  (%s)\n' "$TARBALL" "$(du -h "$TARBALL" | cut -f1)"
+
 echo "==> AppDir"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" \
          "$APPDIR/usr/share/icons/hicolor/256x256/apps" \

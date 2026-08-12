@@ -78,14 +78,30 @@ jobs:
           fi
           echo "OK — started, opened smoke.dxf and stayed up"
 
+      # The tarball is the same bundle without the AppImage wrapper. Prove it
+      # runs after extraction, not just that it was packed.
+      - name: Smoke test the tarball
+        run: |
+          mkdir -p tarcheck && tar -C tarcheck -xzf dist/IngeCAD-*-linux-x86_64.tar.gz
+          tarcheck/IngeCAD-*/ingecad --check
+
       - uses: actions/upload-artifact@v4
         with:
           name: IngeCAD-AppImage-x86_64
           path: dist/IngeCAD-*-x86_64.AppImage
           if-no-files-found: error
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IngeCAD-tarball-x86_64
+          path: dist/IngeCAD-*-linux-x86_64.tar.gz
+          if-no-files-found: error
+
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" dist/IngeCAD-*-x86_64.AppImage --clobber
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            dist/IngeCAD-*-x86_64.AppImage \
+            dist/IngeCAD-*-linux-x86_64.tar.gz --clobber
