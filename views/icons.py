@@ -512,10 +512,10 @@ def _revcloud():
     from PySide6.QtGui import QPainterPath
 
     pm, p = _canvas()
-    cx, cy, rx, ry = 12.0, 12.5, 8.2, 6.2
-    n = 8
-    pts = [(cx + rx * math.cos(2 * math.pi * i / n + 0.4),
-            cy + ry * math.sin(2 * math.pi * i / n + 0.4)) for i in range(n)]
+    cx, cy, rx, ry = 12.0, 12.5, 8.4, 6.2
+    n = 5                      # five fat scallops read better tiny than eight
+    pts = [(cx + rx * math.cos(2 * math.pi * i / n),
+            cy + ry * math.sin(2 * math.pi * i / n)) for i in range(n)]
     path = QPainterPath()
     for i in range(n):
         ax, ay = pts[i]
