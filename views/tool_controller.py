@@ -1498,6 +1498,11 @@ class ToolController(QObject):
             if self.index is not None:
                 self.index.remove_handles([handle])
                 self.index.add_entities([entity])
+            # The base copy is hidden since the grab and the grip overlay
+            # empties on release: without this the entity VANISHED until
+            # the deferred merge regen (seconds on a big file).
+            if entity not in self._pending_render:
+                self._pending_render.append(entity)
             self._refresh_overlay()
             if entity.dxftype() == "IMAGE":
                 # The overlay shows only the frame; the pixels need the

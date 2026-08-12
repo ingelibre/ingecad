@@ -457,3 +457,26 @@ def test_a_small_autocad_text_is_pickable_on_its_visible_glyphs():
     index._build()
     assert index.pick((5.15, 4.93), 0.05) == small.dxf.handle
     assert index.pick((3.0, 0.8), 0.05) == big.dxf.handle
+
+
+def test_a_grip_moved_entity_stays_visible_after_the_drop(qapp):
+    """The base copy hides at grab and the grip overlay empties on
+    release — the moved TEXT vanished until the deferred merge regen
+    (Marco: 'lo muevo y tarda en aparecer'). The drop must hand the
+    entity to the overlay's pending list."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        text = win.document.modelspace().add_text(
+            "NIVEL", dxfattribs={"height": 2.5, "insert": (5.0, 5.0)})
+        win.tools._invalidate_geometry()
+        win.tools.selection = {text.dxf.handle}
+        win.tools.begin_grip_drag((5.0, 5.0, "center", text.dxf.handle, 0))
+        win.tools.finish_grip_drag(30.0, 40.0)
+        assert (text.dxf.insert.x, text.dxf.insert.y) == (30.0, 40.0)
+        assert text in win.tools._pending_render     # rides the overlay NOW
+    finally:
+        win.document.dirty = False
+        win.close()
