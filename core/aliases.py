@@ -72,6 +72,7 @@ DEFAULT_ALIASES: dict[str, str] = {
     "AA": "AREA",
     "DR": "DRAWORDER",
     "IAT": "IMAGEATTACH",
+    "SPL": "SPLINE",
     "TB": "TABLE",
     "LI": "LIST",
     "LS": "LIST",

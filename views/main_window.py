@@ -507,6 +507,7 @@ class MainWindow(QMainWindow):
         point_menu = draw_menu.addMenu(tr("Point"))
         cmd_item(point_menu, tr("Divide"), "DIVIDE")
         cmd_item(point_menu, tr("Measure"), "MEASURE")
+        cmd_item(draw_menu, tr("Spline"), "SPLINE")
         cmd_item(draw_menu, tr("Revision Cloud"), "REVCLOUD")
         cmd_item(draw_menu, tr("Table..."), "TABLE", icon=False)
         draw_menu.addSeparator()
@@ -1015,6 +1016,7 @@ class MainWindow(QMainWindow):
         draw = [("LINE", tr("Line")), ("PLINE", tr("Polyline")),
                 ("CIRCLE", tr("Circle")), ("ARC", tr("Arc")),
                 ("REVCLOUD", tr("Revision Cloud")),
+                ("SPLINE", tr("Spline")),
                 ("ELLIPSE", tr("Ellipse")), ("RECTANG", tr("Rectangle")),
                 ("POLYGON", tr("Polygon")), ("POINT", tr("Point")),
                 ("TEXT", tr("Text")), ("MTEXT", tr("Multiline text")),
@@ -1662,6 +1664,7 @@ class MainWindow(QMainWindow):
         d.register("PAGESETUP", self._cmd_pagesetup)
         # Phase 4 drawing + Phase 5 editing tools.
         for name in ("LINE", "CIRCLE", "ARC", "PLINE", "RECTANG", "POLYGON",
+                     "SPLINE",
                      "ELLIPSE", "POINT", "TEXT", "MTEXT",
                      "ERASE", "MOVE", "COPY", "ROTATE", "SCALE", "MIRROR",
                      "OFFSET", "TRIM", "EXTEND", "FILLET",

@@ -2288,6 +2288,65 @@ class PdfAttachTool(Tool):
             self._place(1.0)
 
 
+class SplineTool(Tool):
+    """SPLINE, the Fit method (Command Reference p. 1828): fit points until
+    Enter, with Close and Undo. Method/CV, Knots, Tangency, Tolerance and
+    Object are not offered — the prompt lists only what it can do.
+    """
+
+    def start(self) -> None:
+        self.name = "SPLINE"
+        self._pts: list[Point] = []
+        self.ctx.prompt(tr("Specify first point:"))
+
+    def _prompt(self) -> None:
+        if len(self._pts) >= 3:
+            self.ctx.prompt(tr("Enter next point or [Close/Undo]:"))
+        elif len(self._pts) >= 1:
+            self.ctx.prompt(tr("Enter next point or [Undo]:"))
+        else:
+            self.ctx.prompt(tr("Specify first point:"))
+
+    def on_point(self, point: Point) -> None:
+        self._pts.append(point)
+        self.last_point = point
+        self._prompt()
+
+    def on_option(self, text: str) -> bool:
+        word = text.strip().upper()
+        if word in ("U", "UNDO") and self._pts:
+            self._pts.pop()
+            self._prompt()
+            return True
+        if word in ("C", "CLOSE") and len(self._pts) >= 3:
+            self.ctx.execute(actions.add_spline(self._pts, closed=True))
+            self.ctx.finish()
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        if len(self._pts) >= 2:
+            self.ctx.execute(actions.add_spline(self._pts))
+        self.ctx.finish()
+
+    def preview_segments(self, cursor: Point) -> list:
+        pts = self._pts + [cursor]
+        if len(pts) < 2:
+            return []
+        if len(pts) == 2:
+            return [tuple(pts)]
+        try:
+            from ezdxf.math import global_bspline_interpolation
+
+            # degree must stay below the point count (3 points -> degree 2)
+            curve = global_bspline_interpolation(
+                pts, degree=min(3, len(pts) - 1))
+            flat = [(v.x, v.y) for v in curve.flattening(0.05)]
+            return list(zip(flat, flat[1:]))
+        except Exception:
+            return list(zip(pts, pts[1:]))
+
+
 TOOL_CLASSES = {
     "LINE": LineTool,
     "CIRCLE": CircleTool,
@@ -2302,4 +2361,5 @@ TOOL_CLASSES = {
     "IMAGEATTACH": ImageAttachTool,
     "TABLE": TableTool,
     "PDFATTACH": PdfAttachTool,
+    "SPLINE": SplineTool,
 }

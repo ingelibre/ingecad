@@ -504,6 +504,25 @@ def _measure():
     return pm
 
 
+def _spline():
+    """The classic Draw-toolbar spline: an S-curve through fit points."""
+    from PySide6.QtGui import QPainterPath
+
+    pm, p = _canvas()
+    path = QPainterPath()
+    path.moveTo(4, 19)
+    path.cubicTo(9, 8, 12, 21, 16, 12)
+    path.quadTo(18, 7.5, 20, 5)
+    p.drawPath(path)
+    p.save()
+    p.setPen(QPen(_ACCENT, 1.2))
+    for x, y in ((4, 19), (11, 14.6), (20, 5)):
+        p.drawRect(QRectF(x - 1.4, y - 1.4, 2.8, 2.8))
+    p.restore()
+    p.end()
+    return pm
+
+
 def _revcloud():
     """A closed cloud of outward scallops, like BricsCAD's toolbar icon:
     semicircles bulging outward over the chords of an oval."""
@@ -1006,7 +1025,7 @@ _PAINTERS = {
     "PEDIT": _pedit,
     "HATCH": _hatch, "-HATCH": _hatch, "INSERT": _insert,
     "XLINE": _xline, "RAY": _ray, "DIVIDE": _divide, "MEASURE": _measure,
-    "REVCLOUD": _revcloud,
+    "REVCLOUD": _revcloud, "SPLINE": _spline,
     "DIMLINEAR": _dimlinear, "DIMALIGNED": _dimaligned,
     "DIMANGULAR": _dimangular, "DIMARC": _dimarc,
     "DIMORDINATE": _dimordinate, "DIMRADIUS": _dimradius,

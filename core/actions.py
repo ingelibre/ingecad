@@ -465,6 +465,21 @@ def add_polyline(points, closed: bool = False) -> AddEntityCommand:
         "PLINE", lambda msp: msp.add_lwpolyline(pts, close=closed))
 
 
+def add_spline(fit_points, closed: bool = False) -> AddEntityCommand:
+    """SPLINE through fit points (AutoCAD's default Fit method, degree 3).
+
+    Close appends the first point as the last fit point — geometrically
+    closed; AutoCAD's tangent-smooth periodic joint is not offered because
+    ezdxf has no periodic FIT interpolation to honor it with.
+    """
+    pts = [tuple(p[:2]) for p in fit_points]
+    if closed and pts and pts[-1] != pts[0]:
+        pts = pts + [pts[0]]
+
+    return AddEntityCommand(
+        "SPLINE", lambda msp: msp.add_spline(fit_points=list(pts)))
+
+
 def add_polyline_ex(points, closed: bool = False, name: str = "PLINE",
                     dxfattribs: dict | None = None) -> AddEntityCommand:
     """add_polyline with xyseb vertices plus entity attributes (RECTANG's

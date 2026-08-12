@@ -1092,3 +1092,55 @@ def test_open_and_new_are_guarded_too(qapp, monkeypatch):
     finally:
         win.document.dirty = False
         win.close()
+
+
+# -- SPLINE (the Fit method) ---------------------------------------------------
+
+def test_spline_places_fit_points_until_enter(qapp):
+    win = _editor_window(qapp)
+    try:
+        win.dispatcher.submit("SPLINE")
+        for p in ((0.0, 0.0), (10.0, 6.0), (20.0, -4.0), (30.0, 3.0)):
+            win.tools.tool.on_point(p)
+        win.tools.tool.on_enter()
+        splines = win.document.modelspace().query("SPLINE")
+        assert len(splines) == 1
+        assert len(splines[0].fit_points) == 4
+        win._cmd_undo()
+        assert len(win.document.modelspace().query("SPLINE")) == 0
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_spline_close_and_undo_options(qapp):
+    win = _editor_window(qapp)
+    try:
+        win.dispatcher.submit("SPLINE")
+        tool = win.tools.tool
+        for p in ((0.0, 0.0), (10.0, 6.0), (20.0, -4.0), (99.0, 99.0)):
+            tool.on_point(p)
+        assert tool.on_option("U")            # drop the stray point
+        assert tool.on_option("C")            # close with 3 left
+        spline = win.document.modelspace().query("SPLINE")[0]
+        fit = spline.fit_points
+        assert len(fit) == 4                  # first point appended
+        assert tuple(fit[-1])[:2] == tuple(fit[0])[:2]
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_spline_preview_is_a_smooth_polyline(qapp):
+    win = _editor_window(qapp)
+    try:
+        win.dispatcher.submit("SPLINE")
+        tool = win.tools.tool
+        tool.on_point((0.0, 0.0))
+        tool.on_point((10.0, 8.0))
+        segments = tool.preview_segments((20.0, 0.0))
+        assert len(segments) > 5              # flattened curve, not 2 chords
+    finally:
+        win.tools.cancel()
+        win.document.dirty = False
+        win.close()
