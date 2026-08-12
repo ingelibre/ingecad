@@ -291,10 +291,7 @@ class DimLinearTool(_TwoPointDim):
     def _angle_for(self, cursor: Point) -> float:
         if self._forced_angle is not None:
             return self._forced_angle
-        mid = ((self._p1[0] + self._p2[0]) / 2.0,
-               (self._p1[1] + self._p2[1]) / 2.0)
-        horizontal = abs(cursor[1] - mid[1]) >= abs(cursor[0] - mid[0])
-        return 0.0 if horizontal else 90.0
+        return actions.linear_dim_angle(self._p1, self._p2, cursor)
 
     def _make(self, location: Point):
         return actions.dim_linear(self._p1, self._p2, location,

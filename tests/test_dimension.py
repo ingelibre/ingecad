@@ -159,9 +159,10 @@ def test_linear_preview_dimension():
     dim = tool.preview_dimension((5, 4))             # cursor above -> horizontal
     assert dim["d1"] == (0, 4) and dim["d2"] == (10, 4)
     assert dim["text"] == "10.00"
-    # cursor to the side -> vertical measurement
+    # cursor to the side: origins share Y, so the dimension STAYS
+    # horizontal — the old rule flipped to a collapsed 0.00 vertical here.
     side = tool.preview_dimension((14, 0))
-    assert side["text"] == "0.00"      # p1,p2 share Y, vertical extent is 0
+    assert side["text"] == "10.00"
 
 
 def test_aligned_preview_measures_true_length():
@@ -648,3 +649,45 @@ def test_dimension_uses_current_style():
     for p in ((0, 0), (10, 0), (5, 4)):
         tool.on_point(p)
     assert h.msp.query("DIMENSION")[0].dxf.dimstyle == "Acot-100"
+
+
+# -- the orientation rule (the collapsed-to-zero regression) -------------------
+
+def test_vertical_origins_never_give_a_zero_horizontal_dim():
+    """Dimensioning a rectangle's VERTICAL edge and dragging slightly
+    diagonally used to pick 'horizontal' — a collapsed dimension reading
+    0 with no visible text (the reported bug)."""
+    h = Harness()
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((30.0, 0.0))
+    tool.on_point((30.0, 20.0))
+    for cursor in ((33.0, 25.0), (28.0, -9.0), (35.0, 10.0), (30.5, 40.0)):
+        assert tool._angle_for(cursor) == 90.0, cursor
+    tool.on_point((33.0, 25.0))
+    assert h.msp.query("DIMENSION")[0].get_measurement() == pytest.approx(20.0)
+
+
+def test_horizontal_origins_always_measure_horizontally():
+    h = Harness()
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((0.0, 0.0))
+    tool.on_point((30.0, 0.0))
+    for cursor in ((15.0, -6.0), (32.0, 4.0), (-3.0, 8.0)):
+        assert tool._angle_for(cursor) == 0.0, cursor
+
+
+def test_diagonal_origins_follow_the_side_the_cursor_leaves():
+    """Corners (0,0)-(30,20): beyond the x-range reads vertical, beyond
+    the y-range horizontal; between the points the closer-axis rule."""
+    h = Harness()
+    tool = DimLinearTool(h.ctx)
+    tool.start()
+    tool.on_point((0.0, 0.0))
+    tool.on_point((30.0, 20.0))
+    assert tool._angle_for((38.0, 10.0)) == 90.0    # right of the box
+    assert tool._angle_for((-5.0, 12.0)) == 90.0    # left of it
+    assert tool._angle_for((15.0, 27.0)) == 0.0     # above it
+    assert tool._angle_for((15.0, -6.0)) == 0.0     # below it
+    assert tool._angle_for((36.0, 22.0)) == 90.0    # corner: x exceeded more

@@ -974,6 +974,35 @@ def _current_dimstyle(document) -> str:
     return name if name in document.doc.dimstyles else "Standard"
 
 
+def linear_dim_angle(p1, p2, location) -> float:
+    """DIMLINEAR's automatic horizontal/vertical choice.
+
+    AutoCAD never auto-picks a zero measurement: origins sharing an X give
+    the vertical dimension wherever the cursor goes (the old midpoint rule
+    picked "horizontal" on a slightly diagonal drag and produced a
+    collapsed dimension reading 0). Diagonal origins follow the side the
+    cursor leaves the points' box on; inside the box, the closer axis.
+    ONE source of truth: the tool's preview and the created entity must
+    never disagree (they used to hold separate copies of the rule).
+    """
+    x1, x2 = sorted((p1[0], p2[0]))
+    y1, y2 = sorted((p1[1], p2[1]))
+    span = max(x2 - x1, y2 - y1, 1e-12)
+    if (x2 - x1) < span * 1e-9:
+        return 90.0
+    if (y2 - y1) < span * 1e-9:
+        return 0.0
+    beyond_x = max(x1 - location[0], location[0] - x2, 0.0)
+    beyond_y = max(y1 - location[1], location[1] - y2, 0.0)
+    if beyond_x > beyond_y:
+        return 90.0
+    if beyond_y > beyond_x:
+        return 0.0
+    mid = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+    horizontal = abs(location[1] - mid[1]) >= abs(location[0] - mid[0])
+    return 0.0 if horizontal else 90.0
+
+
 def dim_linear(p1, p2, location, *, angle: float | None = None,
                text: str = "<>", text_rotation: float | None = None,
                dimstyle: str | None = None) -> AddDimensionCommand:
@@ -983,9 +1012,7 @@ def dim_linear(p1, p2, location, *, angle: float | None = None,
     other string replaces it (an embedded "<>" is substituted by ezdxf).
     ``text_rotation`` is the Angle option (absolute text angle)."""
     if angle is None:
-        mid = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
-        horizontal = abs(location[1] - mid[1]) >= abs(location[0] - mid[0])
-        angle = 0.0 if horizontal else 90.0
+        angle = linear_dim_angle(p1, p2, location)
 
     def factory(msp, document):
         return msp.add_linear_dim(
