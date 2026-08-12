@@ -938,3 +938,28 @@ def test_a_masked_text_survives_the_lod_cull(qapp):
         "where everything is legible"
     # And the yellow quad is among what draws (first range starts at 0).
     assert runs[0][0] == 0
+
+
+def test_the_caret_is_visible_the_moment_the_editor_opens(qapp):
+    """The empty editor opened one line short: the first geometry pass ran
+    with the pre-zoom font and the caret sat below the visible area —
+    typing worked and showed nothing until the anchor timer's next tick."""
+    win = _editor_window(qapp)
+    try:
+        for zoom in (1.0, 2.0, 4.0):
+            win.viewport.view.scale = 5.0 * zoom
+            win.dispatcher.submit("MTEXT")
+            win.tools.tool.on_point((10.0, 40.0))
+            win.tools.tool.on_point((90.0, 10.0))
+            qapp.processEvents()
+            editor = win.tools._mtext_editor
+            caret = editor.edit.cursorRect()
+            viewport = editor.edit.viewport().rect()
+            assert viewport.contains(caret.topLeft()) \
+                and viewport.contains(caret.bottomLeft()), \
+                f"caret {caret.top()}..{caret.bottom()} clipped in " \
+                f"0..{viewport.height()} at zoom {zoom}"
+            editor.cancel(ask=False)
+            qapp.processEvents()
+    finally:
+        win.close()

@@ -379,7 +379,15 @@ class MTextInPlaceEditor(QWidget):
         self._anchor_timer.timeout.connect(self._sync_geometry)
         self._anchor_timer.start()
 
+        # Twice on purpose: the first pass installs the zoom-derived font,
+        # the second measures the caret with that font in place. One pass
+        # opened the editor a line short and the anchor timer fixed it a
+        # tick later — a caret that starts hidden and pops in.
         self._sync_geometry()
+        self._sync_geometry()
+        # A hairline caret disappears against the drawing; AutoCAD's editor
+        # caret is a solid bar.
+        self.edit.setCursorWidth(2)
         self.show()
         self.edit.setFocus()
         cursor = self.edit.textCursor()
@@ -1026,12 +1034,24 @@ class MTextInPlaceEditor(QWidget):
 
         self.edit.document().setTextWidth(width - 6)
         content = int(self.edit.document().size().height()) + 8
-        height = max(content, MIN_HEIGHT_PX)
-        bar_height = 0 if self._single_line else \
-            self._bar.sizeHint().height() + 2
-        self.setGeometry(int(sx) - 2, int(sy) - bar_height - 2,
+        # The floor is ONE REAL LINE at the current zoom, not a fixed pixel
+        # count: an empty editor whose text is taller than the fixed floor
+        # clipped its own caret. The caret's own rect is the truth — it
+        # follows the cursor's char format, which the font metrics do not.
+        one_line = max(self.edit.fontMetrics().height(),
+                       self.edit.cursorRect().height()) + 12
+        height = max(content, one_line, MIN_HEIGHT_PX)
+        # Everything stacked ABOVE the text area. Forgetting a row here
+        # squeezes the QTextEdit by that many pixels and pushes the caret
+        # below its visible area — it types fine and shows nothing.
+        chrome = 0
+        if not self._single_line:
+            chrome += self._bar.sizeHint().height() + 1
+            if self.ruler.isVisible():
+                chrome += self.ruler.height() + 1
+        self.setGeometry(int(sx) - 2, int(sy) - chrome - 2,
                          max(width + 4, self._bar.sizeHint().width() + 4),
-                         height + bar_height + 4)
+                         height + chrome + 4)
 
     # -- lifecycle -------------------------------------------------------------
     def set_width_px(self, px: float) -> None:
