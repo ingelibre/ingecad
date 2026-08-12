@@ -72,3 +72,34 @@ def test_qtpdf_rasterizes_a_page(qapp, tmp_path):
                round(points.height() / 72.0 * 150))
     image = pdf.render(0, px)
     assert image.width() == px.width() and not image.isNull()
+
+
+def test_the_rasterized_page_has_a_white_background(qapp, tmp_path):
+    """QPdfDocument.render leaves no-ink areas TRANSPARENT; on the dark
+    canvas the sheet looked black with black text invisible. The attach
+    path composites over white first."""
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QImage, QPageSize, QPainter, QPdfWriter
+    from PySide6.QtPdf import QPdfDocument
+
+    pdf_path = tmp_path / "informe.pdf"
+    writer = QPdfWriter(str(pdf_path))
+    writer.setPageSize(QPageSize(QPageSize.A4))
+    painter = QPainter(writer)
+    painter.drawText(100, 100, "INFORME")
+    painter.end()
+
+    pdf = QPdfDocument()
+    pdf.load(str(pdf_path))
+    px = QSize(200, 283)
+    rendered = pdf.render(0, px)
+    # the raw render IS transparent where there is no ink (the trap)
+    assert rendered.pixelColor(5, 5).alpha() == 0
+    # the composite (same code as PdfAttachTool) is opaque white there
+    image = QImage(px, QImage.Format_RGB32)
+    image.fill(0xFFFFFFFF)
+    p2 = QPainter(image)
+    p2.drawImage(0, 0, rendered)
+    p2.end()
+    color = image.pixelColor(5, 5)
+    assert (color.red(), color.green(), color.blue()) == (255, 255, 255)

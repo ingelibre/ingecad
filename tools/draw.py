@@ -2216,7 +2216,18 @@ class PdfAttachTool(Tool):
         points = pdf.pagePointSize(page)
         px = QSize(max(1, round(points.width() / 72.0 * self.DPI)),
                    max(1, round(points.height() / 72.0 * self.DPI)))
-        image = pdf.render(page, px)
+        rendered = pdf.render(page, px)
+        # A PDF page paints no background: the render arrives with ALPHA
+        # where there is no ink, and on the dark canvas the sheet looked
+        # black with its black text invisible. Composite over white, like
+        # every PDF viewer does.
+        from PySide6.QtGui import QImage, QPainter
+
+        image = QImage(px, QImage.Format_RGB32)
+        image.fill(0xFFFFFFFF)
+        painter = QPainter(image)
+        painter.drawImage(0, 0, rendered)
+        painter.end()
         import pathlib
 
         source = pathlib.Path(filename)
