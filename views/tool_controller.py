@@ -1441,6 +1441,10 @@ class ToolController(QObject):
         handle, index, role, _snap = self._grip_drag
         entity = self.index.entity(handle)
         if entity is not None:
+            if role.startswith("dim_"):
+                # A dimension only re-renders at the drop: rendering per
+                # mouse move would churn one *D block per frame.
+                return
             apply_grip_edit(entity, index, role, (wx, wy))
             # per frame: rebuild only the dragged entity's overlay — no
             # index rebuild, no whole-scene re-upload
@@ -1464,6 +1468,19 @@ class ToolController(QObject):
         handle, index, role, snap = self._grip_drag
         self._grip_drag = None
         entity = self.index.entity(handle)
+        if entity is not None and role.startswith("dim_"):
+            # Route through the dedicated command: it re-renders the block
+            # and drops the old one, which the generic snapshot cannot undo.
+            self.window.viewport.unhide_handles([handle])
+            if role == "dim_text":
+                command = actions.DimTextEditCommand(
+                    entity, location=(wx, wy))
+            else:
+                command = actions.DimGripCommand(
+                    entity, role[len("dim_"):], (wx, wy))
+            self._execute(command)
+            self.changed.emit()
+            return
         if entity is not None:
             apply_grip_edit(entity, index, role, (wx, wy))
             snap.commit(self.window.document)

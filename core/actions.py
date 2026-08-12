@@ -1073,6 +1073,50 @@ def _drop_dim_block(document, name) -> None:
             pass
 
 
+class DimGripCommand(Command):
+    """A grip moved one of a dimension's definition points.
+
+    Setting the attr re-measures (extension origins) or relocates the
+    dimension line (defpoint); render() rebuilds the *D block and the old
+    one is dropped, so the document never keeps stale blocks. Undo
+    restores every non-geometry attr and re-renders again.
+    """
+
+    name = "GRIP"
+    needs_regen = True
+
+    def __init__(self, dim, attr: str, point) -> None:
+        self.dim = dim
+        self.attr = attr
+        self.point = (float(point[0]), float(point[1]))
+        self._before: dict | None = None
+
+    def do(self, document) -> None:
+        d = self.dim
+        if self._before is None:
+            self._before = {
+                k: v for k, v in d.dxf.all_existing_dxf_attribs().items()
+                if k not in ("geometry", "handle")}
+        old_block = d.dxf.get("geometry", None)
+        setattr(d.dxf, self.attr, (self.point[0], self.point[1], 0.0))
+        d.render()
+        _drop_dim_block(document, old_block)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        d = self.dim
+        edited_block = d.dxf.get("geometry", None)
+        for key in list(d.dxf.all_existing_dxf_attribs()):
+            if key not in (self._before or {}) \
+                    and key not in ("geometry", "handle"):
+                d.dxf.discard(key)
+        for key, value in (self._before or {}).items():
+            d.dxf.set(key, value)
+        d.render()
+        _drop_dim_block(document, edited_block)
+        document.dirty = True
+
+
 class DimTextEditCommand(Command):
     """DIMTEDIT: reposition the text of an existing dimension and re-render
     its geometry block. Exactly one operation per invocation: a new text

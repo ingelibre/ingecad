@@ -266,9 +266,7 @@ def test_ellipse_center_grip_moves_it():
 
 
 def test_every_selectable_type_has_grips_now():
-    """The audit: anything IngeCAD can create and select shows grips —
-    except DIMENSION, whose grip editing means regenerating its block
-    (its own project, deferred honestly)."""
+    """The audit: anything IngeCAD can create and select shows grips."""
     from core.select import entity_grips
     from ezdxf.enums import TextEntityAlignment
 
@@ -286,6 +284,8 @@ def test_every_selectable_type_has_grips_now():
     hatch.paths.add_polyline_path([(0, 0), (4, 0), (4, 4), (0, 4)],
                                   is_closed=True)
     entities.append(hatch)
+    entities.append(msp.add_linear_dim(base=(0, 5), p1=(0, 0), p2=(9, 0))
+                    .render().dimension)
     for entity in entities:
         assert entity_grips(entity), entity.dxftype()
 
@@ -342,3 +342,50 @@ def test_hatch_grip_moves_the_whole_hatch():
     assert (gx, gy) == (2.0, 2.0) and role == "center"
     assert apply_grip_edit(hatch, 0, "center", (12.0, 2.0))
     assert bbox_mod.extents([hatch]).center.x == 12.0
+
+
+def test_linear_dimension_grips_match_autocads_set():
+    from core.select import entity_grips
+
+    _doc, msp = _msp()
+    dim = msp.add_linear_dim(base=(0, 10), p1=(0, 0), p2=(30, 0)) \
+             .render().dimension
+    grips = entity_grips(dim)
+    roles = [r for _x, _y, r in grips]
+    assert roles == ["dim_defpoint2", "dim_defpoint3", "dim_defpoint",
+                     "dim_text"]
+    by_role = {r: (x, y) for x, y, r in grips}
+    assert by_role["dim_defpoint2"] == (0.0, 0.0)
+    assert by_role["dim_defpoint3"] == (30.0, 0.0)
+
+
+def test_radial_dimension_offers_its_text_grip():
+    from core.select import entity_grips
+
+    _doc, msp = _msp()
+    msp.add_circle((50, 50), 10)
+    dim = msp.add_radius_dim(center=(50, 50), radius=10, angle=30) \
+             .render().dimension
+    roles = [r for _x, _y, r in entity_grips(dim)]
+    assert roles == ["dim_text"]
+
+
+def test_dim_grip_command_remeasures_and_undoes():
+    from core.actions import DimGripCommand
+    from core.commands import History
+
+    doc, msp = _msp()
+    dim = msp.add_linear_dim(base=(0, 10), p1=(0, 0), p2=(30, 0)) \
+             .render().dimension
+    history = History(doc)
+    block_names = lambda: {b.name for b in doc.doc.blocks if b.name.startswith("*D")}
+    before_blocks = block_names()
+    history.execute(DimGripCommand(dim, "defpoint3", (45.0, 0.0)))
+    assert dim.dxf.defpoint3.x == 45.0
+    # exactly one *D block alive: the old one was dropped
+    assert len(block_names()) == len(before_blocks)
+    history.undo()
+    assert dim.dxf.defpoint3.x == 30.0
+    assert len(block_names()) == len(before_blocks)
+    history.redo()
+    assert dim.dxf.defpoint3.x == 45.0

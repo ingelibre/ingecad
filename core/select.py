@@ -867,6 +867,19 @@ def entity_grips(entity) -> list[tuple[float, float, str]]:
             grips.append((c.x, c.y, "center"))
         except Exception:
             pass
+    elif t == "DIMENSION":
+        # AutoCAD's set for linear/aligned: the two extension-line origins
+        # (re-measure), the dimension-line point (relocates it) and the
+        # text. Every other dimension type offers its text grip.
+        kind = int(entity.dxf.get("dimtype", 0)) & 7
+        if kind in (0, 1):
+            for attr in ("defpoint2", "defpoint3", "defpoint"):
+                pt = entity.dxf.get(attr, None)
+                if pt is not None:
+                    grips.append((pt.x, pt.y, f"dim_{attr}"))
+        text_mid = entity.dxf.get("text_midpoint", None)
+        if text_mid is not None:
+            grips.append((text_mid.x, text_mid.y, "dim_text"))
     elif t == "SPLINE":
         # AutoCAD: a grip on every fit point (or control point for a CV
         # spline); dragging one re-fits the curve through the new spot.
