@@ -278,3 +278,53 @@ def test_clean_screen_hides_all_but_the_command_window(qapp):
         assert win._modify_toolbar.isVisible()
     finally:
         win.close()
+
+
+def test_the_shortcut_menu_follows_the_reference(qapp):
+    """Marco asked for the right-click menu to match AutoCAD's. It is built
+    from the reference's own Access Methods: every command whose page names
+    the shortcut menu, and nothing the app cannot do."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        msp = win.document.modelspace()
+        line = msp.add_line((0, 0), (10, 10))
+        text = msp.add_text("hola", dxfattribs={"height": 2})
+        poly = msp.add_lwpolyline([(0, 0), (5, 0), (5, 5)])
+        win.tools._invalidate_geometry()
+
+        def entries(selection):
+            win.tools.selection = selection
+            out = {}
+            for act in win.build_canvas_context_menu().actions():
+                if act.isSeparator():
+                    continue
+                sub = act.menu()
+                out[act.text()] = ([a.text() for a in sub.actions()]
+                                   if sub is not None else None)
+            return out
+
+        idle = entries(set())
+        # Default mode: Pan and Zoom are documented "with no objects selected"
+        assert "Pan" in idle and "Zoom" in idle
+        assert idle["Zoom"] == ["Extents", "Window", "Previous"]
+        assert "Undo" in idle and "Redo" in idle
+        assert idle["Clipboard"] == ["Cut", "Copy", "Paste"]
+
+        picked = entries({line.dxf.handle})
+        # Edit mode: the five edit commands whose pages name the menu
+        for label in ("Erase", "Move", "Copy Selection", "Scale", "Rotate"):
+            assert label in picked, label
+        assert picked["Draw Order"] == ["Bring to Front", "Send to Back"]
+        assert "Properties" in picked and "Deselect All" in picked
+
+        # type-specific entries, only for a single object of that kind
+        assert "Edit..." in entries({text.dxf.handle})
+        assert entries({poly.dxf.handle})["Polyline"] == ["Edit..."]
+        assert "Edit..." not in entries({line.dxf.handle})
+        assert "Polyline" not in entries({text.dxf.handle, poly.dxf.handle})
+    finally:
+        win.document.dirty = False
+        win.close()

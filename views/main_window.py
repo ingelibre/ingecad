@@ -223,6 +223,20 @@ class MainWindow(QMainWindow):
         self.show_canvas_context_menu(global_pos)
 
     def show_canvas_context_menu(self, global_pos) -> None:
+        self.build_canvas_context_menu().exec(global_pos)
+
+    def build_canvas_context_menu(self):
+        """The Default and Edit mode shortcut menus.
+
+        Built from the reference's own Access Methods: every command whose
+        page names the shortcut menu earns a place here — Clipboard
+        (CUTCLIP/COPYCLIP/PASTECLIP), Undo, Redo, Pan, Zoom with nothing
+        selected; Erase, Move, Copy Selection, Scale, Rotate, Draw Order and
+        Properties with a selection; and the type-specific entries for text
+        (DDEDIT), polylines (PEDIT) and images (IMAGEADJUST/TRANSPARENCY).
+        Nothing the app cannot actually do is listed, which is the same rule
+        the command prompts follow.
+        """
         from PySide6.QtWidgets import QMenu
 
         from core import layouts as layout_ops
@@ -233,15 +247,19 @@ class MainWindow(QMainWindow):
             menu.addAction(tr("Repeat {name}", name=last),
                            lambda: self.dispatcher.submit(last))
             menu.addSeparator()
-        model_sel = bool(self.tools.selection)
+        selection = self.tools._selection_entities() if self.tools else []
+        model_sel = bool(selection)
         vp = self.tools.paper_vp
         vp_sel = vp is not None and vp.is_alive
-        act = menu.addAction(tr("Cut"), self._cmd_cut)
+
+        clip = menu.addMenu(tr("Clipboard"))
+        act = clip.addAction(tr("Cut"), self._cmd_cut)
         act.setEnabled(model_sel)
-        act = menu.addAction(tr("Copy"), self._cmd_copy)
+        act = clip.addAction(tr("Copy"), self._cmd_copy)
         act.setEnabled(model_sel)
-        menu.addAction(tr("Paste"), self._cmd_paste)
+        clip.addAction(tr("Paste"), self._cmd_paste)
         menu.addSeparator()
+
         if vp_sel:
             # selected viewport: AutoCAD's viewport shortcut entries
             menu.addAction(tr("Erase"), self._cmd_delete)
@@ -255,27 +273,57 @@ class MainWindow(QMainWindow):
             menu.addAction(tr("Erase"), self._cmd_delete)
             for label, name in ((tr("Move"), "MOVE"),
                                 (tr("Copy Selection"), "COPY"),
-                                (tr("Rotate"), "ROTATE"),
-                                (tr("Scale"), "SCALE")):
+                                (tr("Scale"), "SCALE"),
+                                (tr("Rotate"), "ROTATE")):
                 menu.addAction(
                     label, lambda checked=False, n=name: self._invoke_command(n))
-            # The reference lists the shortcut menu among DRAWORDER's access
-            # methods: "Select an object, right-click, and then click Draw
-            # Order" (p. 662).
             order = menu.addMenu(tr("Draw Order"))
             order.addAction(tr("Bring to Front"),
                             lambda: self._draworder("front"))
             order.addAction(tr("Send to Back"),
                             lambda: self._draworder("back"))
+            self._add_type_entries(menu, selection)
             menu.addSeparator()
             menu.addAction(tr("Deselect All"), self.tools.clear_selection)
+            menu.addSeparator()
+            menu.addAction(tr("Properties"), self.toggle_properties_panel)
         else:
             menu.addAction(tr("Undo"), self._cmd_undo)
             menu.addAction(tr("Redo"), self._cmd_redo)
             menu.addSeparator()
             menu.addAction(tr("Pan"), lambda: self._invoke_command("PAN"))
-            menu.addAction(tr("Zoom Extents"), self.viewport.zoom_extents)
-        menu.exec(global_pos)
+            zoom = menu.addMenu(tr("Zoom"))
+            zoom.addAction(tr("Extents"), self.viewport.zoom_extents)
+            zoom.addAction(tr("Window"), lambda: self.dispatcher.submit("ZOOM W"))
+            zoom.addAction(tr("Previous"), self.viewport.zoom_previous)
+            menu.addSeparator()
+            menu.addAction(tr("Properties"), self.toggle_properties_panel)
+        return menu
+
+    def _add_type_entries(self, menu, selection: list) -> None:
+        """The entries the reference gives a single selected object of a kind:
+        Edit for text (DDEDIT p. 604), Polyline > Edit (PEDIT p. 1418), and
+        Image > Adjust / Transparency (p. 927, p. 1964)."""
+        if len(selection) != 1:
+            return
+        entity = selection[0]
+        kind = entity.dxftype()
+        if kind in ("TEXT", "MTEXT", "ATTRIB", "ATTDEF"):
+            menu.addAction(tr("Edit..."),
+                           lambda: self.tools.open_text_editor_for(entity))
+        elif kind in ("LWPOLYLINE", "POLYLINE"):
+            poly = menu.addMenu(tr("Polyline"))
+            poly.addAction(tr("Edit..."),
+                           lambda: self._invoke_command("PEDIT"))
+        elif kind == "IMAGE":
+            image = menu.addMenu(tr("Image"))
+            image.addAction(tr("Adjust..."),
+                            lambda: self._invoke_command("IMAGEADJUST"))
+            image.addAction(tr("Transparency"),
+                            lambda: self._invoke_command("TRANSPARENCY"))
+        elif kind == "DIMENSION":
+            menu.addAction(tr("Dimension Style..."),
+                           lambda: self.dispatcher.submit("DIMSTYLE"))
 
     def _draworder(self, mode: str) -> None:
         """Tools > Draw Order and the shortcut menu: act on the selection, or
@@ -1633,6 +1681,15 @@ class MainWindow(QMainWindow):
             self._expand_sidebar()
         self._sidebar_tabs.setCurrentWidget(self._layers_panel)
         self._layers_panel.refresh()
+
+    def toggle_properties_panel(self) -> None:
+        # PROPERTIES / the shortcut menu focuses the Properties tab.
+        if getattr(self, "_properties_panel", None) is None:
+            return
+        if self._sidebar_collapsed:
+            self._expand_sidebar()
+        self._sidebar_tabs.setCurrentWidget(self._properties_panel)
+        self._properties_panel.refresh()
 
     def toggle_styles_panel(self) -> None:
         # STYLE / DIMSTYLE / Format menu focuses the Styles tab.
