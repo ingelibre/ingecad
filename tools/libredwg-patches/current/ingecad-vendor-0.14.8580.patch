@@ -1,0 +1,1346 @@
+IngeCAD's vendored LibreDWG patches, on top of the 0.14.8580 release.
+
+Every hunk below is an open pull request against LibreDWG/libredwg, taken from
+the pull request's own head — not from a local branch, which is how a stale
+draft of #1375 once shipped here and corrupted MTEXT in pre-r2007 drawings.
+Each one disappears from this file the moment it is merged and we take a
+newer release.
+
+  #1358 decode: r2004 sections whose declared size exceeds the page estimate
+  #1359 dwg: skip unresolvable owned entities instead of ending the layout
+  #1360 decode: resync the object map when a modular char fails to parse
+  #1364 decode_r11: a missing table sentinel must not reject the drawing
+  #1365 dwg2SVG: the output was blank for four independent reasons
+  #1368 r11: give pre-R13 drawings their paper space BLOCK_HEADER
+  #1369 TIMEBLL: one julian-day fraction, three wrong conventions for it
+  #1371 in_dxf: store subentities as AutoCAD does
+  #1372 out_dxf: do not write stale subentities a second time
+  #1373 out_dxf: a block header without BLOCK must not abort the whole DXF
+  #1375 in_dxf: convert r2007+ UTF-8 strings to the pre-r2007 target codepage
+  #1378 r13/r14: the entity linetype never survived a DXF import
+  #1381 encode: writing r11/r12 from an r13+ source produced an unreadable DWG
+  #1382 dwg_next_handle: scan all objects for the max
+  #1385 in_dxf: MINSERT column/row count default to 1
+  #1387 out_dxf: preserve an unparseable entity as a proxy
+  #1392 out_dxf: EED groups 1070 and 1071 are signed
+
+
+diff --git a/src/decode.c b/src/decode.c
+index c28e472f..a03d4c8d 100644
+--- a/src/decode.c
++++ b/src/decode.c
+@@ -2061,6 +2061,22 @@ read_2004_compressed_section (Bit_Chain *dat, Dwg_Data *restrict dwg,
+   {
+     uint64_t max_decomp_size64
+         = (uint64_t)info->num_sections * (uint64_t)info->max_decomp_size;
++    /* num_sections * max_decomp_size is only an upper-bound *estimate* of the
++       decompressed section. Each page carries its own StartOffset into the
++       buffer, so what the buffer really has to span is info->size, the declared
++       decompressed total. On some r2018 files the estimate comes out 1-3 pages
++       short of info->size; rejecting those loses the whole drawing
++       (num_objects: 0) even though every page is fine. Allocate whichever is
++       larger and keep the sanity cap. */
++    if (info->size > 0 && (uint64_t)info->size > max_decomp_size64)
++      {
++        LOG_TRACE ("Section %s: declared size %" PRId64 " exceeds the %"
++                   PRIu64 " estimate (" FORMAT_RL " * " FORMAT_RL
++                   "), allocating the declared size\n",
++                   info->name, info->size, max_decomp_size64,
++                   info->num_sections, info->max_decomp_size);
++        max_decomp_size64 = (uint64_t)info->size;
++      }
+     if (max_decomp_size64 == 0 || max_decomp_size64 > 0x2f000000) // 790Mb
+       {
+         LOG_ERROR ("Invalid section %s count or max decompression size. "
+@@ -2070,12 +2086,9 @@ read_2004_compressed_section (Bit_Chain *dat, Dwg_Data *restrict dwg,
+       }
+     max_decomp_size = (uint32_t)max_decomp_size64;
+   }
+-  if (info->size > (int64_t)info->num_sections * (int64_t)info->max_decomp_size
+-      || info->size < 0)
++  if (info->size < 0)
+     {
+-      LOG_ERROR ("Invalid section %s size %" PRId64 " > %u * " FORMAT_RL,
+-                 info->name, info->size, info->num_sections,
+-                 info->max_decomp_size);
++      LOG_ERROR ("Invalid section %s size %" PRId64, info->name, info->size);
+       return DWG_ERR_VALUEOUTOFBOUNDS;
+     }
+   LOG_HANDLE ("Alloc section %s size %" PRIu32 "\n", info->name,
+@@ -2164,9 +2177,19 @@ read_2004_compressed_section (Bit_Chain *dat, Dwg_Data *restrict dwg,
+       LOG_INSANE ("bytes_left:               %ld\n", bytes_left);
+ 
+       // check if compressed at all
++      /* Bound the page by what it actually decompresses to, not by the
++         section-wide maximum: the last page is normally shorter, so
++         address + max_decomp_size overshoots the buffer while
++         address + page_size fits. When that happens for a *compressed*
++         section, control falls into the else branch below, which rejects it
++         outright on `info->compressed == 2` and loses the whole section. The
++         else branch already computes the real size this way. */
+       if (info->compressed == 2 && bytes_left > 0
+           && es.fields.address <= max_decomp_size
+-          && es.fields.address + info->max_decomp_size <= max_decomp_size)
++          && es.fields.address
++                     + MIN ((BITCODE_RL)(info->size - es.fields.address),
++                            es.fields.page_size)
++                 <= max_decomp_size)
+         {
+           size_t orig_size = dat->size;
+           dec.byte = es.fields.address;
+
+diff --git a/src/dwg.c b/src/dwg.c
+index b7e2eb9c..e14d7eca 100644
+--- a/src/dwg.c
++++ b/src/dwg.c
+@@ -1233,18 +1233,25 @@ get_first_owned_entity (const Dwg_Object *hdr)
+     }
+   else if (version >= R_2004 || version < R_13b1)
+     {
+-      _hdr->__iterator = 0;
+-      if (_hdr->entities && _hdr->num_owned && _hdr->entities[0])
++      /* Skip entries that do not resolve rather than reporting the layout as
++         empty: NULL is the caller's end-of-list signal, so one dangling
++         reference at the head would hide every entity behind it. */
++      Dwg_Data *dwg = hdr->parent;
++      for (_hdr->__iterator = 0;
++           _hdr->entities && _hdr->__iterator < _hdr->num_owned;
++           _hdr->__iterator++)
+         {
+-          Dwg_Data *dwg = hdr->parent;
+-          Dwg_Object *obj = dwg_ref_object (dwg, _hdr->entities[0]);
++          Dwg_Object_Ref *ref = _hdr->entities[_hdr->__iterator];
++          Dwg_Object *obj = ref ? dwg_ref_object (dwg, ref) : NULL;
+           if (version < R_13b1 && obj && obj->fixedtype == DWG_TYPE_JUMP)
+-            return dwg_resolve_jump (obj);
+-          else
++            obj = dwg_resolve_jump (obj);
++          if (obj)
+             return obj;
++          LOG_WARN ("Skip unresolvable entity " FORMAT_BL " of " FORMAT_BL
++                    " in BLOCK_HEADER " FORMAT_HV,
++                    _hdr->__iterator, _hdr->num_owned, hdr->handle.value);
+         }
+-      else
+-        return NULL;
++      return NULL;
+     }
+ 
+   // TODO: preR13 block table
+@@ -1352,15 +1359,24 @@ get_next_owned_entity (const Dwg_Object *restrict hdr,
+     {
+       Dwg_Object *obj;
+       Dwg_Object_Ref *ref;
+-      _hdr->__iterator++;
+-      if (_hdr->__iterator == _hdr->num_owned)
+-        return NULL;
+-      ref = _hdr->entities ? _hdr->entities[_hdr->__iterator] : NULL;
+-      obj = ref ? dwg_ref_object (dwg, ref) : NULL;
+-      if (version < R_13b1 && obj && obj->fixedtype == DWG_TYPE_JUMP)
+-        return dwg_resolve_jump (obj);
+-      else
+-        return obj;
++      /* See get_next_owned_block_entity: NULL is the caller's end-of-list
++         signal, so a dangling reference must be skipped, not reported as the
++         end. dwggrep and dwg2SVG walk this one. */
++      while (1)
++        {
++          _hdr->__iterator++;
++          if (_hdr->__iterator >= _hdr->num_owned)
++            return NULL;
++          ref = _hdr->entities ? _hdr->entities[_hdr->__iterator] : NULL;
++          obj = ref ? dwg_ref_object (dwg, ref) : NULL;
++          if (version < R_13b1 && obj && obj->fixedtype == DWG_TYPE_JUMP)
++            obj = dwg_resolve_jump (obj);
++          if (obj)
++            return obj;
++          LOG_WARN ("Skip unresolvable entity " FORMAT_BL " of " FORMAT_BL
++                    " in BLOCK_HEADER " FORMAT_HV,
++                    _hdr->__iterator, _hdr->num_owned, hdr->handle.value);
++        }
+     }
+ 
+   LOG_ERROR ("Unsupported version %s\n", dwg_version_type (version));
+@@ -1612,15 +1628,27 @@ get_next_owned_block_entity (const Dwg_Object *restrict hdr,
+     {
+       Dwg_Object *obj;
+       Dwg_Object_Ref *ref;
+-      _hdr->__iterator++;
+-      if (_hdr->__iterator == _hdr->num_owned)
+-        return NULL;
+-      ref = _hdr->entities ? _hdr->entities[_hdr->__iterator] : NULL;
+-      obj = ref ? dwg_ref_object (dwg, ref) : NULL;
+-      if (version < R_13b1 && obj && obj->fixedtype == DWG_TYPE_JUMP)
+-        return dwg_resolve_jump (obj);
+-      else
+-        return obj;
++      /* Keep advancing over entries that do not resolve. NULL is the caller's
++         end-of-list signal (out_dxf.c and out_dxfb.c walk this with
++         `while (obj)`), so returning it for a dangling reference abandons every
++         entity after it: one bad reference at index 93 of 10847 cost a whole
++         drawing. Skipping loses one entity, stopping loses all the rest. `>=`
++         rather than `==` so a bumped iterator cannot walk off the end. */
++      while (1)
++        {
++          _hdr->__iterator++;
++          if (_hdr->__iterator >= _hdr->num_owned)
++            return NULL;
++          ref = _hdr->entities ? _hdr->entities[_hdr->__iterator] : NULL;
++          obj = ref ? dwg_ref_object (dwg, ref) : NULL;
++          if (version < R_13b1 && obj && obj->fixedtype == DWG_TYPE_JUMP)
++            obj = dwg_resolve_jump (obj);
++          if (obj)
++            return obj;
++          LOG_WARN ("Skip unresolvable entity " FORMAT_BL " of " FORMAT_BL
++                    " in BLOCK_HEADER " FORMAT_HV,
++                    _hdr->__iterator, _hdr->num_owned, hdr->handle.value);
++        }
+     }
+ 
+   LOG_ERROR ("Unsupported version %s\n", dwg_version_type (version));
+
+diff --git a/src/decode.c b/src/decode.c
+index c28e472f..68e7718a 100644
+--- a/src/decode.c
++++ b/src/decode.c
+@@ -2592,11 +2592,22 @@ read_2004_section_handles (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
+                               " looks wrong, should be prevsize " FORMAT_MC
+                               " + 4",
+                               offset, prevsize - 4);
+-                  // handleoff = 1;
+-                  // offset = prevsize;
+-                  // LOG_WARN ("Recover invalid handleoff to %" PRIuSIZE " and
+-                  // offset to %ld",
+-                  //           handleoff, offset);
++                }
++              /* Resynchronise when the modular char itself failed to parse
++                 (bit_read_UMC returns 0 on error). Trusting those bytes
++                 fabricates an object at an impossible address and derails every
++                 entry after it; retrying one byte later recovers the rest of the
++                 page.
++
++                 Only on !handleoff. The other two conditions above are
++                 heuristics that also fire on entries which parsed fine, and
++                 those are better used than skipped -- resyncing on them costs
++                 good entries (test-data/2004/Leader.dwg loses all 10). */
++              if (!handleoff && oldpos + 1 < startpos + (size_t)section_size)
++                {
++                  hdl_dat.byte = oldpos + 1;
++                  hdl_dat.bit = 0;
++                  continue;
+                 }
+             }
+           last_offset += offset;
+
+diff --git a/src/decode.c b/src/decode.c
+index c28e472f..cdd87736 100644
+--- a/src/decode.c
++++ b/src/decode.c
+@@ -6783,8 +6783,12 @@ decode_preR13_sentinel (const Dwg_Sentinel sentinel,
+       char *found = (char *)memmem (&dat->chain[pos], len, wanted, 16);
+       if (!found)
+         {
+-          LOG_ERROR ("%s not found at %" PRIuSIZE, sentinel_name,
+-                     dat->byte - 16);
++          /* A warning, not an error: whether a missing sentinel is fatal is
++             the caller's call -- the table reader in decode_r11.c carries on
++             from the header's own table address -- and a caller that does
++             give up still reports it through "Failed to decode file". */
++          LOG_WARN ("%s not found at %" PRIuSIZE, sentinel_name,
++                    dat->byte - 16);
+           error = DWG_ERR_SECTIONNOTFOUND;
+         }
+       else
+diff --git a/src/decode_r11.c b/src/decode_r11.c
+index 9d08e3ed..b441f931 100644
+--- a/src/decode_r11.c
++++ b/src/decode_r11.c
+@@ -273,10 +273,30 @@ decode_preR13_section (Dwg_Section_Type_r11 id, Bit_Chain *restrict dat,
+ 
+   SINCE (R_11)
+   {
++/* A missing table delimiter is not worth the drawing. The records are found
++   through tbl->address, which the header states independently of the
++   sentinel, and every pre-R13 table record carries its own CRC, checked
++   below -- so a wrong address is caught on its own merits rather than
++   guessed at from the delimiter. Rejecting the file instead threw away the
++   ENTITIES section that had already decoded: r11 writers exist that omit the
++   sentinels of the empty VIEW/UCS/VPORT tables (all three sharing one
++   address) and of the table that follows them (GH #767).
++   DWG_ERR_INVALIDDWG is left fatal on purpose: that one means the 16 bytes
++   could not even be read, so the position itself is nonsense. */
+ #define DECODE_PRER13_SENTINEL(ID)                                            \
+-  error |= decode_preR13_sentinel (ID, #ID, dat, dwg);                        \
+-  if (error >= DWG_ERR_SECTIONNOTFOUND)                                       \
+-  return error
++  {                                                                           \
++    int _sentinel_err = decode_preR13_sentinel (ID, #ID, dat, dwg);           \
++    if (_sentinel_err == DWG_ERR_SECTIONNOTFOUND)                             \
++      {                                                                       \
++        LOG_WARN ("%s missing, reading table %s at its header address "        \
++                  "0x%zx anyway",                                             \
++                  #ID, tbl->name, (size_t)tbl->address);                      \
++        _sentinel_err = DWG_ERR_WRONGCRC;                                     \
++      }                                                                       \
++    else if (_sentinel_err >= DWG_ERR_SECTIONNOTFOUND)                        \
++      return error | _sentinel_err;                                           \
++    error |= _sentinel_err;                                                   \
++  }
+ 
+     switch (id)
+       {
+
+diff --git a/programs/dwg2SVG.c b/programs/dwg2SVG.c
+index 1344bacb..2305da79 100644
+--- a/programs/dwg2SVG.c
++++ b/programs/dwg2SVG.c
+@@ -47,6 +47,7 @@
+ #endif
+ #include "my_getopt.h"
+ #include <math.h>
++#include <float.h>
+ #ifdef HAVE_VALGRIND_VALGRIND_H
+ #  include <valgrind/valgrind.h>
+ #endif
+@@ -105,6 +106,55 @@ help (void)
+   return 0;
+ }
+ 
++/* Every geometry printf goes through this. The measuring pass below has to
++   walk the same code without emitting, and it cannot simply skip the call:
++   the arguments are where transform_X and transform_Y live, so not evaluating
++   them measures nothing. So it writes to the null device instead.
++   fprintf (stderr, ...) is untouched. */
++#ifdef _WIN32
++#  define NULL_DEVICE "NUL"
++#else
++#  define NULL_DEVICE "/dev/null"
++#endif
++static FILE *measure_sink = NULL;
++
++#define printf(...) fprintf (measuring ? measure_sink : stdout, __VA_ARGS__)
++
++/* The viewBox has to be the box of what actually gets drawn, and that is not
++   $EXTMIN/$EXTMAX: this program renders "some 2D elements", so the header box
++   also covers entities it skips, and real drawings carry entities outside
++   their recorded extents too. Framing by the header box left the geometry off
++   screen or smaller than a pixel -- the empty SVGs of GH #523.
++
++   So the drawn space is walked twice: once with output suppressed to collect
++   the box, then again to emit. Coordinates are recorded before the transform,
++   since the transform itself needs the box.
++
++   Inside a <defs> symbol the coordinates are block-local -- the <use> that
++   instantiates it already carries the placement -- so translating them there
++   as well displaced every block by the model origin a second time. They are
++   left alone on the way out, and kept out of the box: what belongs in it is
++   the insertion point, which the <use> does pass through transform_X. */
++static bool measuring = false;
++static bool in_block_definition = false;
++static double drawn_xmin, drawn_ymin, drawn_xmax, drawn_ymax;
++
++/* Counts coordinates put on the page, so output_BLOCK_HEADER can tell which
++   of its entities actually drew something. */
++static unsigned long coords_drawn = 0;
++
++static void
++record_XY (double v, double *lo, double *hi)
++{
++  if (!isfinite (v) || in_block_definition)
++    return;
++  coords_drawn++;
++  if (v < *lo)
++    *lo = v;
++  if (v > *hi)
++    *hi = v;
++}
++
+ static double
+ transform_ANGLE (double angle)
+ {
+@@ -114,13 +164,15 @@ transform_ANGLE (double angle)
+ static double
+ transform_X (double x)
+ {
+-  return x - model_xmin;
++  record_XY (x, &drawn_xmin, &drawn_xmax);
++  return in_block_definition ? x : x - model_xmin;
+ }
+ 
+ static double
+ transform_Y (double y)
+ {
+-  return page_height - (y - model_ymin);
++  record_XY (y, &drawn_ymin, &drawn_ymax);
++  return in_block_definition ? -y : page_height - (y - model_ymin);
+ }
+ 
+ static bool
+@@ -164,9 +216,15 @@ static double
+ entity_lweight (Dwg_Object_Entity *ent)
+ {
+   // TODO: resolve BYLAYER 256, see above.
+-  // stroke-width:%0.1fpx. 100th of a mm
++  /* dxf_cvt_lweight gives 100ths of a mm, so mm is lw/100 -- it was lw/1000,
++     and printed with %.1f, which turned every ordinary lineweight into
++     stroke-width:0.0 and drew nothing. 0 is a legitimate value meaning
++     "thinnest line", so it also needs a width it can be seen at. The stroke
++     is emitted with vector-effect:non-scaling-stroke, so these are device
++     widths and stay visible whatever the viewBox spans. */
+   int lw = dxf_cvt_lweight (ent->linewt);
+-  return lw < 0 ? 0.1 : (double)(lw * 0.001);
++  double mm = lw > 0 ? (double)lw * 0.01 : 0.0;
++  return mm < 0.05 ? 0.05 : mm;
+ }
+ 
+ static char *
+@@ -218,7 +276,8 @@ common_entity (Dwg_Object_Entity *ent)
+   char *color;
+   lweight = entity_lweight (ent);
+   color = entity_color (ent);
+-  printf ("      style=\"fill:none;stroke:%s;stroke-width:%.1fpx\" />\n",
++  printf ("      style=\"fill:none;stroke:%s;stroke-width:%.2fmm;"
++          "vector-effect:non-scaling-stroke\" />\n",
+           color, lweight);
+   if (*color == '#')
+     free (color);
+@@ -820,7 +879,18 @@ output_BLOCK_HEADER (Dwg_Object_Ref *ref)
+   obj = get_first_owned_entity (ref->obj);
+   while (obj)
+     {
+-      num += output_object (obj);
++      /* Count what was drawn, not what was handled. The caller reads this as
++         "how many paper-space entities we did print" and falls back to model
++         space when it is zero -- but output_object returns 1 for every type it
++         recognises, including VIEWPORT and SEQEND, which draw nothing, and
++         entities it skips as invisible. Every paper space holds a VIEWPORT, so
++         the count was never zero, model space was never drawn, and its
++         geometry only ever appeared inside <defs>, which no renderer draws.
++         That is the empty SVG of GH #523. */
++      unsigned long before = coords_drawn;
++      output_object (obj);
++      if (coords_drawn > before)
++        num++;
+       obj = get_next_owned_entity (ref->obj, obj);
+     }
+ 
+@@ -855,6 +925,62 @@ output_SVG (Dwg_Data *dwg)
+     dy = 100.0;
+   page_width = dx;
+   page_height = dy;
++
++  /* First pass: walk what we are about to draw, emitting nothing, so the
++     viewBox can be the box of the geometry instead of the header's. */
++  drawn_xmin = drawn_ymin = DBL_MAX;
++  drawn_xmax = drawn_ymax = -DBL_MAX;
++  measure_sink = fopen (NULL_DEVICE, "w");
++  measuring = measure_sink != NULL;
++  if (!mspace && (ref = dwg_paper_space_ref (dwg)))
++    num = output_BLOCK_HEADER (ref);
++  if (!num && (ref = dwg_model_space_ref (dwg)))
++    output_BLOCK_HEADER (ref);
++  for (i = 0; i < dwg->block_control.num_entries; i++)
++    {
++      if (dwg->block_control.entries && (ref = dwg->block_control.entries[i]))
++        {
++          in_block_definition = true;
++          output_BLOCK_HEADER (ref);
++          in_block_definition = false;
++        }
++    }
++  measuring = false;
++  if (measure_sink)
++    {
++      fclose (measure_sink);
++      measure_sink = NULL;
++    }
++  num = 0;
++
++  if (drawn_xmin <= drawn_xmax && drawn_ymin <= drawn_ymax)
++    {
++      /* A margin, so that a stroke on the outermost line, and the geometry of
++         an inserted symbol reaching past its insertion point, are not clipped
++         at the edge. Proportional on purpose: padding by the largest block
++         extent instead would let one unused block whose definition sits at
++         absolute coordinates blow the box back up to millions of units. */
++      const double margin = 0.02 * MAX (drawn_xmax - drawn_xmin,
++                                        drawn_ymax - drawn_ymin);
++      model_xmin = drawn_xmin - margin;
++      model_ymin = drawn_ymin - margin;
++      dx = (drawn_xmax + margin) - model_xmin;
++      dy = (drawn_ymax + margin) - model_ymin;
++      if (dx > 0.0 && dy > 0.0 && isfinite (dx) && isfinite (dy))
++        {
++          /* model_xmax/model_ymax are the clip box output_XLINE reads, so keep
++             the four of them describing the same rectangle. */
++          model_xmax = model_xmin + dx;
++          model_ymax = model_ymin + dy;
++          page_width = dx;
++          page_height = dy;
++        }
++      else
++        {
++          model_xmin = dwg_model_x_min (dwg);
++          model_ymin = dwg_model_y_min (dwg);
++        }
++    }
+   // scale *= (scale_x > scale_y ? scale_x : scale_y);
+ 
+   // optional, for xmllint
+@@ -869,8 +995,8 @@ output_SVG (Dwg_Data *dwg)
+           "   xmlns:xlink=\"http://www.w3.org/1999/xlink\"\n"
+           "   version=\"1.1\" baseProfile=\"basic\"\n"
+           "   width=\"100%%\" height=\"100%%\"\n"
+-          "   viewBox=\"%f %f %f %f\">\n",
+-          model_xmin, model_ymin, page_width, page_height);
++          "   viewBox=\"0 0 %f %f\">\n",
++          page_width, page_height);
+ 
+   if (!mspace && (ref = dwg_paper_space_ref (dwg)))
+     num = output_BLOCK_HEADER (
+@@ -878,11 +1004,13 @@ output_SVG (Dwg_Data *dwg)
+   if (!num && (ref = dwg_model_space_ref (dwg)))
+     output_BLOCK_HEADER (ref);
+   printf ("\t<defs>\n");
++  in_block_definition = true;
+   for (i = 0; i < dwg->block_control.num_entries; i++)
+     {
+       if (dwg->block_control.entries && (ref = dwg->block_control.entries[i]))
+         output_BLOCK_HEADER (ref);
+     }
++  in_block_definition = false;
+   printf ("\t</defs>\n");
+   printf ("</svg>\n");
+   fflush (stdout);
+
+diff --git a/src/decode.c b/src/decode.c
+index c28e472f..c0489721 100644
+--- a/src/decode.c
++++ b/src/decode.c
+@@ -6952,12 +6952,14 @@ decode_preR13_entities (BITCODE_RL start, BITCODE_RL end,
+   BITCODE_BL num = dwg->num_objects;
+   BITCODE_RL real_start = start;
+   size_t oldpos;
+-  BITCODE_RLL hdr_handle = 0;
++  BITCODE_RLL hdr_handle = 0, phdr_handle = 0;
++  Dwg_Object *phdr = NULL;
++  Dwg_Object_BLOCK_HEADER *_phdr = NULL;
+   const char *entities_section[]
+       = { "entities", "blocks entities", "extras entities" };
+   Dwg_Object *hdr = NULL;
+   Dwg_Object_BLOCK_HEADER *_hdr = NULL;
+-  BITCODE_BL block_idx = 0, hdr_index = 0;
++  BITCODE_BL block_idx = 0, hdr_index = 0, phdr_index = 0;
+ 
+   LOG_TRACE ("\n%s: (" FORMAT_RLx "-" FORMAT_RLx " (%u), size " FORMAT_RL
+              ")\n",
+@@ -6995,6 +6997,22 @@ decode_preR13_entities (BITCODE_RL start, BITCODE_RL end,
+           LOG_TRACE ("owned by BLOCK %s (" FORMAT_HV ")\n", _hdr->name,
+                      hdr_handle);
+         }
++      /* The r11 entities section holds both spaces, told apart by the
++         FLAG_R11_HAS_PSPACE flag which the decoder turns into entmode 1. Each
++         has to land in its own BLOCK_HEADER, or a reader walking the layouts
++         finds an empty paper space and a model space holding both (GH #1337). */
++      phdr = dwg_paper_space_object (dwg);
++      if (phdr && phdr->fixedtype == DWG_TYPE_BLOCK_HEADER)
++        {
++          phdr_index = phdr->index;
++          _phdr = phdr->tio.object->tio.BLOCK_HEADER;
++          _phdr->block_offset_r11 = (BITCODE_RL)-1;
++          if (!phdr->handle.value)
++            phdr->handle.value = dwg_next_handle (dwg);
++          phdr_handle = phdr->handle.value;
++          LOG_TRACE ("paper space is BLOCK %s (" FORMAT_HV ")\n", _phdr->name,
++                     phdr_handle);
++        }
+     }
+   // TODO search current offset in block_offset_r11 in BLOCK_HEADER's
+ 
+@@ -7535,17 +7553,21 @@ decode_preR13_entities (BITCODE_RL start, BITCODE_RL end,
+               && obj->fixedtype != DWG_TYPE_SEQEND)
+             {
+               BITCODE_H ref;
++              /* paper space, if this drawing has one and the entity says so */
++              const bool to_pspace = _phdr && phdr_handle
++                                     && obj->tio.entity->entmode == 1;
++              Dwg_Object_BLOCK_HEADER *_owner = to_pspace ? _phdr : _hdr;
+               if (!obj->handle.value)
+                 obj->handle.value = dwg_next_handle (dwg);
+-              hdr = &dwg->object[hdr_index];
++              hdr = &dwg->object[to_pspace ? phdr_index : hdr_index];
+               ref = dwg_add_handleref (dwg, 3, obj->handle.value, hdr);
+               // if (dwg->dirty_refs)
+               // find _hdr again from hdr_handle
+-              LOG_TRACE ("BLOCK_HEADER \"%s\".", _hdr->name);
++              LOG_TRACE ("BLOCK_HEADER \"%s\".", _owner->name);
+               if (obj->fixedtype != DWG_TYPE_BLOCK)
+-                PUSH_HV (_hdr, num_owned, entities, ref);
+-              obj->tio.entity->ownerhandle
+-                  = dwg_add_handleref (dwg, 4, hdr_handle, obj);
++                PUSH_HV (_owner, num_owned, entities, ref);
++              obj->tio.entity->ownerhandle = dwg_add_handleref (
++                  dwg, 4, to_pspace ? phdr_handle : hdr_handle, obj);
+               obj->tio.entity->ownerhandle->r11_idx = block_idx;
+               LOG_TRACE ("ownerhandle: " FORMAT_HREF11 "\n",
+                          ARGS_HREF11 (obj->tio.entity->ownerhandle));
+diff --git a/src/dwg_api.c b/src/dwg_api.c
+index 763d5148..cfcab76b 100644
+--- a/src/dwg_api.c
++++ b/src/dwg_api.c
+@@ -25324,7 +25324,12 @@ dwg_add_Document (Dwg_Data *restrict dwg, const int imperial)
+   dwg->header_vars.BLOCK_RECORD_MSPACE->obj = mspaceobj;
+   block_control->model_space
+       = dwg_add_handleref (dwg, 3, mspaceobj->handle.value, NULL);
+-  if (version >= R_13b1)
++  /* r11 and r12 have a paper space too -- that is what the entity flag
++     FLAG_R11_HAS_PSPACE marks, and AutoCAD writes a $PAPER_SPACE block for it.
++     Without the BLOCK_HEADER, dwg_paper_space_object() finds nothing, the
++     paper-space entities end up owned by model space, and the DXF loses the
++     block record entirely (GH #1337). */
++  if (version >= R_11)
+     {
+       // BLOCK_RECORD_PSPACE: (5.1.20)
+       dwg_set_next_hdl (dwg, UINT64_C (0x20));
+@@ -25344,10 +25349,26 @@ dwg_add_Document (Dwg_Data *restrict dwg, const int imperial)
+       dwg->block_control = *block_control;
+       // BLOCK: (5.1.21)
+       dwg_set_next_hdl (dwg, UINT64_C (0x21));
+-      dwg_add_BLOCK (pspace, "*PAPER_SPACE");
++      {
++        Dwg_Entity_BLOCK *pblock = dwg_add_BLOCK (pspace, "*PAPER_SPACE");
++        if (dwg->header.version <= R_12) // fixup the type, as for mspace below
++          {
++            obj = dwg_obj_generic_to_object (pblock, &error);
++            if (obj)
++              obj->type = DWG_TYPE_UNUSED_r11; // don't encode it
++          }
++      }
+       // ENDBLK: (5.1.22)
+       dwg_set_next_hdl (dwg, UINT64_C (0x22));
+-      dwg_add_ENDBLK (pspace);
++      {
++        Dwg_Entity_ENDBLK *pendblk = dwg_add_ENDBLK (pspace);
++        if (dwg->header.version <= R_12) // fixup the type
++          {
++            obj = dwg_obj_generic_to_object (pendblk, &error);
++            if (obj)
++              obj->type = DWG_TYPE_UNUSED_r11; // don't encode it
++          }
++      }
+     }
+   // LAYOUT (0.1.23)
+   // dwg_set_next_hdl (dwg, UINT64_C (0x23));
+diff --git a/src/out_dxf.c b/src/out_dxf.c
+index 91a33fdd..dec39a29 100644
+--- a/src/out_dxf.c
++++ b/src/out_dxf.c
+@@ -1874,20 +1874,25 @@ dxf_cvt_blockname (Bit_Chain *restrict dat, char *restrict name, const int dxf)
+         free (name);
+       return;
+     }
+-  if (dat->version == dat->from_version) // no conversion
++  /* The name depends on the DXF being written, not on where the drawing came
++     from: a pre-R13 DXF spells the two spaces $MODEL_SPACE and $PAPER_SPACE,
++     whatever they are called internally. Keying this off
++     "version != from_version" left an r11 -> r11 conversion writing
++     *MODEL_SPACE, which is not what AutoCAD writes (GH #1337). */
++  if (dat->version == dat->from_version && dat->version >= R_13b1)
+     {
+       fprintf (dat->fh, "%3i\r\n%s\r\n", dxf, name);
+     }
+-  else if (dat->version < R_13b1 && dat->from_version >= R_13b1) // to older
++  else if (dat->version < R_13b1) // to pre-R13
+     {
+-      if (strlen (name) < 10)
+-        fprintf (dat->fh, "%3i\r\n%s\r\n", dxf, name);
+-      else if (strEQc (name, "*Model_Space"))
++      if (strEQc (name, "*Model_Space") || strEQc (name, "*MODEL_SPACE"))
+         fprintf (dat->fh, "%3i\r\n$MODEL_SPACE\r\n", dxf);
+-      else if (strEQc (name, "*Paper_Space"))
++      else if (strEQc (name, "*Paper_Space") || strEQc (name, "*PAPER_SPACE"))
+         fprintf (dat->fh, "%3i\r\n$PAPER_SPACE\r\n", dxf);
+       else if (strlen (name) >= 12 && !memcmp (name, "*Paper_Space", 12))
+         fprintf (dat->fh, "%3i\r\n$PAPER_SPACE%s\r\n", dxf, &name[12]);
++      else if (strlen (name) >= 12 && !memcmp (name, "*PAPER_SPACE", 12))
++        fprintf (dat->fh, "%3i\r\n$PAPER_SPACE%s\r\n", dxf, &name[12]);
+       else
+         fprintf (dat->fh, "%3i\r\n%s\r\n", dxf, name);
+     }
+
+diff --git a/src/bits.c b/src/bits.c
+index 2bc3ff46..29fbbfa9 100644
+--- a/src/bits.c
++++ b/src/bits.c
+@@ -3937,7 +3937,7 @@ bit_read_TIMEBLL (Bit_Chain *dat)
+       date.days = bit_read_BL (dat);
+       date.ms = bit_read_BL (dat);
+     }
+-  date.value = date.days + (date.ms * 1e-8);
++  date.value = date.days + (date.ms / TIMEBLL_MS_PER_DAY);
+   return date;
+ }
+ 
+@@ -3966,7 +3966,7 @@ bit_read_TIMERLL (Bit_Chain *dat)
+   date.days = bit_read_RL (dat);
+   date.ms = bit_read_RL (dat);
+   // just for display, not calculations
+-  date.value = date.days + (date.ms * 1e-8);
++  date.value = date.days + (date.ms / TIMEBLL_MS_PER_DAY);
+   return date;
+ }
+ 
+diff --git a/src/common.c b/src/common.c
+index 2591d23f..dca8f5d3 100644
+--- a/src/common.c
++++ b/src/common.c
+@@ -539,7 +539,7 @@ cvt_TIMEBLL (struct tm *tm, BITCODE_TIMEBLL date)
+ 
+ #define TRUNC(n) (long)floor (n)
+ 
+-  t = 0.864 * date.ms / 1000.0; /*t=1000000 = 1 day, means 86400 in seconds */
++  t = date.ms / 1000.0; /* ms elapsed in the day -> seconds */
+   if (date.days > 2299161)
+     {
+       jalpha = TRUNC (((date.days - 1867216) - 0.25) / 36524.25);
+diff --git a/src/common.h b/src/common.h
+index 8001e0da..2ec7f957 100644
+--- a/src/common.h
++++ b/src/common.h
+@@ -33,6 +33,16 @@
+ #include <inttypes.h>
+ #include <stdbool.h>
+ #include <math.h>
++
++/* A TIMEBLL/TIMERLL is a julian day number plus the milliseconds elapsed in
++   that day, so the fraction of a day it stands for is ms/86400000. The code
++   used to spell that as "ms * 1e-8" in seven places, "0.864 * ms / 1000" in
++   cvt_TIMEBLL and "86400.0 * ms" in json_TIMEBLL -- three mutually
++   incompatible conventions for one field, all of them wrong by 0.864 or worse.
++   dwg_add_Document fills the field itself with 1000 * (now % 86400), i.e.
++   milliseconds, three lines above computing the value as ms * 1e-8. GH #1309. */
++#define TIMEBLL_MS_PER_DAY 86400000.0
++
+ #include <time.h>
+ #include "dwg.h"
+ 
+diff --git a/src/dwg_api.c b/src/dwg_api.c
+index 763d5148..cf0aa607 100644
+--- a/src/dwg_api.c
++++ b/src/dwg_api.c
+@@ -25015,7 +25015,7 @@ dwg_add_Document (Dwg_Data *restrict dwg, const int imperial)
+     days += 2440588L;
+     dwg->header_vars.TDUCREATE
+         = (BITCODE_TIMEBLL){ (BITCODE_BL)days, (BITCODE_BL)ms,
+-                             days + (ms * 1e-8) };
++                             days + (ms / TIMEBLL_MS_PER_DAY) };
+   }
+   dwg->header_vars.TDUUPDATE = dwg->header_vars.TDUCREATE;
+   // CECOLOR.index: 256 [CMC.BS 62]
+diff --git a/src/header_variables.spec b/src/header_variables.spec
+index cfe9beab..08441e9a 100644
+--- a/src/header_variables.spec
++++ b/src/header_variables.spec
+@@ -276,13 +276,13 @@
+       _obj->TDCREATE.days  = _obj->TDUCREATE.days;
+       // adjust for timezone offset
+       _obj->TDCREATE.ms    = _obj->TDUCREATE.ms + off;
+-      _obj->TDCREATE.value = _obj->TDCREATE.days + (_obj->TDCREATE.ms * 1e-8);
++      _obj->TDCREATE.value = _obj->TDCREATE.days + (_obj->TDCREATE.ms / TIMEBLL_MS_PER_DAY);
+       strftime (_buf, 60, STRFTIME_DATE, cvt_TIMEBLL (&tm, _obj->TDCREATE));
+       LOG_TRACE ("=> TDCREATE: [" FORMAT_BL ", " FORMAT_BL "] %s [TIMEBLL 40]\n",
+                    _obj->TDCREATE.days, _obj->TDCREATE.ms, _buf);
+       _obj->TDUPDATE.days  = _obj->TDUUPDATE.days;
+       _obj->TDUPDATE.ms    = _obj->TDUUPDATE.ms + off;
+-      _obj->TDUPDATE.value = _obj->TDUPDATE.days + (_obj->TDUPDATE.ms * 1e-8);
++      _obj->TDUPDATE.value = _obj->TDUPDATE.days + (_obj->TDUPDATE.ms / TIMEBLL_MS_PER_DAY);
+       strftime (_buf, 60, STRFTIME_DATE, cvt_TIMEBLL (&tm, _obj->TDUPDATE));
+       LOG_TRACE ("=> TDUPDATE: [" FORMAT_BL ", " FORMAT_BL "] %s [TIMEBLL 40]\n",
+                    _obj->TDUPDATE.days, _obj->TDUPDATE.ms, _buf);
+diff --git a/src/header_variables_r11.spec b/src/header_variables_r11.spec
+index d6cc86e8..9221a119 100644
+--- a/src/header_variables_r11.spec
++++ b/src/header_variables_r11.spec
+@@ -202,12 +202,15 @@
+       _obj->TDUCREATE.days  = _obj->TDCREATE.days;
+       // adjust for timezone offset
+       _obj->TDUCREATE.ms    = _obj->TDUCREATE.ms - off;
+-      _obj->TDUCREATE.value = _obj->TDUCREATE.days + (_obj->TDUCREATE.ms * 1e-8);
++      _obj->TDUCREATE.value = _obj->TDUCREATE.days + (_obj->TDUCREATE.ms / TIMEBLL_MS_PER_DAY);
+       LOG_TRACE ("=> TDUCREATE: [" FORMAT_BL ", " FORMAT_BL "] %f [TIMEBLL 40]\n",
+                    _obj->TDUCREATE.days, _obj->TDUCREATE.ms, _obj->TDUCREATE.value);
+       _obj->TDUUPDATE.days  = _obj->TDUPDATE.days;
+       _obj->TDUUPDATE.ms    = _obj->TDUPDATE.ms - off;
+-      _obj->TDUUPDATE.value = _obj->TDUPDATE.days + (_obj->TDUPDATE.ms * 1e-8);
++      /* from TDUUPDATE, which is what the two lines above just set: the
++         value has to agree with the days/ms it belongs to, timezone
++         adjustment included. */
++      _obj->TDUUPDATE.value = _obj->TDUUPDATE.days + (_obj->TDUUPDATE.ms / TIMEBLL_MS_PER_DAY);
+       LOG_TRACE ("=> TDUUPDATE: [" FORMAT_BL ", " FORMAT_BL "] %f [TIMEBLL 40]\n",
+                    _obj->TDUUPDATE.days, _obj->TDUUPDATE.ms, _obj->TDUUPDATE.value);
+     }
+diff --git a/src/in_json.c b/src/in_json.c
+index fa61d838..6ec13a9d 100644
+--- a/src/in_json.c
++++ b/src/in_json.c
+@@ -909,9 +909,7 @@ json_TIMEBLL (Bit_Chain *restrict dat, jsmntokens_t *restrict tokens,
+       JSON_TOKENS_CHECK_OVERFLOW_VOID
+       date->ms = json_long (dat, tokens);
+       JSON_TOKENS_CHECK_OVERFLOW_VOID
+-      date->value
+-          = date->days
+-            + (86400.0 * date->ms); // just for display, not calculations
++      date->value = date->days + (date->ms / TIMEBLL_MS_PER_DAY);
+     }
+   else
+     {
+@@ -920,7 +918,7 @@ json_TIMEBLL (Bit_Chain *restrict dat, jsmntokens_t *restrict tokens,
+       JSON_TOKENS_CHECK_OVERFLOW_VOID
+       date->value = num;
+       date->days = (BITCODE_BL)trunc (num);
+-      date->ms = (BITCODE_BL)(86400.0 * (date->value - date->days));
++      date->ms = (BITCODE_BL)((date->value - date->days) * TIMEBLL_MS_PER_DAY);
+     }
+   LOG_TRACE ("%s: %.08f (%u, %u) [TIMEBLL]\n", name, date->value, date->days,
+              date->ms);
+
+diff --git a/src/in_dxf.c b/src/in_dxf.c
+index 525f2240..d0eb1888 100644
+--- a/src/in_dxf.c
++++ b/src/in_dxf.c
+@@ -9512,6 +9512,8 @@ dxf_postprocess_SEQEND (Dwg_Object *restrict obj)
+       return;
+     }
+   obj->tio.entity->ownerhandle->obj = NULL;
++  // AutoCAD stores subentities with entmode 0, owned by the parent entity
++  obj->tio.entity->entmode = 0;
+   owhdls = memBEGINc (owner->name, "POLYLINE_") ? "vertex" : "attribs";
+   ow = owner->tio.entity->tio.POLYLINE_2D;
+ 
+@@ -9525,6 +9527,14 @@ dxf_postprocess_SEQEND (Dwg_Object *restrict obj)
+     {
+       Dwg_Object *_o = &dwg->object[i];
+       num_owned = j + 1;
++      if (_o->supertype == DWG_SUPERTYPE_ENTITY && _o->tio.entity)
++        {
++          // as with the SEQEND: entmode 0, owned by the parent entity,
++          // whatever the 330 in the DXF pointed to
++          _o->tio.entity->entmode = 0;
++          _o->tio.entity->ownerhandle
++              = dwg_add_handleref (dwg, 4, owner->handle.value, _o);
++        }
+       if (dwg->header.from_version >= R_13b1)
+         {
+           // Match the encoder's expected handle relation-code for the owned
+@@ -14449,7 +14459,22 @@ dxf_entities_read (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
+                   obj = &dwg->object[last_ent];
+                   ent = obj->tio.entity;
+                 }
+-              if (ent->ownerhandle)
++              if (obj->fixedtype == DWG_TYPE_ATTRIB
++                  || obj->fixedtype == DWG_TYPE_SEQEND
++                  || obj->fixedtype == DWG_TYPE_VERTEX_2D
++                  || obj->fixedtype == DWG_TYPE_VERTEX_3D
++                  || obj->fixedtype == DWG_TYPE_VERTEX_MESH
++                  || obj->fixedtype == DWG_TYPE_VERTEX_PFACE
++                  || obj->fixedtype == DWG_TYPE_VERTEX_PFACE_FACE)
++                {
++                  // Subentity: owned by its INSERT/POLYLINE parent, not by
++                  // the block. AutoCAD stores it with entmode 0 and keeps it
++                  // out of the block's entity chain; filing it under the
++                  // block corrupts the chain for conformant readers.
++                  // dxf_postprocess_SEQEND resets its owner to the parent.
++                  ent->entmode = 0;
++                }
++              else if (ent->ownerhandle)
+                 {
+                   if (ent->ownerhandle->absolute_ref == mspace)
+                     ent->entmode = 2;
+@@ -14457,7 +14482,6 @@ dxf_entities_read (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
+                     ent->entmode = 1;
+                   else if (dwg->header.from_version < R_13b1)
+                     {
+-                      // SEQEND/VERTEX: owner is INSERT/POLYLINE, not mspace.
+                       // Inherit entmode from the parent entity.
+                       Dwg_Object *owner_obj = dwg_resolve_handle (
+                           dwg, ent->ownerhandle->absolute_ref);
+
+diff --git a/src/out_dxf.c b/src/out_dxf.c
+index 91a33fdd..5109cb66 100644
+--- a/src/out_dxf.c
++++ b/src/out_dxf.c
+@@ -3046,27 +3046,57 @@ decl_dxf_process_INSERT (MINSERT)
+ 
+     case DWG_TYPE_ATTRIB:
+       if (dat->version >= R_13b1)
+-        LOG_WARN ("stale %s subentity", obj->dxfname);
++        {
++          // already written via its parent entity; writing it again
++          // here would duplicate it after the SEQEND
++          LOG_WARN ("stale %s subentity", obj->dxfname);
++          return 0;
++        }
+       return dwg_dxf_ATTRIB (dat, obj);
+     case DWG_TYPE_VERTEX_2D:
+       if (dat->version >= R_13b1)
+-        LOG_WARN ("stale %s subentity", obj->dxfname);
++        {
++          // already written via its parent entity; writing it again
++          // here would duplicate it after the SEQEND
++          LOG_WARN ("stale %s subentity", obj->dxfname);
++          return 0;
++        }
+       return dwg_dxf_VERTEX_2D (dat, obj);
+     case DWG_TYPE_VERTEX_3D:
+       if (dat->version >= R_13b1)
+-        LOG_WARN ("stale %s subentity", obj->dxfname);
++        {
++          // already written via its parent entity; writing it again
++          // here would duplicate it after the SEQEND
++          LOG_WARN ("stale %s subentity", obj->dxfname);
++          return 0;
++        }
+       return dwg_dxf_VERTEX_3D (dat, obj);
+     case DWG_TYPE_VERTEX_MESH:
+       if (dat->version >= R_13b1)
+-        LOG_WARN ("stale %s subentity", obj->dxfname);
++        {
++          // already written via its parent entity; writing it again
++          // here would duplicate it after the SEQEND
++          LOG_WARN ("stale %s subentity", obj->dxfname);
++          return 0;
++        }
+       return dwg_dxf_VERTEX_MESH (dat, obj);
+     case DWG_TYPE_VERTEX_PFACE:
+       if (dat->version >= R_13b1)
+-        LOG_WARN ("stale %s subentity", obj->dxfname);
++        {
++          // already written via its parent entity; writing it again
++          // here would duplicate it after the SEQEND
++          LOG_WARN ("stale %s subentity", obj->dxfname);
++          return 0;
++        }
+       return dwg_dxf_VERTEX_PFACE (dat, obj);
+     case DWG_TYPE_VERTEX_PFACE_FACE:
+       if (dat->version >= R_13b1)
+-        LOG_WARN ("stale %s subentity", obj->dxfname);
++        {
++          // already written via its parent entity; writing it again
++          // here would duplicate it after the SEQEND
++          LOG_WARN ("stale %s subentity", obj->dxfname);
++          return 0;
++        }
+       return dwg_dxf_VERTEX_PFACE_FACE (dat, obj);
+ 
+     case DWG_TYPE_ARC:
+
+diff --git a/src/out_dxf.c b/src/out_dxf.c
+index 91a33fdd..ac0594cd 100644
+--- a/src/out_dxf.c
++++ b/src/out_dxf.c
+@@ -3878,16 +3878,20 @@ dxf_block_write (Bit_Chain *restrict dat, const Dwg_Object *restrict hdr,
+     {
+       SINCE (R_2004a)
+       {
+-        // first_owned_block
++        // first_owned_block. E.g. an orphaned duplicate *Model_Space from a
++        // DXF import. Skip just this block header: aborting would throw away
++        // every remaining block and the whole ENTITIES section, as r2000
++        // (which falls through here) does not.
+         if (IS_FROM_TU (dat))
+           {
+             char *s = bit_convert_TU ((BITCODE_TU)_hdr->name);
+-            LOG_ERROR ("BLOCK_HEADER %s first_owned_entity missing", s);
++            LOG_WARN ("BLOCK_HEADER %s first_owned_entity missing, skipped", s);
+             free (s);
+           }
+         else
+-          LOG_ERROR ("BLOCK_HEADER %s first_owned_entity missing", _hdr->name);
+-        return DWG_ERR_INVALIDDWG;
++          LOG_WARN ("BLOCK_HEADER %s first_owned_entity missing, skipped",
++                    _hdr->name);
++        return 0;
+       }
+     }
+ 
+diff --git a/src/out_dxfb.c b/src/out_dxfb.c
+index 3d3bb782..68b6bef0 100644
+--- a/src/out_dxfb.c
++++ b/src/out_dxfb.c
+@@ -2368,15 +2368,20 @@ dxfb_block_write (Bit_Chain *restrict dat, const Dwg_Object *restrict hdr,
+     {
+       SINCE (R_2004a)
+       {
++        // E.g. an orphaned duplicate *Model_Space from a DXF import. Skip
++        // just this block header: aborting would throw away every remaining
++        // block and the whole ENTITIES section, as r2000 (which falls
++        // through here) does not.
+         if (IS_FROM_TU (dat))
+           {
+             char *s = bit_convert_TU ((BITCODE_TU)_hdr->name);
+-            LOG_ERROR ("BLOCK_HEADER %s first_owned_entity missing", s);
++            LOG_WARN ("BLOCK_HEADER %s first_owned_entity missing, skipped", s);
+             free (s);
+           }
+         else
+-          LOG_ERROR ("BLOCK_HEADER %s first_owned_entity missing", _hdr->name);
+-        return DWG_ERR_INVALIDDWG;
++          LOG_WARN ("BLOCK_HEADER %s first_owned_entity missing, skipped",
++                    _hdr->name);
++        return 0;
+       }
+     }
+   // Skip all *Model_Space and *Paper_Space entities, esp. new ones: UNDERLAY,
+
+diff --git a/src/in_dxf.c b/src/in_dxf.c
+index 525f2240..4cb7d903 100644
+--- a/src/in_dxf.c
++++ b/src/in_dxf.c
+@@ -908,6 +908,42 @@ dxf_read_pair (Bit_Chain *dat)
+               pair->value.s.ptr = strdup ("*Paper_Space");
+             }
+         }
++      if (dat->from_version >= R_2007 && dat->version < R_2007
++          && pair->code != 0 && pair->value.s.ptr && *pair->value.s.ptr)
++        {
++          // An r2007+ DXF is UTF-8-encoded, but the pre-r2007 target stores
++          // codepage strings, and dynapi_set_helper copies them through
++          // unconverted: every non-ASCII char arrives double-encoded in the
++          // DWG. Convert here, so the value carries the same encoding as if
++          // read from a pre-r2007 DXF.
++          size_t len = strlen (pair->value.s.ptr);
++          size_t size = (len * 4) + 8;
++          char *dest = (char *)malloc (size);
++          char *tgt = dest ? bit_utf8_to_TV (dest,
++                                             (unsigned char *)pair->value.s.ptr,
++                                             size, len, 0, dat->codepage)
++                           : NULL;
++          while (dest && !tgt)
++            {
++              char *tmp;
++              size *= 2;
++              if (size >= 1 << 20)
++                break;
++              tmp = (char *)realloc (dest, size);
++              if (!tmp)
++                break;
++              dest = tmp;
++              tgt = bit_utf8_to_TV (dest, (unsigned char *)pair->value.s.ptr,
++                                    size, len, 0, dat->codepage);
++            }
++          if (tgt)
++            {
++              free (pair->value.s.ptr);
++              pair->value.s.ptr = tgt;
++            }
++          else
++            free (dest);
++        }
+       break;
+     case DWG_VT_BOOL:
+       pair->value.i = dxf_read_rc (dat);
+
+diff --git a/src/common_entity_data.spec b/src/common_entity_data.spec
+index f8518b07..2b128764 100644
+--- a/src/common_entity_data.spec
++++ b/src/common_entity_data.spec
+@@ -374,10 +374,17 @@
+ 
+   VERSIONS (R_13b1, R_14) //ODA bug
+     {
++#ifdef IS_ENCODER
++      // must be derived BEFORE the bit is written; the old fixup in
++      // common_entity_handle_data.spec ran after emission, so every
++      // ByLayer entity went out with isbylayerlt 0 and readers expected
++      // an explicit ltype handle that is not there
++      FIELD_VALUE (isbylayerlt) = FIELD_VALUE (ltype_flags) == 0 ? 1 : 0;
++#endif
+       FIELD_B (isbylayerlt, 0);
+ #ifdef IS_DECODER
+-      if (FIELD_VALUE (isbylayerlt))
+-        FIELD_VALUE (ltype_flags) = FIELD_VALUE (isbylayerlt) ? 0 : 3;
++      // the ": 3" arm was dead code under "if (isbylayerlt)"
++      FIELD_VALUE (ltype_flags) = FIELD_VALUE (isbylayerlt) ? 0 : 3;
+ #endif
+     }
+   SINCE (R_2004a) //ODA bug
+diff --git a/src/common_entity_handle_data.spec b/src/common_entity_handle_data.spec
+index a0dffb7a..7fc01c07 100644
+--- a/src/common_entity_handle_data.spec
++++ b/src/common_entity_handle_data.spec
+@@ -64,10 +64,6 @@
+   VERSIONS (R_13b1, R_14)
+     {
+       FIELD_HANDLE (layer, 5, 8);
+-#ifdef IS_ENCODER
+-      if (dat->from_version == R_2000)
+-        FIELD_VALUE (isbylayerlt) = FIELD_VALUE (ltype_flags) < 3 ? 1 : 0;
+-#endif
+ #ifdef IS_DXF
+       PRE (R_2000) {
+         switch (FIELD_VALUE (ltype_flags)) {
+@@ -84,9 +80,31 @@
+         default: break;
+         }
+       }
++#endif
++#ifdef IS_ENCODER
++      // r13/r14 has no ByBlock/Continuous ltype flags: those entities
++      // reference the LTYPE record by handle. Sources that used the
++      // r2000+ flags carry no handle, so materialize it here.
++      if (!FIELD_VALUE (isbylayerlt)
++          && (!FIELD_VALUE (ltype) || !FIELD_VALUE (ltype)->absolute_ref)
++          && FIELD_VALUE (ltype_flags) >= 1 && FIELD_VALUE (ltype_flags) <= 2)
++        {
++          BITCODE_H _lth = dwg_find_tablehandle (
++              obj->parent,
++              FIELD_VALUE (ltype_flags) == 1 ? (char *)"BYBLOCK"
++                                             : (char *)"CONTINUOUS",
++              "LTYPE");
++          if (_lth && _lth->absolute_ref)
++            FIELD_VALUE (ltype) = dwg_add_handleref (obj->parent, 5,
++                                                     _lth->absolute_ref, NULL);
++        }
+ #endif
+       if (!FIELD_VALUE (isbylayerlt))
+         FIELD_HANDLE (ltype, 5, 6);
++#ifdef IS_DXF
++      // group 48 exists since R13; it was only emitted under R_2000b below
++      FIELD_BD1 (ltype_scale, 48);
++#endif
+     }
+ 
+   VERSIONS (R_13b1, R_2000)
+
+diff --git a/src/encode.c b/src/encode.c
+index ef6e0907..d5abfe12 100644
+--- a/src/encode.c
++++ b/src/encode.c
+@@ -3146,8 +3146,9 @@ dwg_encode (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
+               {
+                 const char *bname
+                     = owner_obj->tio.object->tio.BLOCK_HEADER->name;
+-                if (bname && strcmp (bname, "*MODEL_SPACE") != 0
+-                    && strcmp (bname, "*PAPER_SPACE") != 0)
++                // r13+ sources spell them *Model_Space/*Paper_Space
++                if (bname && strcasecmp (bname, "*MODEL_SPACE") != 0
++                    && strcasecmp (bname, "*PAPER_SPACE") != 0)
+                   {
+                     ent->tio.entity->entmode = 3;
+                   }
+@@ -3168,20 +3169,12 @@ dwg_encode (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
+     addr = dwg->header.entities_end + (dat->version >= R_11 ? 0x20 : 0);
+     encode_check_num_sections ((Dwg_Section_Type_r11)dwg->header.num_sections,
+                                dwg);
+-    if (dwg->header.from_version >= R_13b1)
+-      {
+-        /* r2000 has e.g.
+-         * section 0: header vars
+-         *         1: class section
+-         *         2: object map
+-         *         3: optional: ObjFreeSpace
+-         *            optional: SecondHeader
+-         *         4: and Template
+-         *         5: optional: AuxHeader (no sentinels, since R13c3)
+-         */
+-        LOG_ERROR ("FIXME convert sections from CONTROL objects to tables");
+-      }
+-    if (dwg->header.from_version < R_13b1 && dwg->header.section)
++    /* For r13+ sources the section tables were already converted from the
++       CONTROL objects by ENCODE_CTRL_TO_TABLE while writing them, so their
++       addresses must be patched the same way: gating this on the source
++       version left every 0xDEADBEAF placeholder in the file, and no reader
++       (not even our own) could load the result. */
++    if (dwg->header.section)
+       {
+         Dwg_Section_Type_r11 max_id
+             = dwg->header.num_sections <= SECTION_VX
+
+diff --git a/src/dwg.c b/src/dwg.c
+index b7e2eb9c..038aca7f 100644
+--- a/src/dwg.c
++++ b/src/dwg.c
+@@ -3450,15 +3450,15 @@ dwg_next_handle (const Dwg_Data *dwg)
+ {
+   long j;
+   BITCODE_RLL seed = 0;
+-  // check the objects for the highest handle
+-  for (j = dwg->num_objects; !seed && j > 0; j--)
+-    {
+-      Dwg_Object *o = j > 0 ? &dwg->object[j - 1] : NULL;
+-      if (o && o->handle.value)
+-        {
+-          seed = o->handle.value;
+-          break;
+-        }
++  // check the objects for the highest handle. All of them: during a DXF
++  // import the objects are not in handle order (pre-created table objects
++  // carry high handles before the file's own low handles arrive), and
++  // taking the last nonzero handle hands out handles already in use.
++  for (j = 0; j < (long)dwg->num_objects; j++)
++    {
++      Dwg_Object *o = &dwg->object[j];
++      if (o->handle.value > seed)
++        seed = o->handle.value;
+     }
+   // compare against relative handles (deleted and purged?)
+   LOG_INSANE ("compute HANDSEED " FORMAT_HV, seed);
+
+diff --git a/src/in_dxf.c b/src/in_dxf.c
+index 525f2240..1e83f8bd 100644
+--- a/src/in_dxf.c
++++ b/src/in_dxf.c
+@@ -13685,6 +13685,22 @@ static __nonnull ((1, 2, 3, 4)) Dxf_Pair *new_object (
+       o->has_no_flags = 1;
+       LOG_TRACE ("_3DFACE.has_no_flags = 1 [B]\n");
+     }
++  else if (obj->fixedtype == DWG_TYPE_MINSERT)
++    {
++      // the 70/71 groups are omitted when the count is 1; without this a
++      // single-column MINSERT came back as num_cols 0
++      Dwg_Entity_MINSERT *o = obj->tio.entity->tio.MINSERT;
++      if (!o->num_cols)
++        {
++          o->num_cols = 1;
++          LOG_TRACE ("MINSERT.num_cols = 1 (default) [BS 70]\n");
++        }
++      if (!o->num_rows)
++        {
++          o->num_rows = 1;
++          LOG_TRACE ("MINSERT.num_rows = 1 (default) [BS 71]\n");
++        }
++    }
+   else if (is_textlike (obj))
+     postprocess_TEXTlike (obj);
+ 
+
+diff --git a/src/out_dxf.c b/src/out_dxf.c
+index 91a33fdd..9c1435e1 100644
+--- a/src/out_dxf.c
++++ b/src/out_dxf.c
+@@ -2792,6 +2792,60 @@ dxf_3dsolid (Bit_Chain *restrict dat, const Dwg_Object *restrict obj,
+ 
+ /* returns 0 on success
+  */
++/* An entity of a class we cannot parse still carries its common entity
++   data and, usually, its proxy graphics blob. Emit it as ACAD_PROXY_ENTITY
++   with that blob — as ODA-based converters do — so conformant viewers draw
++   the graphics instead of silently losing the entity. The class data bits
++   are passed through in DWG form (group 93/310), like our PROXY_ENTITY
++   writer does. */
++static int
++dwg_dxf_UNKNOWN_ENT_as_proxy (Bit_Chain *restrict dat,
++                              const Dwg_Object *restrict obj)
++{
++  int error = 0;
++  const Dwg_Data *dwg = obj->parent;
++  const Dwg_Object_Entity *_ent = obj->tio.entity;
++  RECORD (ACAD_PROXY_ENTITY);
++  if (dat->version > R_11 || dwg->header_vars.HANDLING)
++    {
++      if (!obj->handle.value)
++        dxf_fixup_zero_handle (obj);
++      fprintf (dat->fh, "%3i\r\n" FMT_H "\r\n", 5, obj->handle.value);
++    }
++  error |= dxf_common_entity_handle_data (dat, (Dwg_Object *)obj);
++  VALUE_TFF ("AcDbProxyEntity", 100);
++  VALUE_BL (498, 90); // proxy entity class id
++  VALUE_BL (obj->type, 91); // application entity's class id
++  {
++    BITCODE_BL version = ((BITCODE_BL)dwg->header.maint_version << 8)
++                         | dwg->header.dwg_version;
++    fprintf (dat->fh, " 95\r\n%u\r\n", (unsigned)version);
++  }
++  if (dat->version >= R_2000)
++    fprintf (dat->fh, " 70\r\n0\r\n"); // original data format: dwg
++  // The graphics blob goes in the proxy-data group (92 size + 310 hex);
++  // our own in_dxf reads it back via add_ent_preview, so the DXF still
++  // round-trips through dxf2dwg. Viewers (ezdxf, ODA) draw it.
++  if (_ent->preview_is_proxy && _ent->preview_size && _ent->preview)
++    {
++      VALUE_BL ((BITCODE_BL)_ent->preview_size, 92);
++      VALUE_BINARY (_ent->preview, (size_t)_ent->preview_size, 310);
++    }
++  else
++    {
++      VALUE_BL (0, 92);
++    }
++  /* The class data bits (group 93 + its 310 stream) are NOT emitted: a
++     conformant data section also carries the object-id reference lists
++     split out of the data, which we cannot reconstruct without parsing
++     the class, and readers can do nothing with the data anyway without
++     the object enabler. data_numbits 0 keeps the record well-formed. */
++  VALUE_BL (0, 93);
++  VALUE_BL (0, 94); // end of objids
++  error |= dxf_write_eed (dat, obj->tio.object);
++  return error;
++}
++
+ static int
+ dwg_dxf_variable_type (const Dwg_Data *restrict dwg, Bit_Chain *restrict dat,
+                        Dwg_Object *restrict obj)
+@@ -2803,8 +2857,10 @@ dwg_dxf_variable_type (const Dwg_Data *restrict dwg, Bit_Chain *restrict dat,
+   i = obj->type - 500;
+   if (i < 0 || i >= dwg->num_classes)
+     return DWG_ERR_INVALIDTYPE;
+-  if (obj->fixedtype == DWG_TYPE_UNKNOWN_ENT
+-      || obj->fixedtype == DWG_TYPE_UNKNOWN_OBJ)
++  if (obj->fixedtype == DWG_TYPE_UNKNOWN_ENT)
++    // preserve it as a proxy instead of dropping the entity
++    return dwg_dxf_UNKNOWN_ENT_as_proxy (dat, obj);
++  if (obj->fixedtype == DWG_TYPE_UNKNOWN_OBJ)
+     return DWG_ERR_UNHANDLEDCLASS;
+ 
+   klass = &dwg->dwg_class[i];
+
+diff --git a/src/out_dxf.c b/src/out_dxf.c
+index 91a33fdd..c20d4154 100644
+--- a/src/out_dxf.c
++++ b/src/out_dxf.c
+@@ -1609,10 +1609,15 @@ dxf_write_eed (Bit_Chain *restrict dat, const Dwg_Object_Object *restrict obj)
+               VALUE_RD (data->u.eed_40.real, dxf);
+               break;
+             case 70:
+-              VALUE_RS (data->u.eed_70.rs, dxf);
++              /* 1070 is a signed int16, and dxf_format() already says so
++                 ("%6i"). The field is unsigned, so without the cast every
++                 negative is zero-extended and printed as its unsigned
++                 complement: -6700 comes out as 58836. */
++              VALUE_RSd ((int16_t)data->u.eed_70.rs, dxf);
+               break;
+             case 71:
+-              VALUE_RL (data->u.eed_71.rl, dxf);
++              /* likewise 1071, a signed int32 */
++              VALUE_RLd ((int32_t)data->u.eed_71.rl, dxf);
+               break;
+             default:
+               VALUE_RC (0, dxf);
+@@ -3337,7 +3342,10 @@ dxf_format (int code)
+   if (1060 <= code && code <= 1070)
+     return "%6i";
+   if (code == 1071)
+-    return "%9li";  // int32_t
++    /* "%i", not "%li": every caller hands this a 32-bit value (the EED
++       field and resbuf's i32), so "%li" read 64 bits of vararg for a
++       32-bit argument. */
++    return "%9i";
+   if (code == 1002) // string => RC
+     return "%6i";
+   if (code == 1003) // RL layer
+diff --git a/src/out_json.c b/src/out_json.c
+index 1ef75a1c..cc1a329f 100644
+--- a/src/out_json.c
++++ b/src/out_json.c
+@@ -1130,10 +1130,10 @@ json_eed (Bit_Chain *restrict dat, const Dwg_Object_Object *restrict obj)
+               VALUE_RD (data->u.eed_40.real, 0);
+               break;
+             case 70:
+-              VALUE_RS (data->u.eed_70.rs, 0);
++              VALUE_RSd ((int16_t)data->u.eed_70.rs, 0);
+               break;
+             case 71:
+-              VALUE_RL (data->u.eed_71.rl, 0);
++              VALUE_RLd ((int32_t)data->u.eed_71.rl, 0);
+               break;
+             default:
+               VALUE_RC (0, 0);

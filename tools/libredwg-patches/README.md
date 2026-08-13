@@ -3,7 +3,47 @@
 IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 (`vendor/libredwg/bin`, gitignored).
 
-## Current state — 2026-08-10: base 0.14.8578 + SEVENTEEN patches
+## Current state — 2026-08-13: base 0.14.8580 + seventeen patches, taken FROM THE PRs
+
+Re-vendorized onto release **0.14.8580** (`current/ingecad-vendor-0.14.8580.patch`,
+built by `build-vendor.sh`). The seventeen are exactly the seventeen pull requests
+still open upstream: #1358, #1359, #1360, #1364, #1365, #1368, #1369, #1371, #1372,
+#1373, #1375, #1378, #1381, #1382, #1385, #1387 and the new #1392.
+
+⚠️ **The rule this re-vendorization exists to enforce: every hunk comes from the
+pull request's own head** (`git fetch origin pull/N/head`), never from a local
+branch. The previous vendor carried a **stale draft of #1375** — an early attempt
+that converted inside `dwg_add_u8_input` with no source-version guard — and it
+corrupted MTEXT in every pre-r2007 drawing. It was mistaken for an upstream bug and
+reported as issue #1393 before the comparison against stock caught it. A local
+branch is a workbench; the PR is what exists upstream.
+
+**What changed for the user.** Accents now survive a save in every place a string
+can live. The same drawing carrying `CAÑERÍA Ø m² Nº45°`, through
+`dxf2dwg --as r2000` and back, byte-checked:
+
+| place | old vendor (R2018 source) | new |
+|---|---|---|
+| layer / text style / block name | `DESAGÃœE` | correct |
+| TEXT, ATTRIB, dimension text | `CAÃ‘ERÃA` | correct |
+| XDATA string | `CAÃ‘ERÃA` | correct |
+| MTEXT (pre-r2007 source) | `CAхŔ ؠm N` | correct |
+
+All sixteen cells of that matrix (eight places × two source versions) are correct
+now; the old vendor had seven of them wrong.
+
+**New in this stack: #1392** — EED groups 1070/1071 were emitted unsigned, so every
+negative value in the data other applications attach to entities came back as its
+unsigned complement (`-6700` as `58836`). 2595 corrupted values across 200 real
+drawings, in 146 of them.
+
+**Verified:** upstream `make check` 254/254; the combined patch reproduces the built
+tree source-for-source from a pristine tarball; `main.py --check` OK; 682 IngeCAD
+tests green; accents round-trip end to end through `Document.save_as`.
+
+⚠️ **r2004 as a save target stays OFF** — unchanged, see the note below.
+
+## Previous state — 2026-08-10: base 0.14.8578 + SEVENTEEN patches
 
 Re-vendorized onto release **0.14.8578** (`current/ingecad-vendor-0.14.8578.patch`,
 built by `build-vendor.sh`). Upstream absorbed **10 of our fixes** between 0.14.8556

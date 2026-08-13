@@ -24,10 +24,12 @@ def test_escaping_survives_beyond_the_basic_plane():
     assert decode_escapes(escape_non_ascii("plano 𝜋 fin")) == "plano 𝜋 fin"
 
 
-def test_the_intermediate_dxf_escapes_mtext_and_restores_the_document(tmp_path):
+def test_the_intermediate_dxf_is_r2000_and_restores_the_document(tmp_path):
+    """Pre-R13 input makes dxf2dwg return an empty DWG (LibreDWG #1386), so
+    the intermediate always goes out as R2000 — and the caller's drawing must
+    not notice that its version was borrowed for the write."""
     doc = Document.new()
     msp = doc.modelspace()
-    text = msp.add_text(ACC, dxfattribs={"height": 2})
     mtext = msp.add_mtext(ACC, dxfattribs={"char_height": 2, "insert": (0, 5)})
     blk = doc.doc.blocks.new("BÑ")
     inner = blk.add_mtext(ACC, dxfattribs={"char_height": 1})
@@ -36,14 +38,13 @@ def test_the_intermediate_dxf_escapes_mtext_and_restores_the_document(tmp_path):
     out = tmp_path / "inter.dxf"
     write_dwg_intermediate(doc.doc, out)
 
-    # the file went out as the version the DWG will have
     body = out.read_text(encoding="cp1252", errors="replace")
     assert INTERMEDIATE_DXF_VERSION in body
-    assert "\\U+00D1" in body                      # the Ñ, escaped
-    # TEXT is left as characters: it round-trips correctly that way
-    assert "\\U+00D1ER" not in text.dxf.text
+    # the text goes out as the user typed it: LibreDWG PR #1375 carries the
+    # accents through now, so nothing is escaped on our side any more
+    assert "\\U+00D1" not in body
+    assert "CAÑERÍA" in out.read_text(encoding="cp1252", errors="replace")
 
-    # and the caller's document is exactly as it was
     assert doc.doc.dxfversion == version_before
     assert mtext.text == ACC and inner.text == ACC
 

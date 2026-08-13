@@ -570,6 +570,37 @@ conviene no re-descubrir:
 - **El sitio solo afirma lo que la app hace hoy**, y la sección «Status» del `README.md` es la
   fuente de verdad del copy. Hay un FAQ que dice explícitamente que la topografía es v0.2.
 
+## 🗓 Sesión 2026-08-13 (bis) — re-vendorización a 0.14.8580 + 17 PRs
+
+⚠️ **La regla que esta re-vendorización instaura: cada parche se toma del HEAD DEL PR**
+(`git fetch origin pull/N/head`), nunca de una rama local. El vendor anterior llevaba un
+**borrador viejo de #1375** —el que convertía dentro de `dwg_add_u8_input` sin guarda de
+versión de origen— y corrompía el MTEXT de todo dibujo pre-r2007. Lo reporté como bug ajeno
+(issue #1393) antes de que la comparación contra stock lo delatara. Una rama local es un
+banco de trabajo; el PR es lo que existe upstream.
+
+**Base 0.14.8580** (release del 2026-08-12, que ya absorbió nuestros 9 fusionados) **+ los
+17 PRs abiertos**: #1358, #1359, #1360, #1364, #1365, #1368, #1369, #1371, #1372, #1373,
+#1375, #1378, #1381, #1382, #1385, #1387, #1392. Los 17 aplican limpios.
+
+**Medido:**
+- matriz de acentos **16/16 correctas** (8 lugares × 2 versiones de origen); el vendor viejo
+  tenía 7 mal.
+- fuzz del camino de escritura, mismas 400 semillas: **OK 15 → 242**, DIFF 231 → 9. El
+  residuo es exactamente lo documentado — destino r2004 (LOST 66, el bug cross-modelo) y
+  destino r12 (EMPTY 33, hueco pre-R13 #1386); 47 de los 48 RELOAD_FAIL son de origen R12.
+  **Para r2000, el destino que IngeCAD usa: 206 OK y cero diferencias de contenido.**
+- `make check` 254/254, 682 tests de IngeCAD, `main.py --check` OK.
+- el parche combinado reproduce el árbol compilado fuente por fuente desde un tarball
+  limpio (así lo hará el CI).
+
+**`core/encoding.py` se simplificó, no se borró.** El escapado `\U+xxxx` del MTEXT ya no
+hace falta (PR #1375 bueno carga los acentos), así que el archivo guarda el texto tal como
+lo escribió el usuario. Lo que **sí sigue haciendo falta** es el intermedio en R2000:
+medido, cuatro planos R12 del banco se guardan con **0 entidades** si se les pasa su propio
+DXF y completos si se les pasa R2000. La decodificación de escapes al leer también queda —
+AutoCAD escribe `\U+xxxx` por su cuenta y ezdxf no lo interpreta.
+
 ## 🗓 Sesión 2026-08-13 — v0.3.2 (los acentos, y por qué existe `core/encoding.py`)
 
 **`core/encoding.py` no es una decisión de diseño: es un vendaje sobre un bug ajeno**
