@@ -1,5 +1,74 @@
 # Changelog
 
+## v0.3.1 — 2026-08-12
+
+A second dogfooding day against BricsCAD V26, on a real plan (`casa bueno`).
+This one is mostly **bugs Marco hit while drawing** — the kind only real use
+finds — plus the quick wins from the strategic review of BricsCAD's menus.
+
+### Added
+- **The Standard toolbar** (New/Open/Save/Plot/Undo/Redo/Cut/Copy/Paste/
+  Zoom/Pan), sharing one row with Modify. **Clean Screen (Ctrl+0)** clears
+  every panel and toolbar but the command window, like AutoCAD's.
+- **Raster images**: `IMAGEATTACH` (PNG/JPEG/BMP/GIF/TIFF, referenced like
+  AutoCAD — the file is linked, not embedded), corner grips that resize
+  about the opposite corner, `IMAGEADJUST` (brightness/contrast/fade) and
+  `TRANSPARENCY` with a degree from 0 to 90 %, in the Properties panel too.
+- **`PDFATTACH`**: a PDF page rasterized at 150 DPI and placed as an image —
+  the tracing workflow, without leaving the drawing.
+- **`TABLE`**: a grid of lines and centred texts (plain geometry, so it
+  round-trips everywhere and edits with the normal commands). It is the
+  groundwork for the coordinate chart of the coming topography plugin.
+- **`SPLINE`**: fit points with live preview, Close and Undo, and its icon
+  in the Draw toolbar.
+- **Grips on every selectable type**: SPLINE (fit or control points),
+  ELLIPSE (centre + four axis ends), IMAGE, TEXT, MTEXT, INSERT, XLINE/RAY,
+  SOLID, HATCH — and **DIMENSION grips like AutoCAD's**: drag an extension
+  origin to re-measure, the dimension line to relocate, the text grip to
+  move the label. Dragging a dimension grip near another dimension snaps to
+  its line, with BricsCAD's green alignment square.
+- **`DRAWORDER`** (send to back / bring to front, written as AutoCAD's
+  SORTENTSTABLE) and the layer tools **`LAYISO` / `LAYOFF` / `LAYON` /
+  `LAYUNISO`**.
+- **The Select Color palette** (the full 255-index ACI grid) wherever a
+  colour is chosen, and **ByBlock** beside ByLayer in the colour dropdown.
+- **Closing with unsaved changes asks** — Save / Discard / Cancel.
+- **The Layer control reflects the selection**: select an object and the
+  Properties bar shows its layer; a mixed selection shows blank. And
+  choosing a layer there now **resets the colour to ByLayer** in the same
+  gesture, so a file that arrives with `$CECOLOR` = ByBlock (they do)
+  stops ignoring layer colours.
+
+### Fixed — the dogfooding harvest
+- **Entities on heavyweight layers vanished for seconds after being drawn
+  or moved.** The incremental display's overlay skipped the thick-quad
+  batch entirely, so anything above 0.25 mm (`casa bueno` has five such
+  layers, columns at 0.8 mm) was invisible until the deferred regen folded
+  it in. Overlay, drag ghost and stamped moves now all carry it.
+- **`baño` drew as `bano`**: the tessellator treated every ring but the
+  largest as a hole, so the tilde — a detached glyph part — was punched
+  out. Ring nesting is even-odd now, per draw call, which also fixed
+  layout text drawing with filled counters (the `o` solid inside).
+- **`DIMLINEAR` / `DIMALIGNED` collapsed to a 0 measurement on vertical
+  edges**, and dimension text was invisible in drawings in metres or
+  centimetres (the renderer read the scale from the style, not the header).
+- **Grip edits on a colleague's dimension changed its look**: the line
+  turned white, the label flipped from aligned to horizontal, or landed on
+  the wrong side of the line. All three preserved now.
+- **`MATCHPROP` matched dimensions, text height, and colour properly**: it
+  now copies the *effective* height and colour (AutoCAD's inline `\H` and
+  `\C` codes, not the attribute residue), and copies "ByLayer" itself
+  rather than skipping absent properties.
+- **`REVCLOUD` arcs bulged inward** — a saw blade, not a cloud.
+- **An attached image never appeared** until some later regen, and
+  **inserted PDF pages came out black** (the render leaves no-ink pixels
+  transparent; they are composited over white now).
+- **Entities created in the session lagged ~4 s** when grip-moved or
+  restyled, **pan stuck to the cursor** after releasing over the MTEXT
+  editor, and **pan inside a floating viewport trailed a regen behind**.
+- A malformed entity that failed mid-render used to make every entity
+  drawn after it un-hideable (an unbalanced owner stack in the renderer).
+
 ## v0.3.0 — 2026-08-11
 
 A day of dogfooding against AutoCAD and BricsCAD V26, command by command:

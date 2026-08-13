@@ -31,7 +31,7 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature AutoCAD clone.
 
-## Status — v0.2
+## Status — v0.3
 
 What works today:
 
@@ -79,6 +79,14 @@ What works today:
   everything.
 - **Output**: print / export PDF and PNG to exact scale, from model or
   layout.
+- **Raster images and PDF underlays**: attach PNG/JPEG/BMP/GIF/TIFF or a
+  PDF page (rasterized) to trace over, with corner grips, brightness /
+  contrast / fade and a transparency degree.
+- **Tables** (plain-geometry grids), **splines**, **revision clouds**,
+  **DRAWORDER** and the layer tools (LAYISO/LAYOFF/LAYON/LAYUNISO).
+- **Grips on every selectable type**, dimensions included: drag an
+  extension origin to re-measure, the line to relocate, the text to move
+  the label — with alignment snapping to neighbouring dimensions.
 
 Planned next (v0.4): survey-point import with elevations, coordinate
 tables, elevation profiles. See `CLAUDE.md` for the roadmap.
