@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.3.2 — 2026-08-13
+
+A bug-fix release with one headline: **accents survive "Save as DWG"**.
+
+### Fixed
+- **Non-ASCII text was mangled on every save to DWG.** Measured on a drawing
+  carrying `CAÑERÍA Ø m² Nº45°` in every place a string can live: layer,
+  text-style and block **names**, `TEXT`, `ATTRIB`, dimension text and XDATA
+  all came back corrupted (`CAÑERÍA` as `CAÃ‘ERÃA`, the layer `DESAGÜE` as
+  `DESAGÃœE`); only `MTEXT` survived. Every Spanish, Portuguese or French
+  drawing was affected, which made this a hole in the promise the whole
+  project is built on — that a colleague's plan comes back sound.
+
+  The cause is in GNU LibreDWG, reported upstream as
+  [issue #1393](https://github.com/LibreDWG/libredwg/issues/1393) with
+  byte-level evidence against ODA File Converter, which handles it correctly.
+  IngeCAD now works around it on both sides: the intermediate DXF handed to
+  the converter goes out as R2000 — the version the DWG will have anyway, so
+  the downgrade cannot cost anything an r2000 DWG could carry — and `MTEXT`
+  is pre-escaped to `\U+xxxx`, AutoCAD's own notation for a character the
+  codepage cannot hold, which is pure ASCII and leaves nothing to
+  mistranslate. Opening a DWG decodes those escapes again, so drawings that
+  AutoCAD itself wrote that way now show the character instead of the raw
+  code.
+- **Old drawings saved as an empty DWG.** Four R12 files in the test bench
+  produced a DWG with no entities at all; they now come back complete. Same
+  change, LibreDWG's pre-R13 writer gap
+  ([#1386](https://github.com/LibreDWG/libredwg/issues/1386)) sidestepped.
+- **Saving could crash outright** when the converter printed a warning naming
+  an accented layer: its log was being decoded as strict UTF-8 when it is
+  written in the drawing's own codepage.
+
+### Upstream (GNU LibreDWG)
+- **XDATA negative values were corrupted.** Every negative value in groups
+  1070/1071 — the data other applications attach to entities — came back as
+  its unsigned complement (`-6700` as `58836`). Measured across 200 real
+  drawings: **2595 corrupted values in 146 of them**. Patch sent as
+  [PR #1392](https://github.com/LibreDWG/libredwg/pull/1392); it also fixes a
+  format string that read 64 bits of argument for every 32-bit caller.
+  Found by widening `tools/dwg_fuzz.py` to carry XDATA, lineweights and
+  tilted extrusions.
+- Of the 17 patches sent since v0.3.0, **9 are now merged upstream**.
+
 ## v0.3.1 — 2026-08-12
 
 A second dogfooding day against BricsCAD V26, on a real plan (`casa bueno`).
