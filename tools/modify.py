@@ -812,6 +812,188 @@ class ImageTransparencyTool(Tool):
                              & Image.USE_TRANSPARENCY) == 0)
 
 
+class _IsolationTool(Tool):
+    """Shared body of ISOLATEOBJECTS and HIDEOBJECTS.
+
+    Both take a selection and both are display-only, so neither touches the
+    undo stack: UNISOLATEOBJECTS is how AutoCAD undoes them.
+    """
+
+    wants_selection = True
+    isolate = False          # True: keep these, hide the rest
+
+    def start(self) -> None:
+        self.name = "ISOLATEOBJECTS" if self.isolate else "HIDEOBJECTS"
+
+    def selection_prompt(self) -> str:
+        return tr("Select objects:")
+
+    def on_selection(self, entities: list) -> None:
+        if not entities:
+            self.ctx.finish()
+            return
+        from core import isolate as isolation
+
+        window = self.ctx.services.window
+        document = window.document
+        if self.isolate:
+            isolation.isolate_objects(document, entities)
+            self.ctx.echo(tr("{count} object(s) isolated.",
+                             count=len(entities)))
+        else:
+            isolation.hide_objects(document, entities)
+            self.ctx.echo(tr("{count} object(s) hidden.", count=len(entities)))
+        window.after_isolation_change()
+        self.ctx.finish()
+
+
+class IsolateObjectsTool(_IsolationTool):
+    """ISOLATEOBJECTS (p. 956): show these, hide everything else."""
+
+    isolate = True
+
+
+class HideObjectsTool(_IsolationTool):
+    """HIDEOBJECTS (p. 912): hide these, leave everything else visible."""
+
+    isolate = False
+
+
+class SelectSimilarTool(Tool):
+    """SELECTSIMILAR (p. 1726): add every object of the same type and
+    matching properties to the selection.
+
+    Its one documented option is SEttings, which opens the Select Similar
+    Settings dialog — so that is the only option the prompt offers.
+    """
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "SELECTSIMILAR"
+        self._entities: list = []
+
+    def selection_prompt(self) -> str:
+        return tr("Select objects or [SEttings]:")
+
+    def on_selection(self, entities: list) -> None:
+        if not entities:
+            self.ctx.finish()
+            return
+        self._entities = entities
+        self._apply()
+
+    def _apply(self) -> None:
+        from core import similar
+        from views.similar_dialog import saved_keys
+
+        services = self.ctx.services
+        document = services.window.document
+        found = similar.find_similar(document, self._entities, saved_keys())
+        # finish() clears the selection (a command that ends drops its
+        # highlight), so the result is set after it — this command's whole
+        # output IS a selection.
+        self.ctx.finish()
+        services.selection = {e.dxf.handle for e in found}
+        services.changed.emit()
+        self.ctx.echo(tr("{count} object(s) selected.", count=len(found)))
+
+    def on_option(self, text: str) -> bool:
+        word = text.strip().upper()
+        if word in ("SE", "SETTINGS"):
+            from views.similar_dialog import (SelectSimilarSettingsDialog,
+                                              save_keys)
+
+            window = self.ctx.services.window
+            dialog = SelectSimilarSettingsDialog(window)
+            if dialog.exec():
+                save_keys(dialog.keys())
+            if self._entities:
+                self._apply()
+            return True
+        return False
+
+
+#: What command draws each kind of object, for ADDSELECTED.
+_ADDSELECTED_COMMANDS = {
+    "LINE": "LINE", "CIRCLE": "CIRCLE", "ARC": "ARC",
+    "LWPOLYLINE": "PLINE", "POLYLINE": "PLINE", "ELLIPSE": "ELLIPSE",
+    "POINT": "POINT", "TEXT": "TEXT", "MTEXT": "MTEXT", "HATCH": "HATCH",
+    "INSERT": "INSERT", "XLINE": "XLINE", "RAY": "RAY", "SPLINE": "SPLINE",
+    "IMAGE": "IMAGEATTACH", "DIMENSION": "DIMLINEAR", "LEADER": "LEADER",
+}
+
+
+class AddSelectedTool(Tool):
+    """ADDSELECTED (p. 103): "creates a new object based on the object type
+    and general properties of a selected object".
+
+    The reference is precise about the difference from COPY: it duplicates
+    only the *general* properties — colour, layer, linetype, lineweight —
+    and then prompts for the new object's own geometry. Text, MText and
+    Attribute Definition additionally carry their text style and height,
+    which the manual lists as their special properties.
+    """
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "ADDSELECTED"
+        services = self.ctx.services
+        picked = services._selection_entities() if services else []
+        if len(picked) == 1:
+            self._use(picked[0])
+            return
+        self.ctx.prompt(tr("Select object:"))
+
+    def on_point(self, point) -> None:
+        services = self.ctx.services
+        entity = services.pick_entity(point) if services else None
+        if entity is not None:
+            self._use(entity)
+
+    def _use(self, entity) -> None:
+        from core import layers as layer_ops
+
+        command = _ADDSELECTED_COMMANDS.get(entity.dxftype())
+        if command is None:
+            self.ctx.echo(tr("No command creates a {kind}.",
+                             kind=entity.dxftype()))
+            self.ctx.finish()
+            return
+        window = self.ctx.services.window
+        document = window.document
+        # The general properties become the current ones, so whatever the
+        # command draws next inherits them — which is exactly what AutoCAD
+        # means by "adopts the general properties of the circle".
+        layer = entity.dxf.get("layer", None)
+        if layer and layer in document.doc.layers:
+            document.doc.header["$CLAYER"] = layer
+        for prop, attr in (("color", "color"), ("linetype", "linetype"),
+                           ("lineweight", "lineweight")):
+            value = entity.dxf.get(attr, None)
+            if value is not None:
+                layer_ops.set_current_property(document, prop, value)
+        # Text, MText and Attribute Definition also carry style and height
+        # (the reference's table of special properties).
+        if entity.dxftype() in ("TEXT", "MTEXT", "ATTDEF"):
+            style = entity.dxf.get("style", None)
+            if style:
+                document.doc.header["$TEXTSTYLE"] = style
+            height = entity.dxf.get("height", None) or entity.dxf.get(
+                "char_height", None)
+            if height:
+                document.doc.header["$TEXTSIZE"] = float(height)
+                # TEXT/MTEXT keep their own session-sticky default; set that
+                # too, or the height the reference promises would be ignored.
+                from tools.draw import TextTool
+
+                TextTool.default_height = float(height)
+        self.ctx.finish()
+        window._refresh_props_toolbar()
+        window._invoke_command(command)
+
+
 MODIFY_TOOL_CLASSES = {
     "STRETCH": StretchTool,
     "BREAK": BreakTool,
@@ -825,4 +1007,8 @@ MODIFY_TOOL_CLASSES = {
     "LAYOFF": LayOffTool,
     "IMAGEADJUST": ImageAdjustTool,
     "TRANSPARENCY": ImageTransparencyTool,
+    "ISOLATEOBJECTS": IsolateObjectsTool,
+    "HIDEOBJECTS": HideObjectsTool,
+    "SELECTSIMILAR": SelectSimilarTool,
+    "ADDSELECTED": AddSelectedTool,
 }

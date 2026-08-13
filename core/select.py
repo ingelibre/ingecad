@@ -401,10 +401,17 @@ class GeometryIndex:
         box_o: list = []
         pboxes: list = []
         pbox_o: list = []
+        # A hidden entity must not be pickable either: AutoCAD's isolation
+        # takes objects out of the view, not just out of the picture.
+        from core.isolate import hidden_handles
+
+        hidden = hidden_handles(self.document)
         for e in self.document.modelspace():
             try:
                 oid = self._intern(e.dxf.handle)
             except Exception:
+                continue
+            if hidden and e.dxf.handle in hidden:
                 continue
             self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
                           pboxes, pbox_o)

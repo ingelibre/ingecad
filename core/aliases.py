@@ -72,6 +72,11 @@ DEFAULT_ALIASES: dict[str, str] = {
     "AA": "AREA",
     "DR": "DRAWORDER",
     "OP": "OPTIONS",
+    "G": "GROUP",
+    "QC": "QUICKCALC",
+    "ISOLATE": "ISOLATEOBJECTS",
+    "UNISOLATE": "UNISOLATEOBJECTS",
+
     "IAT": "IMAGEATTACH",
     "SPL": "SPLINE",
     "TB": "TABLE",

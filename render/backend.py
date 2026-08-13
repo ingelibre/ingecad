@@ -391,7 +391,15 @@ class TolerantFrontend(Frontend):
         super().__init__(*args, **kwargs)
         self.skipped: list[str] = []
 
+    #: Handles hidden by ISOLATEOBJECTS/HIDEOBJECTS. Display only: the
+    #: entity stays in the document, it is simply not drawn.
+    hidden_handles: frozenset = frozenset()
+
     def draw_entity(self, entity, properties) -> None:
+        if self.hidden_handles:
+            handle = getattr(entity.dxf, "handle", None)
+            if handle and handle in self.hidden_handles:
+                return
         # ezdxf's draw_entity calls enter_entity BEFORE drawing and
         # exit_entity after; an exception mid-draw skips the exit (for the
         # entity and any open children). Unwind to this depth or the stale
@@ -447,9 +455,12 @@ def build_scene_for_entities(document: Document, entities, flatten: float) -> Sc
     and merges on the next real regen. ``flatten`` comes from the base scene
     build so curve quality matches.
     """
+    from core.isolate import hidden_handles
+
     backend = VertexBackend(flatten)
     context = TolerantRenderContext(document.doc)
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
+    frontend.hidden_handles = frozenset(hidden_handles(document))
     frontend.draw_entities(entities)
     return pack(backend.buckets, _declared_extents(document))
 
@@ -508,9 +519,12 @@ def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     flatten = _flatten_distance(layout)
     from core.draworder import order_groups
 
+    from core.isolate import hidden_handles
+
     backend = VertexBackend(flatten, order_groups(layout))
     context = TolerantRenderContext(document.doc)
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
+    frontend.hidden_handles = frozenset(hidden_handles(document))
     frontend.draw_layout(layout)
     if layout_name is not None:
         _draw_viewport_borders(layout, context, backend)

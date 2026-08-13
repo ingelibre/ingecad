@@ -290,14 +290,24 @@ class MainWindow(QMainWindow):
                             lambda: self._draworder("front"))
             order.addAction(tr("Send to Back"),
                             lambda: self._draworder("back"))
+            self._add_isolate_menu(menu)
             self._add_type_entries(menu, selection)
+            group = menu.addMenu(tr("Group"))
+            group.addAction(tr("Group..."), self._cmd_group)
+            menu.addAction(tr("Add Selected"),
+                           lambda: self._invoke_command("ADDSELECTED"))
+            menu.addAction(tr("Select Similar"),
+                           lambda: self._invoke_command("SELECTSIMILAR"))
             menu.addSeparator()
             menu.addAction(tr("Deselect All"), self.tools.clear_selection)
             menu.addSeparator()
+            menu.addAction(tr("Quick Select..."), self._cmd_qselect)
+            menu.addAction(tr("QuickCalc"), self._cmd_quickcalc)
             menu.addAction(tr("Properties"), self.toggle_properties_panel)
         else:
             menu.addAction(tr("Undo"), self._cmd_undo)
             menu.addAction(tr("Redo"), self._cmd_redo)
+            self._add_isolate_menu(menu)
             menu.addSeparator()
             menu.addAction(tr("Pan"), lambda: self._invoke_command("PAN"))
             zoom = menu.addMenu(tr("Zoom"))
@@ -305,11 +315,29 @@ class MainWindow(QMainWindow):
             zoom.addAction(tr("Window"), lambda: self.dispatcher.submit("ZOOM W"))
             zoom.addAction(tr("Previous"), self.viewport.zoom_previous)
             menu.addSeparator()
+            menu.addAction(tr("Quick Select..."), self._cmd_qselect)
+            menu.addAction(tr("QuickCalc"), self._cmd_quickcalc)
+            menu.addAction(tr("Find..."), self._cmd_find)
+            menu.addSeparator()
             menu.addAction(tr("Properties"), self.toggle_properties_panel)
             # "with no commands active and no objects selected" (p. 1314):
             # Options belongs to the Default mode menu only.
             menu.addAction(tr("Options..."), self._cmd_options)
         return menu
+
+    def _add_isolate_menu(self, menu) -> None:
+        """Isolate > Isolate Objects / Hide Objects / End Object Isolation —
+        the submenu all three commands name as their access method."""
+        from core import isolate as isolation
+
+        sub = menu.addMenu(tr("Isolate"))
+        sub.addAction(tr("Isolate Objects"),
+                      lambda: self._invoke_command("ISOLATEOBJECTS"))
+        sub.addAction(tr("Hide Objects"),
+                      lambda: self._invoke_command("HIDEOBJECTS"))
+        act = sub.addAction(tr("End Object Isolation"), self._cmd_unisolate)
+        act.setEnabled(self.document is not None
+                       and isolation.is_isolating(self.document))
 
     def _add_type_entries(self, menu, selection: list) -> None:
         """The entries the reference gives a single selected object of a kind:
@@ -335,6 +363,84 @@ class MainWindow(QMainWindow):
         elif kind == "DIMENSION":
             menu.addAction(tr("Dimension Style..."),
                            lambda: self.dispatcher.submit("DIMSTYLE"))
+
+    def after_isolation_change(self) -> None:
+        """ISOLATEOBJECTS/HIDEOBJECTS/UNISOLATEOBJECTS changed what is drawn.
+
+        Nothing in the document moved, so there is no undo entry and no dirty
+        flag — only the scene and the pick index have to be rebuilt.
+        """
+        self.tools.clear_selection()
+        self.tools._invalidate_geometry()
+        self.regen_in_memory()
+        self._update_mode_buttons()
+
+    def _cmd_unisolate(self, *args) -> None:
+        """UNISOLATEOBJECTS (p. 1999): show what isolation hid."""
+        from core import isolate as isolation
+
+        if self.document is None:
+            return
+        count = isolation.unisolate(self.document)
+        self.after_isolation_change()
+        self.command_line.echo(
+            tr("{count} object(s) shown again.", count=count) if count
+            else tr("Nothing was hidden."))
+
+    def zoom_to_entity(self, entity) -> None:
+        """Frame one object — FIND's "Zoom to Highlighted Result" (p. 811)."""
+        from ezdxf import bbox
+
+        try:
+            box = bbox.extents([entity], fast=True)
+        except Exception:
+            return
+        if not box.has_data:
+            return
+        pad = max(box.size.x, box.size.y, 1.0) * 0.6
+        self.viewport.view.zoom_extents(box.extmin.x - pad, box.extmin.y - pad,
+                                        box.extmax.x + pad, box.extmax.y + pad)
+        self.viewport.update()
+
+    def _cmd_find(self, *args) -> None:
+        """FIND (p. 808): find and replace text in the drawing."""
+        from views.find_dialog import FindReplaceDialog
+
+        if self.document is None:
+            return
+        FindReplaceDialog(self).exec()
+
+    def _cmd_group(self, *args) -> None:
+        """GROUP (p. 861): the Object Grouping dialog."""
+        from views.group_dialog import ObjectGroupingDialog
+
+        if self.document is None:
+            return
+        ObjectGroupingDialog(self).exec()
+
+    def _cmd_quickcalc(self, *args) -> None:
+        """QUICKCALC (p. 1589)."""
+        from views.quickcalc_dialog import QuickCalcDialog
+
+        QuickCalcDialog(self).exec()
+
+    def _cmd_qselect(self, *args) -> None:
+        """QSELECT (p. 1584): build a selection set from filter criteria."""
+        from views.qselect_dialog import QuickSelectDialog
+
+        if self.document is None:
+            return
+        current = self.tools._selection_entities()
+        dialog = QuickSelectDialog(self, self.document, current)
+        if not dialog.exec():
+            return
+        handles = {e.dxf.handle for e in dialog.result_entities()}
+        if dialog.append_to_selection():
+            handles |= set(self.tools.selection)
+        self.tools.selection = handles
+        self.tools.changed.emit()
+        self.command_line.echo(
+            tr("{count} object(s) selected.", count=len(handles)))
 
     def _cmd_options(self, *args) -> None:
         """OPTIONS: the program settings (p. 1314)."""
@@ -522,6 +628,10 @@ class MainWindow(QMainWindow):
         canvas_action(tr("Delete"), self._cmd_delete, QKeySequence.Delete,
                       icon="ERASE")
         edit_menu.addSeparator()
+        # "Menu: Edit > Find" (p. 808), with the platform's own key.
+        find = item(edit_menu, tr("Find..."), self._cmd_find)
+        find.setShortcut(QKeySequence.Find)
+        edit_menu.addSeparator()
         cmd_item(edit_menu, tr("Erase"), "ERASE")
         cmd_item(edit_menu, tr("Move"), "MOVE")
         cmd_item(edit_menu, tr("Copy"), "COPY")
@@ -670,6 +780,9 @@ class MainWindow(QMainWindow):
                              lambda: self._draworder("front"))
         order_menu.addAction(tr("Send to Back"),
                              lambda: self._draworder("back"))
+        item(tools_menu, tr("Quick Select..."), self._cmd_qselect)
+        item(tools_menu, tr("QuickCalc"), self._cmd_quickcalc)
+        item(tools_menu, tr("Group..."), self._cmd_group)
         inquiry_menu = tools_menu.addMenu(tr("Inquiry"))
         cmd_item(inquiry_menu, tr("Distance"), "DIST", icon=False)
         cmd_item(inquiry_menu, tr("Area"), "AREA", icon=False)
@@ -1783,6 +1896,12 @@ class MainWindow(QMainWindow):
         d.register("PAN", self._cmd_pan)
         d.register("REGEN", self._cmd_regen)
         d.register("OPTIONS", self._cmd_options)
+        d.register("UNISOLATEOBJECTS", self._cmd_unisolate)
+        d.register("QSELECT", self._cmd_qselect)
+        d.register("FIND", self._cmd_find)
+        d.register("GROUP", self._cmd_group)
+        d.register("QUICKCALC", self._cmd_quickcalc)
+        d.register("ADDSELECTED", lambda *a: self._invoke_command("ADDSELECTED"))
         d.register("U", self._cmd_undo)
         d.register("UNDO", self._cmd_undo)
         d.register("REDO", self._cmd_redo)

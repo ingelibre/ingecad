@@ -1314,9 +1314,9 @@ class ToolController(QObject):
             if crossing and not shift:
                 self._crossing_rects.append(rect)
             if shift:
-                self.selection -= set(hits)
+                self.selection -= self._with_groups(hits)
             else:
-                self.selection |= set(hits)
+                self.selection |= self._with_groups(hits)
             self._echo_count()
             return
         handle = self.index.pick((wx, wy), self._pick_tolerance)
@@ -1324,10 +1324,21 @@ class ToolController(QObject):
             self._window_anchor = (wx, wy)
             return
         if shift:
-            self.selection.discard(handle)
+            self.selection -= self._with_groups([handle])
         else:
-            self.selection.add(handle)
+            self.selection |= self._with_groups([handle])
         self._echo_count()
+
+    def _with_groups(self, handles) -> set:
+        """Picking one member of a selectable group takes the whole group —
+        the behaviour that makes GROUP worth having (p. 861), switched off
+        wholesale by PICKSTYLE 0."""
+        from core.groups import expand
+
+        document = self.window.document
+        if document is None:
+            return set(handles)
+        return expand(document, handles)
 
     def _echo_count(self) -> None:
         if self.selection:
