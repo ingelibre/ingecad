@@ -123,11 +123,12 @@ class Document:
         path = Path(path)
         warnings: list[str] = []
         if path.suffix.lower() == ".dwg":
+            from core.encoding import write_dwg_intermediate
             from formats.dwg_bridge import write_dwg
 
             with tempfile.TemporaryDirectory(prefix="ingecad-save-") as tmp:
                 tmp_dxf = Path(tmp) / "out.dxf"
-                self.doc.saveas(tmp_dxf)
+                write_dwg_intermediate(self.doc, tmp_dxf)
                 warnings = write_dwg(tmp_dxf, path)
             engine = "libredwg"
         else:

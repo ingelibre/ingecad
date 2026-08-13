@@ -62,6 +62,12 @@ def _run(cmd: list[str], out_path: Path) -> str:
             cmd,
             capture_output=True,
             text=True,
+            # The converter echoes names from the drawing into its warnings,
+            # and those are in the file's own codepage, not UTF-8: a layer
+            # called CAÑERÍAS made the decode raise and took the whole save
+            # down with it. Its log is diagnostics — never a reason to fail.
+            encoding="utf-8",
+            errors="replace",
             timeout=_TIMEOUT,
             check=False,
         )
@@ -249,12 +255,18 @@ def load_dwg(dwg_path: Path):
     """
     from core.document import Document
 
+    from core.encoding import decode_escapes_in_document
+
     dwg_path = Path(dwg_path)
     dxf_path = dwg_to_dxf(dwg_path)
     try:
         document = Document.load(dxf_path)
     finally:
         _discard_temp_dxf(dxf_path)
+    # \U+xxxx is what AutoCAD writes for a character its codepage cannot
+    # hold — and what we write ourselves on save (see core.encoding). ezdxf
+    # does not decode it, so without this the canvas shows the raw code.
+    decode_escapes_in_document(document.doc)
     document.path = dwg_path
     if len(document.modelspace()) > 0:
         return document
