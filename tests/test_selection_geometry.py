@@ -480,3 +480,33 @@ def test_a_grip_moved_entity_stays_visible_after_the_drop(qapp):
     finally:
         win.document.dirty = False
         win.close()
+
+
+def test_a_session_created_entity_moves_without_lag(qapp):
+    """The asymmetry Marco caught: a text from the OPENED file moved
+    instantly, the MTEXT he created lagged — created entities live in
+    _base_handles and the overlay excluded them even with their base
+    copy hidden."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        text = win.document.modelspace().add_text(
+            "CREADO", dxfattribs={"height": 2.5, "insert": (5.0, 5.0)})
+        win.tools._invalidate_geometry()
+        # simulate "drawn this session and merged by a regen"
+        win.tools._base_handles = {text.dxf.handle}
+        win.tools.selection = {text.dxf.handle}
+        win.tools.begin_grip_drag((5.0, 5.0, "center", text.dxf.handle, 0))
+        win.tools.finish_grip_drag(30.0, 40.0)
+        assert text in win.tools._pending_render
+        assert text.dxf.handle not in win.tools._base_handles
+        # and the overlay actually carries it
+        overlay = [
+            e for e in win.tools._pending_render
+            if e.is_alive and e.dxf.handle not in win.tools._base_handles]
+        assert text in overlay
+    finally:
+        win.document.dirty = False
+        win.close()

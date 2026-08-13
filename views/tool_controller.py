@@ -864,6 +864,9 @@ class ToolController(QObject):
             if old_handles:
                 self._drop_conflicting_stamps(old_handles)
                 self.window.viewport.hide_handles(old_handles)
+                # hidden base copies re-show through the overlay: lift the
+                # no-double-draw exclusion for them (same lag as the grips)
+                self._base_handles -= set(old_handles)
             new_ents = []
             if isinstance(command, actions.CreateBlockCommand) and command.insert:
                 new_ents = [command.insert]
@@ -1503,6 +1506,12 @@ class ToolController(QObject):
             # the deferred merge regen (seconds on a big file).
             if entity not in self._pending_render:
                 self._pending_render.append(entity)
+            # An entity DRAWN this session sits in _base_handles and the
+            # overlay excludes those (no double-draw with the base) — but
+            # its base copy is hidden now, so the exclusion would blank it:
+            # a just-created MTEXT lagged on every grip move while a text
+            # from the opened file moved instantly.
+            self._base_handles.discard(handle)
             self._refresh_overlay()
             if entity.dxftype() == "IMAGE":
                 # The overlay shows only the frame; the pixels need the
