@@ -52,6 +52,7 @@ GL_LINES = 0x0001
 GL_TRIANGLES = 0x0004
 GL_COLOR_BUFFER_BIT = 0x00004000
 GL_DEPTH_TEST = 0x0B71
+GL_SCISSOR_TEST = 0x0C11
 GL_BLEND = 0x0BE2
 GL_SRC_ALPHA = 0x0302
 GL_ONE_MINUS_SRC_ALPHA = 0x0303
@@ -163,6 +164,9 @@ class Viewport(QOpenGLWidget):
         self._cursor: Optional[QPointF] = None
         self._panning = False
         self._pan_last_screen = None
+        # MSPACE navigation: the model tessellated once, drawn through the
+        # active viewport with nothing but a matrix change per frame.
+        self._live_vp = None
         self._last_pos = QPointF()
         self._gl: Optional[QOpenGLFunctions] = None
         self._program: Optional[QOpenGLShaderProgram] = None
@@ -320,6 +324,18 @@ class Viewport(QOpenGLWidget):
         self._ghost_angle = float(angle)
         self._ghost_factor = float(factor)
         self._ghost_offset = offset
+        self.update()
+
+    def set_live_viewport(self, live) -> None:
+        """Draw a viewport's content from a model scene, live.
+
+        ``live`` is ``{"scene", "rect", "base", "factor", "offset"}`` or
+        None. Panning or zooming inside a floating viewport then costs one
+        matrix, not a re-tessellation of the whole sheet — the sheet's baked
+        copy of that content is hidden while this is on.
+        """
+        self._live_vp = live
+        self._live_vp_dirty = True
         self.update()
 
     def hide_handles(self, handles) -> None:
@@ -763,6 +779,9 @@ class Viewport(QOpenGLWidget):
         else:
             self._program.release()
 
+        if self._live_vp is not None:
+            self._draw_live_viewport(gl)
+
         if self._stamps:
             self._program.bind()
             for group in self._stamps:
@@ -844,6 +863,63 @@ class Viewport(QOpenGLWidget):
                              self._ghost_scene.thick)
 
         self._paint_overlay()
+
+    def _draw_live_viewport(self, gl) -> None:
+        """The active viewport's model content, scissored to its frame.
+
+        Everything about the placement rides in the matrix — the same trick
+        the drag ghost uses — so a pan tick is a uniform update instead of a
+        200 ms rebuild of the sheet.
+        """
+        live = self._live_vp
+        scene = live["scene"]
+        if getattr(self, "_live_vp_dirty", False) or not getattr(
+                self, "_live_vp_bufs", None):
+            for vao, vbo, _c in (getattr(self, "_live_vp_bufs", None) or {}).values():
+                vbo.destroy()
+                vao.destroy()
+            self._live_vp_bufs = {}
+            for name in ("triangles", "lines", "points"):
+                batch = getattr(scene, name)
+                if batch.vertex_count:
+                    self._live_vp_bufs[name] = self._make_vao(batch.data)
+            if scene.thick.vertex_count:
+                self._live_vp_bufs["thick"] = self._make_thick_vao(
+                    scene.thick.data)
+            self._live_vp_dirty = False
+        if not self._live_vp_bufs:
+            return
+
+        # Clip to the viewport's frame, in device pixels with y flipped —
+        # GL counts scissor rows from the bottom.
+        x0, y0, x1, y1 = live["rect"]
+        sx0, sy0 = self.view.world_to_screen(x0, y1)
+        sx1, sy1 = self.view.world_to_screen(x1, y0)
+        dpr = self.devicePixelRatioF()
+        px, py = int(sx0 * dpr), int(sy0 * dpr)
+        pw, ph = int((sx1 - sx0) * dpr), int((sy1 - sy0) * dpr)
+        if pw <= 0 or ph <= 0:
+            return
+        gl.glEnable(GL_SCISSOR_TEST)
+        gl.glScissor(px, int(self.height() * dpr) - py - ph, pw, ph)
+        ox, oy = scene.origin
+        mvp = self._mvp_about(ox, oy, live["base"], 0.0, live["factor"],
+                              live["offset"][0], live["offset"][1])
+        self._program.bind()
+        self._program.setUniformValue(self._loc_mvp, mvp)
+        for name, mode in (("triangles", GL_TRIANGLES), ("lines", GL_LINES),
+                           ("points", GL_POINTS)):
+            buf = self._live_vp_bufs.get(name)
+            if buf is None:
+                continue
+            vao, _vbo, count = buf
+            vao.bind()
+            gl.glDrawArrays(mode, 0, count)
+            vao.release()
+        self._program.release()
+        self._draw_thick(gl, mvp, None, self._live_vp_bufs.get("thick"),
+                         scene.thick)
+        gl.glDisable(GL_SCISSOR_TEST)
 
     def _upload_overlay(self) -> None:
         for vao, vbo, _count in self._overlay_bufs.values():

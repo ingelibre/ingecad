@@ -850,6 +850,11 @@ class ToolController(QObject):
 
     def _execute(self, command) -> None:
         self.window.history.execute(command)
+        # Any real edit invalidates the model tessellation the layout tab
+        # keeps for live viewport navigation.
+        invalidate = getattr(self.window, "invalidate_vp_model_cache", None)
+        if invalidate is not None:
+            invalidate()
         added = self._added_entities(command)
         if added is not None:
             # Appending beats invalidating: a full cache rebuild walks the

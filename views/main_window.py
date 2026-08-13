@@ -2062,14 +2062,21 @@ class MainWindow(QMainWindow):
     def _vp_live_regen(self) -> None:
         """A pan/zoom tick inside an active viewport.
 
-        The model content is baked into the sheet scene, so showing the move
-        means a rebuild. Per-tick THREADED regens made pan lag: the display
-        trailed the cursor by a regen (or two) while the mouse streamed
-        events. When the sheet is cheap — measured on its last regen, never
-        guessed — rebuild synchronously instead, and the content tracks the
-        cursor 1:1. A heavy sheet keeps the threaded path: laggy, but the UI
-        never blocks.
+        The sheet scene has the model content baked in, so the obvious way to
+        show the move is to rebuild it — and that is what this used to do,
+        207 ms a tick on a plan of 200 entities. The display trailed the
+        cursor by a regen or two, and a real drawing would be worse.
+
+        Nothing about the content changes when you pan inside a viewport,
+        though: only where it is put. So the model is tessellated once, its
+        baked copy in the sheet is hidden, and each tick sets a matrix — the
+        very trick the drag ghost uses. The exact sheet comes back with one
+        regen when the gesture settles.
         """
+        if self._vp_live_draw():
+            return
+        # No model scene yet (still building, or the drawing changed under
+        # it): fall back to the old rebuild so the view still tracks.
         import time
 
         known = self._regen_ms.get(self._active_layout)
@@ -2091,6 +2098,79 @@ class MainWindow(QMainWindow):
         self.viewport.set_scene(scene)
         self.tools.mark_scene_merged()
 
+    def invalidate_vp_model_cache(self) -> None:
+        """The model changed: the tessellation kept for live viewport
+        navigation is stale. Called from the edit path, NOT from the document
+        revision — moving a viewport's view marks the document dirty on every
+        wheel tick, and keying on that rebuilt 160 ms of model per tick,
+        which is the whole cost this cache exists to avoid."""
+        self._vp_model_cache = None
+
+    def _vp_model_scene(self):
+        """The model, tessellated once for live viewport navigation."""
+        cached = getattr(self, "_vp_model_cache", None)
+        if cached is not None and cached[0] is self.document:
+            return cached[1]
+        from render.backend import build_scene
+
+        try:
+            scene = build_scene(self.document, "Model")
+        except Exception:
+            return None
+        self._vp_model_cache = (self.document, scene)
+        return scene
+
+    def _vp_live_draw(self) -> bool:
+        """Show the active viewport's content at its current view, live."""
+        from core import layouts as layout_ops
+
+        vp = self._active_vp
+        if vp is None or not vp.is_alive or self.document is None:
+            return False
+        scene = self._vp_model_scene()
+        if scene is None:
+            return False
+        try:
+            rect = layout_ops.viewport_rect(vp)
+            centre = vp.dxf.center
+            view_centre = vp.dxf.view_center_point
+            factor = float(vp.dxf.height) / float(vp.dxf.view_height)
+        except Exception:
+            return False
+        if not (factor > 0):
+            return False
+        self._vp_hide_baked_content()
+        self.viewport.set_live_viewport({
+            "scene": scene,
+            "rect": rect,
+            "base": (view_centre.x, view_centre.y),
+            "factor": factor,
+            "offset": (centre.x - view_centre.x, centre.y - view_centre.y),
+        })
+        return True
+
+    def _vp_hide_baked_content(self) -> None:
+        """Hide the sheet's own copy of the model content, once per gesture.
+
+        Without this the old position stays on screen under the live one.
+        The handles are the model entities': that is who owns those vertices
+        in a sheet scene, the viewport only owns its border.
+        """
+        if getattr(self, "_vp_content_hidden", False):
+            return
+        scene = self.viewport._scene
+        if scene is None:
+            return
+        model = {e.dxf.handle for e in self.document.modelspace()}
+        self.viewport.hide_handles([h for h in scene.handle_ranges
+                                    if h in model])
+        self._vp_content_hidden = True
+
+    def _vp_live_stop(self) -> None:
+        """Leave live mode: the next real scene carries the true content."""
+        self._vp_content_hidden = False
+        self.viewport.set_live_viewport(None)
+
     def _vp_gesture_begin(self, vp) -> None:
         if self._vp_gesture is None:
             self._vp_gesture = (
@@ -2111,7 +2191,13 @@ class MainWindow(QMainWindow):
             return
         now_center = (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y)
         now_height = float(vp.dxf.view_height)
+        # The live matrix stops here either way: from now on the sheet scene
+        # is the truth again.
+        live = getattr(self, "_vp_content_hidden", False)
+        self._vp_live_stop()
         if now_center == old_center and now_height == old_height:
+            if live:
+                self.regen_in_memory()
             return
         # do() re-applies the values already live — recording, not changing.
         self.history.execute(layout_ops.SetViewportViewCommand(
@@ -2125,6 +2211,7 @@ class MainWindow(QMainWindow):
         self._active_vp = None
         if getattr(self.viewport, "active_vp_rect", None) is not None:
             self.viewport.active_vp_rect = None
+            self._vp_live_stop()
             self.viewport.update()
         if echo:
             self.command_line.echo(

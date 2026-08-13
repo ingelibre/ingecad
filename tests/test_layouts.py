@@ -1066,25 +1066,30 @@ def test_right_click_accepts_prompt_default(qapp):
     win.close()
 
 
-def test_a_cheap_sheet_pans_synchronously(qapp, monkeypatch):
-    """Per-tick THREADED regens made viewport pan trail the cursor. A sheet
-    whose regen is measured cheap rebuilds inline: the new scene is on the
-    canvas when vp_view_pan returns, no worker involved."""
+def test_a_pan_tick_places_the_model_by_matrix(qapp):
+    """Panning inside a viewport rebuilt the whole sheet: 207 ms a tick on a
+    200-entity plan, and the display trailed the cursor. Nothing about the
+    content changes when the view moves, only where it is put, so the model
+    is tessellated once and each tick sets a matrix."""
     win, t, vp = _layout_window(qapp)
     win._active_vp = vp
-    win._regen_ms[win._active_layout] = 5.0        # measured: cheap
     before = win.viewport._scene
     assert win.vp_view_pan(5.0, 2.0)
-    assert win.viewport._scene is not before       # adopted inline
+    assert win.viewport._live_vp is not None       # placed, not rebuilt
+    assert win.viewport._scene is before           # the sheet is untouched
     assert win._regen_worker is None               # nothing left in flight
-    assert win._active_layout in win._regen_ms     # measurement refreshed
     win._vp_gesture_commit()
+    assert win.viewport._live_vp is None           # the exact sheet is back
     win.close()
 
 
-def test_a_heavy_sheet_keeps_the_threaded_path(qapp, monkeypatch):
+def test_a_pan_tick_falls_back_to_a_rebuild_without_a_model_scene(
+        qapp, monkeypatch):
+    """The matrix path needs the model tessellated; when that is not there
+    the old rebuild still runs, so the view always tracks."""
     win, t, vp = _layout_window(qapp)
     win._active_vp = vp
+    monkeypatch.setattr(win, "_vp_model_scene", lambda: None)
     win._regen_ms[win._active_layout] = 500.0      # measured: heavy
     called = []
     monkeypatch.setattr(win, "regen_in_memory", lambda *a, **k: called.append(1))
@@ -1094,3 +1099,78 @@ def test_a_heavy_sheet_keeps_the_threaded_path(qapp, monkeypatch):
     assert win.viewport._scene is scene             # no inline adoption
     win._vp_gesture_commit()
     win.close()
+
+
+def test_live_viewport_navigation_places_the_model_by_matrix(qapp):
+    """Panning inside a floating viewport used to rebuild the whole sheet —
+    207 ms a tick on a 200-entity plan. The model is tessellated once and
+    each tick is a matrix instead, so the placement maths has to be exactly
+    what the bake produces: model point p lands at
+    viewport_centre + (p - view_centre) * (height / view_height)."""
+    from core import layouts as layout_ops
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        doc = win.document
+        doc.modelspace().add_line((0, 0), (100, 50))
+        psp = doc.doc.layouts.get("Layout1")
+        vp = psp.add_viewport(center=(100, 70), size=(120, 80),
+                              view_center_point=(50, 25), view_height=60)
+        win._active_layout = "Layout1"
+        win._active_vp = vp
+        win.viewport.set_scene(None)
+
+        scene = win._vp_model_scene()
+        assert scene is not None
+        # the cache survives a viewport view change: moving the view marks
+        # the document dirty, and keying on that rebuilt it every tick
+        before = win._vp_model_cache
+        layout_ops.pan_viewport_view(vp, 5.0, 5.0)
+        doc.dirty = True
+        assert win._vp_model_scene() is before[1]
+        # but a real edit drops it
+        win.invalidate_vp_model_cache()
+        assert win._vp_model_cache is None
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_live_viewport_matrix_matches_the_baked_placement(qapp):
+    """The transform, checked against the definition rather than a picture."""
+    from core import layouts as layout_ops
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        doc = win.document
+        doc.modelspace().add_circle((50, 25), 10)
+        psp = doc.doc.layouts.get("Layout1")
+        vp = psp.add_viewport(center=(100, 70), size=(120, 80),
+                              view_center_point=(50, 25), view_height=60)
+        win._active_layout = "Layout1"
+        win._active_vp = vp
+        assert win._vp_live_draw() is True
+
+        live = win.viewport._live_vp
+        factor = float(vp.dxf.height) / float(vp.dxf.view_height)
+        assert abs(live["factor"] - factor) < 1e-12
+        # a model point maps to paper as the bake does
+        vc = vp.dxf.view_center_point
+        for point in ((0.0, 0.0), (50.0, 25.0), (-30.0, 12.5)):
+            got = (live["base"][0] + (point[0] - live["base"][0]) * factor
+                   + live["offset"][0],
+                   live["base"][1] + (point[1] - live["base"][1]) * factor
+                   + live["offset"][1])
+            want = (vp.dxf.center.x + (point[0] - vc.x) * factor,
+                    vp.dxf.center.y + (point[1] - vc.y) * factor)
+            assert abs(got[0] - want[0]) < 1e-9 and abs(got[1] - want[1]) < 1e-9
+
+        win._vp_live_stop()
+        assert win.viewport._live_vp is None
+    finally:
+        win.document.dirty = False
+        win.close()
