@@ -259,6 +259,14 @@ class MainWindow(QMainWindow):
                                 (tr("Scale"), "SCALE")):
                 menu.addAction(
                     label, lambda checked=False, n=name: self._invoke_command(n))
+            # The reference lists the shortcut menu among DRAWORDER's access
+            # methods: "Select an object, right-click, and then click Draw
+            # Order" (p. 662).
+            order = menu.addMenu(tr("Draw Order"))
+            order.addAction(tr("Bring to Front"),
+                            lambda: self._draworder("front"))
+            order.addAction(tr("Send to Back"),
+                            lambda: self._draworder("back"))
             menu.addSeparator()
             menu.addAction(tr("Deselect All"), self.tools.clear_selection)
         else:
@@ -268,6 +276,27 @@ class MainWindow(QMainWindow):
             menu.addAction(tr("Pan"), lambda: self._invoke_command("PAN"))
             menu.addAction(tr("Zoom Extents"), self.viewport.zoom_extents)
         menu.exec(global_pos)
+
+    def _draworder(self, mode: str) -> None:
+        """Tools > Draw Order and the shortcut menu: act on the selection, or
+        ask for one and then act — never leave the user at a Front/Back
+        prompt they did not ask for."""
+        from core.draworder import DrawOrderCommand
+
+        entities = self.tools._selection_entities() if self.tools else []
+        if entities:
+            self.history.execute(DrawOrderCommand(entities, mode))
+            self.regen_in_memory()
+            self.command_line.echo(
+                tr("{count} object(s) reordered.", count=len(entities)))
+            return
+        self._invoke_command("DRAWORDER")
+        tool = self.tools.tool
+        if tool is not None:
+            tool.mode = mode
+            self.command_line.echo(
+                tr("Select objects to bring to front:") if mode == "front"
+                else tr("Select objects to send to back:"))
 
     def _plot_dialog(self) -> None:
         if self.document is None:
@@ -568,7 +597,14 @@ class MainWindow(QMainWindow):
 
         # -- Tools ------------------------------------------------------------
         tools_menu = menu_bar.addMenu(tr("Tools"))
-        cmd_item(tools_menu, tr("Draw Order"), "DRAWORDER", icon=False)
+        # AutoCAD's Tools > Draw Order, with its two entries: the command
+        # itself still asks Front/Back, but nobody should have to find that
+        # out to put a hatch behind a plan.
+        order_menu = tools_menu.addMenu(tr("Draw Order"))
+        order_menu.addAction(tr("Bring to Front"),
+                             lambda: self._draworder("front"))
+        order_menu.addAction(tr("Send to Back"),
+                             lambda: self._draworder("back"))
         inquiry_menu = tools_menu.addMenu(tr("Inquiry"))
         cmd_item(inquiry_menu, tr("Distance"), "DIST", icon=False)
         cmd_item(inquiry_menu, tr("Area"), "AREA", icon=False)

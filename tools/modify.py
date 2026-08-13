@@ -561,6 +561,11 @@ class DrawOrderTool(Tool):
 
     wants_selection = True
 
+    #: Set by the menu entries that already know which way to go (Tools >
+    #: Draw Order > Bring to Front, and the canvas shortcut menu), so the
+    #: user picks objects and it happens — no option to answer.
+    mode: str | None = None
+
     def start(self) -> None:
         self.name = "DRAWORDER"
         self._entities: list = []
@@ -570,6 +575,9 @@ class DrawOrderTool(Tool):
             self.ctx.finish()
             return
         self._entities = entities
+        if self.mode:
+            self._apply(self.mode)
+            return
         self.ctx.prompt(tr("Enter object ordering option [Front/Back] <Back>:"))
 
     def _apply(self, mode: str) -> None:

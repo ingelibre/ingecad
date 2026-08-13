@@ -117,3 +117,45 @@ def test_layon_turns_every_layer_on_in_one_step(qapp):
         assert not doc.doc.layers.get("COTAS").is_on()
     finally:
         win.close()
+
+
+def test_draw_order_menu_entries_act_on_the_selection(qapp):
+    """Marco asked how to put one object above another — the answer existed
+    (DRAWORDER) but only as a command with a Front/Back prompt. The menu and
+    the canvas shortcut menu now do it in one click, and with nothing
+    selected they ask for objects and then apply without a second question
+    (the reference lists the shortcut menu among DRAWORDER's access methods,
+    p. 662)."""
+    from core.draworder import order_groups
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        msp = win.document.modelspace()
+        under = msp.add_lwpolyline([(0, 0), (10, 0), (10, 10)], close=True)
+        over = msp.add_line((0, 5), (10, 5))
+        win.tools._invalidate_geometry()
+
+        win.tools.selection = {under.dxf.handle}
+        win._draworder("back")
+        assert order_groups(msp).get(under.dxf.handle) == -1
+        assert order_groups(msp).get(over.dxf.handle) in (None, 0)
+
+        win.tools.selection = {over.dxf.handle}
+        win._draworder("front")
+        assert order_groups(msp).get(over.dxf.handle) == 1
+
+        win.history.undo()
+        assert order_groups(msp).get(over.dxf.handle) in (None, 0)
+
+        # nothing selected: the command runs and remembers the direction
+        win.tools.selection = set()
+        win._draworder("front")
+        assert win.tools.tool is not None
+        assert win.tools.tool.name == "DRAWORDER"
+        assert win.tools.tool.mode == "front"
+        win.tools.cancel()
+    finally:
+        win.document.dirty = False
+        win.close()
