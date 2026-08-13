@@ -873,6 +873,9 @@ class MainWindow(QMainWindow):
         self._register_commands()
         self.command_line.set_completions(self.dispatcher.known_names())
         self.command_line.submitted.connect(self._on_command_submitted)
+        # Ctrl+Z in the command line means the drawing, as in AutoCAD.
+        self.command_line.undo_requested.connect(self._cmd_undo)
+        self.command_line.redo_requested.connect(self._cmd_redo)
         self.command_line.cancelled.connect(self._on_prompt_cancelled)
         self.command_line.input.raw_text_check = (
             lambda: self.tools.tool is not None

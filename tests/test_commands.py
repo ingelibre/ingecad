@@ -209,3 +209,72 @@ def test_the_completion_does_not_hijack_a_pending_prompt():
     d.submit("O")
     assert answers == ["O"]
     assert "OFFSET" not in ran
+
+
+def test_ctrl_z_undoes_the_drawing_from_the_command_line(qapp):
+    """Marco trimmed, pressed Ctrl+Z and nothing happened. The focus sits in
+    the command line the moment a command is typed, and a QLineEdit claims
+    Ctrl+Z for its own text undo — so the key never reached the drawing.
+    In a CAD that key means the drawing, wherever the focus is."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from core import actions
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        msp = win.document.modelspace()
+        for i in range(3):
+            win.tools._execute(actions.add_circle((i * 10, 0), 5))
+        assert len(list(msp)) == 3
+
+        edit = win.command_line.input
+        edit.setFocus()
+        QTest.keyClick(edit, Qt.Key_Z, Qt.ControlModifier)
+        assert len(list(msp)) == 2          # the drawing, not the typed text
+
+        QTest.keyClick(edit, Qt.Key_Y, Qt.ControlModifier)
+        assert len(list(msp)) == 3          # and redo comes back
+
+        # typing is untouched: the line still takes text normally
+        QTest.keyClicks(edit, "LINE")
+        assert edit.text() == "LINE"
+        edit.clear()
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_trim_then_undo_restores_the_original(qapp):
+    """The whole sequence Marco ran: two circles, TR, undo, redo."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from core import actions
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        doc = win.document
+        msp = doc.modelspace()
+        win.tools._execute(actions.add_circle((0, 0), 20))
+        win.tools._execute(actions.add_circle((25, 0), 20))
+        cutter = list(msp)[1]
+
+        win.tools.selection = {cutter.dxf.handle}
+        win.tools.start_tool("TRIM")
+        win.tools.on_click(-19.0, 0.0, False)
+        assert sorted(e.dxftype() for e in msp) == ["ARC", "CIRCLE"]
+
+        edit = win.command_line.input
+        edit.setFocus()
+        QTest.keyClick(edit, Qt.Key_Z, Qt.ControlModifier)
+        assert sorted(e.dxftype() for e in msp) == ["CIRCLE", "CIRCLE"]
+        QTest.keyClick(edit, Qt.Key_Y, Qt.ControlModifier)
+        assert sorted(e.dxftype() for e in msp) == ["ARC", "CIRCLE"]
+    finally:
+        win.document.dirty = False
+        win.close()

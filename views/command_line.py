@@ -9,7 +9,7 @@ names and aliases.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QFont, QKeyEvent
 from PySide6.QtWidgets import (
     QCompleter,
@@ -39,6 +39,9 @@ class _PromptEdit(QLineEdit):
 
     submitted = Signal(str)
     cancelled = Signal()
+    #: Ctrl+Z / Ctrl+Y here mean the drawing, not the typed text.
+    undo_requested = Signal()
+    redo_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -62,8 +65,36 @@ class _PromptEdit(QLineEdit):
                 return text[:start]
         return text
 
+    def event(self, event) -> bool:
+        """Let the window's Undo/Redo shortcuts through.
+
+        A QLineEdit claims Ctrl+Z for its own text undo by accepting the
+        shortcut-override event, and the focus sits here the moment a command
+        is typed — so pressing Ctrl+Z right after a TRIM undid nothing at
+        all, which is not what that key means in a CAD. Declining the
+        override hands it to the window, where it undoes the drawing.
+        """
+        if event.type() == QEvent.ShortcutOverride:
+            mods = event.modifiers() & ~Qt.KeypadModifier
+            if (mods, event.key()) in (
+                    (Qt.ControlModifier, Qt.Key_Z),
+                    (Qt.ControlModifier, Qt.Key_Y),
+                    (Qt.ControlModifier | Qt.ShiftModifier, Qt.Key_Z)):
+                event.ignore()
+                return False
+        return super().event(event)
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         key = event.key()
+        # A belt for the platforms where the override never arrives: the
+        # drawing's undo, never the line edit's.
+        if event.modifiers() & Qt.ControlModifier and key in (Qt.Key_Z,
+                                                              Qt.Key_Y):
+            if key == Qt.Key_Y or event.modifiers() & Qt.ShiftModifier:
+                self.redo_requested.emit()
+            else:
+                self.undo_requested.emit()
+            return
         if key in (Qt.Key_Return, Qt.Key_Enter) or (
             key == Qt.Key_Space and not self.text().endswith(" ")
             and self._space_executes()
@@ -104,6 +135,8 @@ class CommandLine(QWidget):
 
     submitted = Signal(str)
     cancelled = Signal()
+    undo_requested = Signal()
+    redo_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -120,6 +153,8 @@ class CommandLine(QWidget):
         self.input.setPlaceholderText(tr("Type a command"))
         self.input.submitted.connect(self.submitted)
         self.input.cancelled.connect(self.cancelled)
+        self.input.undo_requested.connect(self.undo_requested)
+        self.input.redo_requested.connect(self.redo_requested)
 
         # Classic command-line shortcut menu: Recent Commands / Copy /
         # Copy History / Paste (AutoCAD's own entries).
