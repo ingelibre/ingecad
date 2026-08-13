@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QTabWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -64,6 +65,50 @@ _ANG_FORMATS = [("Decimal degrees", 0), ("Degrees minutes seconds", 1),
                 ("Gradians", 2), ("Radians", 3)]
 
 
+#: The style attributes that name an arrowhead block.
+_ARROW_KEYS = ("dimblk", "dimblk1", "dimblk2", "dimldrblk")
+
+
+def _preview_arrow(value: str):
+    """The arrowhead name the sample document can actually draw, or None.
+
+    AutoCAD stores its built-in arrowheads with a leading underscore
+    (``_ARCHTICK``) and ezdxf wants them without it, creating the block on
+    demand. Handing ezdxf the stored name means "a user block called
+    _ARCHTICK", which the sample document does not have — the render then
+    raises DXFUndefinedBlockError and the preview came out with the sample
+    geometry and no dimensions at all, which is what every architectural
+    style in a real drawing looks like. A custom block we cannot draw
+    returns None, so the preview falls back to the default arrow instead of
+    showing nothing.
+    """
+    from ezdxf.render.arrows import ARROWS
+
+    if not value:
+        return value            # "" is the default closed-filled arrow
+    name = ARROWS.arrow_name(str(value))     # "_ARCHTICK" -> "ARCHTICK"
+    return name if name in ARROWS else None
+
+
+#: The sample is 40 drawing units wide; aim for that many text heights across.
+_PREVIEW_TEXT_HEIGHTS = 20.0
+
+
+def _preview_scale(attribs: dict) -> float:
+    """How much to scale the 40-unit sample so this style reads.
+
+    Driven by the style's effective text height (``dimtxt`` × ``dimscale``),
+    with the arrow size as a fallback for a style that draws no text.
+    """
+    scale = attribs.get("dimscale") or 1.0
+    height = (attribs.get("dimtxt") or 0.0) * scale
+    if height <= 0:
+        height = (attribs.get("dimasz") or 0.0) * scale * 2.0
+    if height <= 0:
+        return 1.0
+    return (height * _PREVIEW_TEXT_HEIGHTS) / 40.0
+
+
 def render_dim_preview(attribs: dict, w: int = 300, h: int = 190) -> QPixmap:
     """A real sample render of the style: linear + angular + radius dims."""
     import ezdxf
@@ -85,22 +130,33 @@ def render_dim_preview(attribs: dict, w: int = 300, h: int = 190) -> QPixmap:
         for key, value in attribs.items():
             if key in ("name", "handle", "owner") or value is None:
                 continue
+            if key in _ARROW_KEYS:
+                value = _preview_arrow(value)
+                if value is None:
+                    continue
             try:
                 style.dxf.set(key, value)
             except Exception:
                 pass
         msp = doc.modelspace()
         white = {"color": 7}
-        msp.add_line((0, 0), (40, 0), dxfattribs=white)
-        msp.add_line((0, 0), (14, 18), dxfattribs=white)
-        msp.add_circle((58, 9), 8, dxfattribs=white)
+        # Size the sample to the style, not the other way round. A style meant
+        # for a drawing in metres carries dimtxt = 0.1, and against a sample
+        # 40 units wide its text is a quarter of one per cent of the preview:
+        # invisible. Twenty text heights across is what makes every style
+        # legible while keeping its own text/arrow proportions intact.
+        s = _preview_scale(attribs)
+        p = lambda x, y: (x * s, y * s)          # noqa: E731 - local shorthand
+        msp.add_line(p(0, 0), p(40, 0), dxfattribs=white)
+        msp.add_line(p(0, 0), p(14, 18), dxfattribs=white)
+        msp.add_circle(p(58, 9), 8 * s, dxfattribs=white)
         for build in (
-            lambda: msp.add_linear_dim(base=(20, -10), p1=(0, 0), p2=(40, 0),
+            lambda: msp.add_linear_dim(base=p(20, -10), p1=p(0, 0), p2=p(40, 0),
                                        dimstyle="PREV"),
-            lambda: msp.add_angular_dim_3p(base=(17, 7), center=(0, 0),
-                                           p1=(16, 0), p2=(11, 14),
+            lambda: msp.add_angular_dim_3p(base=p(17, 7), center=p(0, 0),
+                                           p1=p(16, 0), p2=p(11, 14),
                                            dimstyle="PREV"),
-            lambda: msp.add_radius_dim(center=(58, 9), radius=8, angle=35,
+            lambda: msp.add_radius_dim(center=p(58, 9), radius=8 * s, angle=35,
                                        dimstyle="PREV"),
         ):
             try:
@@ -563,13 +619,17 @@ class DimStyleManagerDialog(QDialog):
         self.preview.setStyleSheet("border: 1px solid #444;")
         mid.addWidget(self.preview)
         mid.addWidget(QLabel(tr("Description")))
-        self.description = QLabel(self)
-        self.description.setWordWrap(True)
-        self.description.setMinimumHeight(48)
-        self.description.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        # A read-only text box, not a wrapped label: a label's height depends
+        # on its width, which the layout cannot satisfy at the dialog's own
+        # minimum size — the long descriptions real styles produce pushed it
+        # over the preview. This one scrolls instead of growing.
+        self.description = QTextEdit(self)
+        self.description.setReadOnly(True)
+        self.description.setFixedHeight(96)
         self.description.setStyleSheet(
             "border: 1px solid #444; padding: 3px; color: #c8c8c8;")
-        mid.addWidget(self.description, 1)
+        mid.addWidget(self.description)
+        mid.addStretch(1)
         body.addLayout(mid, 1)
 
         btns = QVBoxLayout()

@@ -276,15 +276,15 @@ class PropertiesPanel(QWidget):
 
     # -- schema per entity type ----------------------------------------------
     def _schema(self, entities: list):
-        sections = [(tr("General"), self._general_rows())]
         types = {e.dxftype() for e in entities}
+        sections = [(tr("General"), self._general_rows(types))]
         if len(types) == 1 and len(entities) == 1:
             builder = _TYPE_ROWS.get(next(iter(types)))
             if builder is not None:
                 sections.append(builder(self, entities[0]))
         return sections
 
-    def _general_rows(self):
+    def _general_rows(self, types: set | None = None):
         color_items = _color_items()
         lt_items = [(tr("ByLayer"), "ByLayer")] + [
             (lt, lt) for lt in layer_ops.available_linetypes(self._document)]
@@ -292,7 +292,7 @@ class PropertiesPanel(QWidget):
             (layer_ops.lineweight_label(lw), lw) for lw in layer_ops.LINEWEIGHTS]
         layer_items = [(i.name, i.name)
                        for i in layer_ops.layer_list(self._document)]
-        return [
+        rows = [
             Row(tr("Color"), "combo", lambda e: e.dxf.get("color", 256),
                 lambda v: self._set_prop("color", v), color_items),
             Row(tr("Layer"), "combo", lambda e: e.dxf.layer,
@@ -306,9 +306,21 @@ class PropertiesPanel(QWidget):
             Row(tr("Lineweight"), "combo",
                 lambda e: e.dxf.get("lineweight", -1),
                 lambda v: self._set_prop("lineweight", v), lw_items),
-            Row(tr("Thickness"), "num", lambda e: e.dxf.get("thickness", 0.0),
-                lambda v: self._set_prop("thickness", v)),
         ]
+        if not (types or set()) & self._NO_THICKNESS:
+            rows.append(
+                Row(tr("Thickness"), "num",
+                    lambda e: e.dxf.get("thickness", 0.0),
+                    lambda v: self._set_prop("thickness", v)))
+        return rows
+
+    #: Entities with no group 39. AutoCAD leaves Thickness out of their
+    #: Properties rather than showing it as varying, and so does this: the
+    #: getter raises for them, which the panel would render as "*varies*".
+    _NO_THICKNESS = frozenset((
+        "DIMENSION", "MTEXT", "INSERT", "HATCH", "IMAGE", "LEADER",
+        "SPLINE", "ELLIPSE", "XLINE", "RAY", "ATTRIB", "ATTDEF", "MLINE",
+    ))
 
 
 # -- type-specific row builders (module-level, take panel + entity) ----------
@@ -510,6 +522,84 @@ def _style_items(panel):
     return [(s.dxf.name, s.dxf.name) for s in doc.styles]
 
 
+def _dimstyle_items(panel):
+    doc = panel._document.doc
+    return [(s.dxf.name, s.dxf.name) for s in doc.dimstyles]
+
+
+def _dimension_rows(panel, e):
+    """What AutoCAD's Properties shows for a dimension, led by its style.
+
+    Changing the style has to re-render the dimension's block — the geometry
+    on screen is what the old style produced — so this row does not go
+    through the plain property setter.
+    """
+    def set_dimstyle(value):
+        from core.modify import _rerender_dimension
+
+        def mutate():
+            for ent in panel._active():
+                if ent.dxftype() != "DIMENSION":
+                    continue
+                ent.dxf.dimstyle = value
+                _rerender_dimension(panel._document, ent)
+        panel._in_place(mutate, regen=True)
+
+    def set_text_override(value):
+        def mutate():
+            from core.modify import _rerender_dimension
+
+            for ent in panel._active():
+                if ent.dxftype() != "DIMENSION":
+                    continue
+                ent.dxf.text = value
+                _rerender_dimension(panel._document, ent)
+        panel._in_place(mutate, regen=True)
+
+    rows = [
+        Row(tr("Dim style"), "combo",
+            lambda e: e.dxf.get("dimstyle", "Standard"),
+            set_dimstyle, _dimstyle_items(panel)),
+        Row(tr("Measurement"), "ro",
+            lambda e: e.get_measurement() if hasattr(e, "get_measurement")
+            else e.dxf.get("actual_measurement", 0.0)),
+        # AutoCAD's own convention: empty or "<>" means the measured value.
+        Row(tr("Text override"), "str", lambda e: e.dxf.get("text", ""),
+            set_text_override),
+        Row(tr("Text rotation"), "num",
+            lambda e: e.dxf.get("text_rotation", 0.0),
+            lambda v: panel._set_prop("text_rotation", v)),
+    ]
+    rows += _pt_rows(panel, "text_midpoint", tr("Text position"))
+    return (tr("Dimension"), rows)
+
+
+def _attrib_rows(panel, e):
+    """ATTRIB and ATTDEF carry a text style like any other text."""
+    rows = [
+        Row(tr("Tag"), "ro", lambda e: e.dxf.get("tag", "")),
+        Row(tr("Contents"), "ro", lambda e: e.dxf.get("text", "")),
+        Row(tr("Style"), "combo", lambda e: e.dxf.get("style", "Standard"),
+            lambda v: panel._set_prop("style", v), _style_items(panel)),
+        Row(tr("Height"), "num", lambda e: e.dxf.get("height", 1.0),
+            lambda v: panel._set_prop("height", v)),
+        Row(tr("Rotation"), "num", lambda e: e.dxf.get("rotation", 0.0),
+            lambda v: panel._set_prop("rotation", v)),
+    ]
+    rows += _pt_rows(panel, "insert", tr("Position"))
+    return (tr("Text"), rows)
+
+
+def _leader_rows(panel, e):
+    """A leader is drawn by a dimension style too."""
+    return (tr("Leader"), [
+        Row(tr("Dim style"), "combo",
+            lambda e: e.dxf.get("dimstyle", "Standard"),
+            lambda v: panel._set_prop("dimstyle", v), _dimstyle_items(panel)),
+        Row(tr("Vertices"), "ro", lambda e: len(e.vertices)),
+    ])
+
+
 _TYPE_LABEL = {
     "LINE": "Line", "CIRCLE": "Circle", "ARC": "Arc", "ELLIPSE": "Ellipse",
     "LWPOLYLINE": "Polyline", "POLYLINE": "Polyline", "POINT": "Point",
@@ -612,4 +702,8 @@ _TYPE_ROWS = {
     "INSERT": _insert_rows,
     "HATCH": _hatch_rows,
     "IMAGE": _image_rows,
+    "DIMENSION": _dimension_rows,
+    "ATTRIB": _attrib_rows,
+    "ATTDEF": _attrib_rows,
+    "LEADER": _leader_rows,
 }

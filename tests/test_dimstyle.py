@@ -185,3 +185,45 @@ def test_manager_modify_executes_command(qapp, monkeypatch):
         dlg.deleteLater()
     finally:
         win.close()
+
+
+def test_the_preview_draws_the_dimensions_of_a_real_style(qapp):
+    """A style with an AutoCAD arrowhead (_ARCHTICK, what every architectural
+    drawing uses) rendered the sample geometry and NO dimensions: ezdxf wants
+    the arrow name without the underscore and raised DXFUndefinedBlockError,
+    which the preview swallowed."""
+    from views.dimstyle_dialog import _preview_arrow, render_dim_preview
+
+    assert _preview_arrow("_ARCHTICK") == "ARCHTICK"
+    assert _preview_arrow("ARCHTICK") == "ARCHTICK"
+    assert _preview_arrow("") == ""                    # closed filled
+    assert _preview_arrow("MI_BLOQUE") is None         # unknown: default arrow
+
+    def ink(attribs):
+        img = render_dim_preview(attribs).toImage()
+        bg = img.pixelColor(1, 1)
+        return sum(1 for x in range(0, img.width(), 2)
+                   for y in range(0, img.height(), 2)
+                   if img.pixelColor(x, y) != bg)
+
+    plain = {"dimtxt": 2.5, "dimasz": 2.5}
+    tick = dict(plain, dimblk="_ARCHTICK")
+    # the tick style must draw as much as the default one, not just the sample
+    assert ink(tick) > 0.8 * ink(plain)
+
+
+def test_the_preview_scales_itself_to_the_style(qapp):
+    """A style for a drawing in metres carries dimtxt = 0.1; against a fixed
+    40-unit sample its text is invisible. The sample sizes itself instead."""
+    from views.dimstyle_dialog import _preview_scale
+
+    metres = _preview_scale({"dimtxt": 0.1})
+    millimetres = _preview_scale({"dimtxt": 2.5})
+    assert metres < millimetres
+    # both put the same number of text heights across the sample
+    assert abs((0.1 / (metres * 40)) - (2.5 / (millimetres * 40))) < 1e-9
+    # dimscale multiplies the effective height
+    assert _preview_scale({"dimtxt": 0.1, "dimscale": 50}) > metres
+    # a style with no text falls back to the arrow size, never to zero
+    assert _preview_scale({"dimasz": 0.5}) > 0
+    assert _preview_scale({}) == 1.0

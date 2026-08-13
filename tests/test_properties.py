@@ -450,3 +450,39 @@ def test_picking_a_layer_snaps_the_color_back_to_bylayer(qapp):
     finally:
         win.document.dirty = False
         win.close()
+
+
+def test_properties_shows_the_style_of_every_styled_object(qapp):
+    """Marco: selecting a dimension must show which style it has, and that
+    goes for any object with a style. DIMENSION had no section at all, so
+    only General appeared."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        doc = win.document
+        msp = doc.modelspace()
+        doc.doc.styles.add("TITULOS", font="txt.shx")
+        dim = msp.add_linear_dim(base=(0, -5), p1=(0, 0), p2=(10, 0),
+                                 dimstyle="ISO-25")
+        dim.render()
+        text = msp.add_text("A", dxfattribs={"height": 2, "style": "TITULOS"})
+        panel = win._properties_panel
+        assert panel is not None
+
+        def rows_of(entity):
+            return {r.label: r for _t, rs in panel._schema([entity]) for r in rs}
+
+        drow = rows_of(dim.dimension)["Dim style"]
+        assert drow.get(dim.dimension) == "ISO-25"
+        assert ("ISO-25", "ISO-25") in drow.items      # every style offered
+        assert rows_of(text)["Style"].get(text) == "TITULOS"
+
+        # a dimension has no group 39: AutoCAD leaves Thickness out rather
+        # than showing it as varying, which is what our getter would produce
+        assert "Thickness" not in rows_of(dim.dimension)
+        assert "Thickness" in rows_of(msp.add_line((0, 0), (1, 1)))
+    finally:
+        win.document.dirty = False
+        win.close()
