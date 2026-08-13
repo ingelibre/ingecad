@@ -2120,9 +2120,43 @@ class MainWindow(QMainWindow):
         self._vp_model_cache = (self.document, scene)
         return scene
 
-    def _vp_live_draw(self) -> bool:
-        """Show the active viewport's content at its current view, live."""
+    def _vp_placement(self, vp):
+        """Where this viewport puts the model, or None if a matrix cannot say.
+
+        A twisted viewport or one with its own frozen layers is not a plain
+        scale-and-shift of the model, and a clipped one is not a rectangle:
+        those keep the baked path, which renders them properly.
+        """
         from core import layouts as layout_ops
+
+        try:
+            if getattr(vp, "frozen_layers", None):
+                return None
+            if float(vp.dxf.get("view_twist_angle", 0.0)):
+                return None
+            if vp.dxf.get("clipping_boundary_handle", None):
+                return None
+            factor = float(vp.dxf.height) / float(vp.dxf.view_height)
+            centre, view_centre = vp.dxf.center, vp.dxf.view_center_point
+            rect = layout_ops.viewport_rect(vp)
+        except Exception:
+            return None
+        if not (factor > 0):
+            return None
+        return {"rect": rect,
+                "base": (view_centre.x, view_centre.y),
+                "factor": factor,
+                "offset": (centre.x - view_centre.x, centre.y - view_centre.y)}
+
+    def _vp_live_draw(self) -> bool:
+        """Show EVERY viewport's content live, at its current view.
+
+        Not just the active one: the sheet's baked content is one pool shared
+        by all of them (they draw the same model entities), so hiding it for
+        the viewport being navigated hides it for the rest too — which blanked
+        the other viewports the moment a pan started.
+        """
+        from core.layouts import visible_viewports
 
         vp = self._active_vp
         if vp is None or not vp.is_alive or self.document is None:
@@ -2130,23 +2164,18 @@ class MainWindow(QMainWindow):
         scene = self._vp_model_scene()
         if scene is None:
             return False
-        try:
-            rect = layout_ops.viewport_rect(vp)
-            centre = vp.dxf.center
-            view_centre = vp.dxf.view_center_point
-            factor = float(vp.dxf.height) / float(vp.dxf.view_height)
-        except Exception:
-            return False
-        if not (factor > 0):
+        layout = self.document.doc.layouts.get(self._active_layout)
+        placements = []
+        for other in visible_viewports(layout):
+            placement = self._vp_placement(other)
+            if placement is None:
+                return False        # one of them needs the bake: all do
+            placement["scene"] = scene
+            placements.append(placement)
+        if not placements:
             return False
         self._vp_hide_baked_content()
-        self.viewport.set_live_viewport({
-            "scene": scene,
-            "rect": rect,
-            "base": (view_centre.x, view_centre.y),
-            "factor": factor,
-            "offset": (centre.x - view_centre.x, centre.y - view_centre.y),
-        })
+        self.viewport.set_live_viewport(placements)
         return True
 
     def _vp_hide_baked_content(self) -> None:

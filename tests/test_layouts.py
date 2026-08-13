@@ -1155,7 +1155,7 @@ def test_live_viewport_matrix_matches_the_baked_placement(qapp):
         win._active_vp = vp
         assert win._vp_live_draw() is True
 
-        live = win.viewport._live_vp
+        live = win.viewport._live_vp[0]
         factor = float(vp.dxf.height) / float(vp.dxf.view_height)
         assert abs(live["factor"] - factor) < 1e-12
         # a model point maps to paper as the bake does
@@ -1171,6 +1171,70 @@ def test_live_viewport_matrix_matches_the_baked_placement(qapp):
 
         win._vp_live_stop()
         assert win.viewport._live_vp is None
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_live_navigation_keeps_every_viewport_drawn(qapp):
+    """Navigating one viewport blanked the others: the sheet's baked content
+    is one pool shared by all of them — they draw the same model entities —
+    so hiding it for the viewport being panned hid it for the rest, and only
+    the active one was redrawn. Every visible viewport gets a placement."""
+    from core.layouts import visible_viewports
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        doc = win.document
+        doc.modelspace().add_circle((50, 25), 10)
+        psp = doc.doc.layouts.get("Layout1")
+        big = psp.add_viewport(center=(100, 70), size=(160, 100),
+                               view_center_point=(50, 25), view_height=60)
+        small = psp.add_viewport(center=(210, 30), size=(60, 40),
+                                 view_center_point=(50, 25), view_height=15)
+        win._active_layout = "Layout1"
+        win._active_vp = small          # navigating the SMALL one
+
+        assert win._vp_live_draw() is True
+        live = win.viewport._live_vp
+        assert len(live) == len(list(visible_viewports(psp))) == 2
+        rects = {tuple(round(v, 3) for v in p["rect"]) for p in live}
+        for vp in (big, small):
+            x0 = vp.dxf.center.x - vp.dxf.width / 2
+            y0 = vp.dxf.center.y - vp.dxf.height / 2
+            key = (round(x0, 3), round(y0, 3),
+                   round(x0 + vp.dxf.width, 3), round(y0 + vp.dxf.height, 3))
+            assert key in rects
+        # each keeps its own scale, and they share the one tessellation
+        assert len({p["factor"] for p in live}) == 2
+        assert len({id(p["scene"]) for p in live}) == 1
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_a_viewport_a_matrix_cannot_reproduce_keeps_the_bake(qapp):
+    """A twisted viewport is not a scale-and-shift of the model, so the
+    whole sheet stays on the rebuild path rather than being drawn wrong."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        doc = win.document
+        doc.modelspace().add_circle((50, 25), 10)
+        psp = doc.doc.layouts.get("Layout1")
+        vp = psp.add_viewport(center=(100, 70), size=(160, 100),
+                              view_center_point=(50, 25), view_height=60)
+        win._active_layout = "Layout1"
+        win._active_vp = vp
+        assert win._vp_placement(vp) is not None
+
+        vp.dxf.view_twist_angle = 30.0
+        assert win._vp_placement(vp) is None
+        assert win._vp_live_draw() is False
     finally:
         win.document.dirty = False
         win.close()

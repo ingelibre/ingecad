@@ -327,12 +327,13 @@ class Viewport(QOpenGLWidget):
         self.update()
 
     def set_live_viewport(self, live) -> None:
-        """Draw a viewport's content from a model scene, live.
+        """Draw the sheet's viewports from a model scene, live.
 
-        ``live`` is ``{"scene", "rect", "base", "factor", "offset"}`` or
-        None. Panning or zooming inside a floating viewport then costs one
-        matrix, not a re-tessellation of the whole sheet — the sheet's baked
-        copy of that content is hidden while this is on.
+        ``live`` is a list of ``{"scene", "rect", "base", "factor",
+        "offset"}`` — one per viewport, all sharing the one tessellation —
+        or None. Panning or zooming inside a floating viewport then costs a
+        matrix per viewport instead of a re-tessellation of the whole sheet,
+        whose baked copy of that content is hidden while this is on.
         """
         self._live_vp = live
         self._live_vp_dirty = True
@@ -871,8 +872,10 @@ class Viewport(QOpenGLWidget):
         the drag ghost uses — so a pan tick is a uniform update instead of a
         200 ms rebuild of the sheet.
         """
-        live = self._live_vp
-        scene = live["scene"]
+        placements = self._live_vp
+        if not placements:
+            return
+        scene = placements[0]["scene"]
         if getattr(self, "_live_vp_dirty", False) or not getattr(
                 self, "_live_vp_bufs", None):
             for vao, vbo, _c in (getattr(self, "_live_vp_bufs", None) or {}).values():
@@ -890,6 +893,12 @@ class Viewport(QOpenGLWidget):
         if not self._live_vp_bufs:
             return
 
+        gl.glEnable(GL_SCISSOR_TEST)
+        for live in placements:
+            self._draw_one_live_viewport(gl, live, scene)
+        gl.glDisable(GL_SCISSOR_TEST)
+
+    def _draw_one_live_viewport(self, gl, live, scene) -> None:
         # Clip to the viewport's frame, in device pixels with y flipped —
         # GL counts scissor rows from the bottom.
         x0, y0, x1, y1 = live["rect"]
@@ -900,7 +909,6 @@ class Viewport(QOpenGLWidget):
         pw, ph = int((sx1 - sx0) * dpr), int((sy1 - sy0) * dpr)
         if pw <= 0 or ph <= 0:
             return
-        gl.glEnable(GL_SCISSOR_TEST)
         gl.glScissor(px, int(self.height() * dpr) - py - ph, pw, ph)
         ox, oy = scene.origin
         mvp = self._mvp_about(ox, oy, live["base"], 0.0, live["factor"],
@@ -919,7 +927,6 @@ class Viewport(QOpenGLWidget):
         self._program.release()
         self._draw_thick(gl, mvp, None, self._live_vp_bufs.get("thick"),
                          scene.thick)
-        gl.glDisable(GL_SCISSOR_TEST)
 
     def _upload_overlay(self) -> None:
         for vao, vbo, _count in self._overlay_bufs.values():
