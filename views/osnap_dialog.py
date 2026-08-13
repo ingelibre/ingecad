@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from core import osnap as osnap_modes
@@ -70,12 +71,13 @@ class _MarkerStub:
     MARKER_COLOR = _V.MARKER_COLOR
 
 
-class OsnapSettingsDialog(QDialog):
-    """Tick the running snaps. Returns the chosen keys via ``modes()``."""
+class OsnapModesPanel(QWidget):
+    """The running-snap checkboxes, shared by the Drafting Settings dialog
+    and the Drafting tab of OPTIONS — one list, so the two can never drift.
+    """
 
     def __init__(self, parent, active, enabled: bool = True) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("Drafting Settings"))
         self._boxes: dict[str, QCheckBox] = {}
 
         self.enabled = QCheckBox(tr("Object Snap On (F3)"))
@@ -114,15 +116,11 @@ class OsnapSettingsDialog(QDialog):
                          "modes are ticked here."))
         hint.setStyleSheet("color: #9aa0a6;")
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.enabled)
         layout.addLayout(middle, 1)
         layout.addWidget(hint)
-        layout.addWidget(buttons)
 
     def _set_all(self, state: bool) -> None:
         for key, box in self._boxes.items():
@@ -135,3 +133,26 @@ class OsnapSettingsDialog(QDialog):
 
     def osnap_on(self) -> bool:
         return self.enabled.isChecked()
+
+
+class OsnapSettingsDialog(QDialog):
+    """DSETTINGS: the running object snaps, AutoCAD's Drafting Settings."""
+
+    def __init__(self, parent, active, enabled: bool = True) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(tr("Drafting Settings"))
+        self.panel = OsnapModesPanel(self, active, enabled)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.panel, 1)
+        layout.addWidget(buttons)
+
+    def modes(self) -> set:
+        return self.panel.modes()
+
+    def osnap_on(self) -> bool:
+        return self.panel.osnap_on()

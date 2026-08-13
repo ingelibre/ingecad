@@ -220,6 +220,14 @@ class MainWindow(QMainWindow):
         if self.dispatcher.pending_prompt is not None:
             self.dispatcher.submit("")      # accept the prompt's default
             return
+        from views.options_dialog import RIGHT_CLICK_ENTER, right_click_mode
+
+        if right_click_mode() == RIGHT_CLICK_ENTER and not self.tools.selection:
+            # Options > User Preferences > Right-click Customization: the
+            # drafters who set this want Enter, which repeats the last
+            # command exactly as pressing it would.
+            self.dispatcher.submit("")
+            return
         self.show_canvas_context_menu(global_pos)
 
     def show_canvas_context_menu(self, global_pos) -> None:
@@ -298,6 +306,9 @@ class MainWindow(QMainWindow):
             zoom.addAction(tr("Previous"), self.viewport.zoom_previous)
             menu.addSeparator()
             menu.addAction(tr("Properties"), self.toggle_properties_panel)
+            # "with no commands active and no objects selected" (p. 1314):
+            # Options belongs to the Default mode menu only.
+            menu.addAction(tr("Options..."), self._cmd_options)
         return menu
 
     def _add_type_entries(self, menu, selection: list) -> None:
@@ -324,6 +335,12 @@ class MainWindow(QMainWindow):
         elif kind == "DIMENSION":
             menu.addAction(tr("Dimension Style..."),
                            lambda: self.dispatcher.submit("DIMSTYLE"))
+
+    def _cmd_options(self, *args) -> None:
+        """OPTIONS: the program settings (p. 1314)."""
+        from views.options_dialog import OptionsDialog
+
+        OptionsDialog(self).exec()
 
     def _draworder(self, mode: str) -> None:
         """Tools > Draw Order and the shortcut menu: act on the selection, or
@@ -670,6 +687,10 @@ class MainWindow(QMainWindow):
             act.triggered.connect(lambda _=False, c=code: self._set_language(c))
             lang_group.addAction(act)
             lang_menu.addAction(act)
+        tools_menu.addSeparator()
+        # Where the classic pre-ribbon AutoCAD kept it, and the last entry
+        # of the menu as it has always been.
+        item(tools_menu, tr("Options..."), self._cmd_options)
 
         # -- Window / Help ----------------------------------------------------
         window_menu = menu_bar.addMenu(tr("Window"))
@@ -893,6 +914,7 @@ class MainWindow(QMainWindow):
                 QShortcut(QKeySequence(fkey), self,
                           lambda k=key: self._toggle_mode(k))
         self._load_osnap_modes()
+        self._load_display_settings()
 
     def _toggle_space(self) -> None:
         if self.document is None or self._active_layout == "Model":
@@ -941,6 +963,17 @@ class MainWindow(QMainWindow):
         self.command_line.echo(f"{names[which]}: {state}")
 
     # -- running object snaps (the status-bar dropdown) ------------------------
+    def _load_display_settings(self) -> None:
+        """Restore what Options > Display persists. Saving a toggle and then
+        losing it on the next start is worse than not offering it."""
+        from views.options_dialog import SETTING_GRID, SETTING_LWT, _bool_setting
+
+        self.viewport.lwt_on = _bool_setting(SETTING_LWT,
+                                             bool(self.viewport.lwt_on))
+        self.viewport.grid_on = _bool_setting(SETTING_GRID,
+                                              bool(self.viewport.grid_on))
+        self._update_mode_buttons()
+
     def _osnap_settings_key(self) -> str:
         return "osnap/osmode"
 
@@ -1749,6 +1782,7 @@ class MainWindow(QMainWindow):
         d.register("ZOOM", self._cmd_zoom)
         d.register("PAN", self._cmd_pan)
         d.register("REGEN", self._cmd_regen)
+        d.register("OPTIONS", self._cmd_options)
         d.register("U", self._cmd_undo)
         d.register("UNDO", self._cmd_undo)
         d.register("REDO", self._cmd_redo)

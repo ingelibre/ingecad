@@ -164,10 +164,10 @@ def test_the_osnap_menu_lists_every_mode_in_autocads_order(win):
 
     dialog = OsnapSettingsDialog(win, win.tools.osnap_modes, True)
     try:
-        assert list(dialog._boxes) == [m.key for m in osnap_modes.MODES]
+        assert list(dialog.panel._boxes) == [m.key for m in osnap_modes.MODES]
         # The three we cannot do yet are listed, disabled, with a reason.
         for key in ("EXT", "APP", "PAR"):
-            box = dialog._boxes[key]
+            box = dialog.panel._boxes[key]
             assert not box.isEnabled() and box.toolTip()
         assert "END" in dialog.modes()
     finally:
@@ -220,9 +220,9 @@ def test_the_settings_dialog_can_clear_and_select_everything(win):
 
     dialog = OsnapSettingsDialog(win, win.tools.osnap_modes, True)
     try:
-        dialog._set_all(False)
+        dialog.panel._set_all(False)
         assert dialog.modes() == set()
-        dialog._set_all(True)
+        dialog.panel._set_all(True)
         assert dialog.modes() == set(osnap_modes.AVAILABLE)
     finally:
         dialog.deleteLater()
@@ -325,6 +325,79 @@ def test_the_shortcut_menu_follows_the_reference(qapp):
         assert entries({poly.dxf.handle})["Polyline"] == ["Edit..."]
         assert "Edit..." not in entries({line.dxf.handle})
         assert "Polyline" not in entries({text.dxf.handle, poly.dxf.handle})
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_options_dialog_persists_what_it_offers(qapp):
+    """OPTIONS (p. 1314) under AutoCAD's tab names, holding only settings
+    that exist. Everything it shows must survive Apply and be readable
+    again — a toggle that forgets itself is worse than no toggle."""
+    from PySide6.QtCore import QSettings
+
+    from views.main_window import MainWindow
+    from views.options_dialog import (RIGHT_CLICK_ENTER, SETTING_LWT,
+                                      SETTING_RIGHT_CLICK, OptionsDialog,
+                                      right_click_mode)
+    from views.startup_dialog import SETTING_TEMPLATE
+
+    keys = (SETTING_TEMPLATE, SETTING_LWT, SETTING_RIGHT_CLICK)
+    saved = {k: QSettings().value(k) for k in keys}
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        dlg = OptionsDialog(win)
+        assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == [
+            "Files", "Display", "Drafting", "User Preferences"]
+
+        dlg.template.setCurrentIndex(dlg.template.findData("m"))
+        dlg.show_lwt.setChecked(not win.viewport.lwt_on)
+        wanted_lwt = dlg.show_lwt.isChecked()
+        dlg.right_click.setCurrentIndex(
+            dlg.right_click.findData(RIGHT_CLICK_ENTER))
+        # the Drafting tab is the very widget the Drafting Settings dialog uses
+        assert hasattr(dlg.osnap_panel, "modes")
+        dlg.apply()
+
+        assert win.viewport.lwt_on == wanted_lwt
+        assert str(QSettings().value(SETTING_TEMPLATE)) == "m"
+        assert right_click_mode() == RIGHT_CLICK_ENTER
+
+        # a fresh window comes up with the display setting restored
+        other = MainWindow()
+        try:
+            assert other.viewport.lwt_on == wanted_lwt
+        finally:
+            other.close()
+    finally:
+        settings = QSettings()
+        for key, value in saved.items():
+            if value is None:
+                settings.remove(key)
+            else:
+                settings.setValue(key, value)
+        win.document.dirty = False
+        win.close()
+
+
+def test_options_is_offered_only_with_nothing_selected(qapp):
+    """The reference: "with no commands active and no objects selected"."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        line = win.document.modelspace().add_line((0, 0), (1, 1))
+        win.tools._invalidate_geometry()
+
+        def labels():
+            return [a.text() for a in win.build_canvas_context_menu().actions()]
+
+        win.tools.selection = set()
+        assert "Options..." in labels()
+        win.tools.selection = {line.dxf.handle}
+        assert "Options..." not in labels()
     finally:
         win.document.dirty = False
         win.close()
