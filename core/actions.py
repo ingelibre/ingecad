@@ -1114,7 +1114,8 @@ def _stamp_dim_block_byblock(document, dim) -> None:
             entity.dxf.layer = dim_layer   # ByLayer now means the dim's layer
 
 
-def translate_dim_text(document, dim, dx: float, dy: float) -> bool:
+def translate_dim_text(document, dim, dx: float, dy: float,
+                       set_user_flag: bool = True) -> bool:
     """Slide the text entities inside the dimension's block by (dx, dy).
 
     Used by the text grip: a pure translation keeps every other stroke of
@@ -1135,9 +1136,10 @@ def translate_dim_text(document, dim, dx: float, dy: float) -> bool:
     mid = dim.dxf.get("text_midpoint", None)
     if mid is not None:
         dim.dxf.text_midpoint = (mid.x + dx, mid.y + dy, mid.z)
-    # AutoCAD's "user positioned text" flag: its own re-render respects
-    # the moved spot instead of snapping the text back.
-    dim.dxf.dimtype = dim.dxf.dimtype | 128
+    if set_user_flag:
+        # AutoCAD's "user positioned text" flag: its own re-render respects
+        # the moved spot instead of snapping the text back.
+        dim.dxf.dimtype = dim.dxf.dimtype | 128
     return True
 
 
@@ -1229,9 +1231,35 @@ class DimGripCommand(Command):
                 if e.dxftype() in ("MTEXT", "TEXT"):
                     d.dxf.text_rotation = _block_text_rotation(e)
                     break
+        # The author's text sits at a measured offset from the line;
+        # ezdxf's dimtad side convention can land it on the OTHER side
+        # (casa bueno: 0.086 left became 0.085 right — the label read as
+        # "behind the line"). Capture the perpendicular offset and restore
+        # it by translation after the render.
+        import math
+
+        old_mid = d.dxf.get("text_midpoint", None)
+        old_loc = d.dxf.get("defpoint", None)
+        angle = math.radians(float(d.dxf.get("angle", 0.0)))
+        nx, ny = -math.sin(angle), math.cos(angle)
+        perp_old = None
+        if old_mid is not None and old_loc is not None \
+                and (int(d.dxf.dimtype) & 7) in (0, 1):
+            perp_old = (old_mid.x - old_loc.x) * nx \
+                + (old_mid.y - old_loc.y) * ny
         setattr(d.dxf, self.attr, (self.point[0], self.point[1], 0.0))
         d.render()
         _stamp_dim_block_byblock(document, d)
+        if perp_old is not None:
+            new_mid = d.dxf.get("text_midpoint", None)
+            new_loc = d.dxf.get("defpoint", None)
+            if new_mid is not None and new_loc is not None:
+                perp_new = (new_mid.x - new_loc.x) * nx \
+                    + (new_mid.y - new_loc.y) * ny
+                shift = perp_old - perp_new
+                if abs(shift) > 1e-9:
+                    translate_dim_text(document, d, nx * shift, ny * shift,
+                                       set_user_flag=False)
         _drop_dim_block(document, old_block)
         document.dirty = True
 

@@ -560,3 +560,24 @@ def test_dim_grip_edit_keeps_the_original_text_rotation():
     rotations = [e.dxf.get("rotation", 0.0) for e in block
                  if e.dxftype() == "MTEXT"]
     assert rotations == [0.0]
+
+
+def test_dim_grip_keeps_the_texts_side_of_the_line():
+    """ezdxf's dimtad side convention can land the label on the OTHER
+    side of the line (casa bueno: 0.086 left became 0.085 right — 'el
+    texto pasó detrás de la línea'). The grip edit preserves the
+    perpendicular offset by translation after the render."""
+    from core.actions import DimGripCommand
+    from core.commands import History
+
+    doc, msp = _msp()
+    dim = msp.add_linear_dim(base=(4, 5), p1=(0, 0), p2=(0, 10),
+                             angle=90).render().dimension
+    # push the text to a definite side of the line, like the author's CAD
+    mid = dim.dxf.text_midpoint
+    line_x = dim.dxf.defpoint.x
+    offset = -0.4                       # firmly LEFT of the line
+    dim.dxf.text_midpoint = (line_x + offset, mid.y, 0)
+    History(doc).execute(DimGripCommand(dim, "defpoint", (6.0, 5.0)))
+    new_offset = dim.dxf.text_midpoint.x - dim.dxf.defpoint.x
+    assert abs(new_offset - offset) < 1e-6
