@@ -31,7 +31,7 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature AutoCAD clone.
 
-## Status — v0.3
+## Status — v0.4
 
 What works today:
 
@@ -87,9 +87,16 @@ What works today:
 - **Grips on every selectable type**, dimensions included: drag an
   extension origin to re-measure, the line to relocate, the text to move
   the label — with alignment snapping to neighbouring dimensions.
+- **The AutoCAD shortcut menu**, built from the Command Reference's own
+  Access Methods, with the commands behind it: object isolation, Select
+  Similar, Add Selected, Quick Select, Group, Find and Replace, QuickCalc
+  and Draw Order.
+- **A settings window** (`OPTIONS`) under AutoCAD's tab names, including
+  right-click customization.
 
-Planned next (v0.4): survey-point import with elevations, coordinate
-tables, elevation profiles. See `CLAUDE.md` for the roadmap.
+Planned next (v0.5): survey-point import with elevations, coordinate
+tables, elevation profiles — as the first discipline plug-in. See
+`CLAUDE.md` for the roadmap.
 
 ## Install (Linux, x86_64)
 

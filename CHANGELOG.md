@@ -1,5 +1,89 @@
 # Changelog
 
+## v0.4.0 — 2026-08-13
+
+The right-click menu, seven commands that were missing behind it, a
+settings window, and the sheet navigating at speed.
+
+### Added — the shortcut menu, and what it needed
+- **The canvas shortcut menu rebuilt from the reference itself.** 93 of the
+  Command Reference's pages name the shortcut menu among their Access
+  Methods; every one IngeCAD can honour is now there. With nothing
+  selected: Clipboard, Undo, Redo, Pan, Zoom (Extents/Window/Previous),
+  Quick Select, QuickCalc, Find, Properties and Options. With a selection:
+  Erase, Move, Copy Selection, Scale, Rotate, Draw Order, Isolate, Group,
+  Add Selected, Select Similar, Deselect All — plus the entries the
+  reference gives a single object of a kind: `Edit` for text, `Polyline ▸
+  Edit`, `Image ▸ Adjust / Transparency`, `Dimension Style`.
+- **`ISOLATEOBJECTS` / `HIDEOBJECTS` / `UNISOLATEOBJECTS`** — object
+  isolation, display-only as the reference insists ("temporarily"): nothing
+  in the drawing changes, it never reaches the file, and a hidden object
+  cannot be picked either.
+- **`SELECTSIMILAR`** with its Select Similar Settings dialog and AutoCAD's
+  default (layer plus block name).
+- **`ADDSELECTED`**: the picked object's general properties become current
+  and the command that draws its type starts.
+- **`QSELECT`**: Apply to, Object type, Property, Operator, Value,
+  Include/Exclude and Append — with the operators each property actually
+  accepts, as p. 1586 specifies.
+- **`GROUP`**: the Object Grouping dialog, names validated to the
+  documented rule, and picking one member selecting the whole group
+  (per-group Selectable, all of it off under PICKSTYLE 0). Groups live in
+  the drawing's own dictionary, so one made here is a group in AutoCAD.
+- **`FIND`**: find and replace across the drawing, a layout or the
+  selection, with the results list, Zoom to and Select — undoable, and it
+  reaches text, MTEXT, attributes and dimension overrides.
+- **`QUICKCALC`**: input, history, number pad, scientific functions and
+  unit conversion over the reference's four unit types. Expressions are
+  evaluated by walking the parse tree and refusing anything that is not
+  arithmetic.
+- **`OPTIONS`** (`OP`): the settings window, under AutoCAD's own tab names
+  — Files, Display, Drafting and User Preferences. Among them a real new
+  setting: **Right-click Customization**, so the right button on an idle
+  canvas can be the shortcut menu or Enter, the way many drafters set
+  AutoCAD up.
+- **Draw Order in one click** from Tools and from the shortcut menu, and
+  **Properties shows the style of every styled object** — a dimension's
+  Dim style (editable, re-rendering it), a text's or attribute's style, a
+  leader's.
+
+### Performance
+- **Pan and zoom inside a floating viewport: 146 ms a tick to 5.2 ms.** The
+  model is tessellated once and each tick is a matrix and a scissor
+  rectangle instead of a rebuild of the whole sheet. Verified against the
+  rebuild it replaces: 0 of 674 370 pixels differ.
+- Measured and left alone: model-space navigation. A frame is 0.6 ms even
+  on a drawing of 4.5 million vertices — the cost there is the 60 Hz screen
+  refresh, now a setting (Options ▸ Display) for whoever prefers lower lag
+  to no tearing.
+
+### Fixed
+- **Trimmed and extended pieces came back on layer 0.** A trimmed line is
+  that line, shortened: pieces now keep layer, colour, linetype, linetype
+  scale, lineweight and transparency — and their XDATA, which is somebody
+  else's data hanging off that object. Twelve places across TRIM, EXTEND,
+  FILLET and CHAMFER.
+- **Ctrl+Z did nothing after a command was typed.** The undo was never
+  broken; the key was being eaten by the command line, which claims it for
+  its own text undo. In a CAD that key means the drawing, wherever the
+  focus is.
+- **The dimension style preview drew no dimensions at all** for any style
+  with an AutoCAD arrowhead (`_ARCHTICK` — every architectural style), and
+  no text for styles meant for drawings in metres. The sample sizes itself
+  to the style now.
+- **The crosshair jumped back to where a pan started** instead of staying
+  under the pointer.
+- Navigating one viewport blanked the others.
+
+### Upstream (GNU LibreDWG)
+- **`vendor/` re-based to 0.14.8580 plus the seventeen open pull requests**,
+  each taken from the PR's own head — the previous vendor carried a stale
+  draft that corrupted MTEXT in pre-r2007 drawings. Accents now survive in
+  all sixteen cells of the matrix (eight places a string can live, two
+  source versions); the old vendor had seven wrong.
+- Write-path fuzz over 2000 drawings: for a modern source and the r2000
+  target, which is what saving does, **1015 of 1015 round-trip unchanged**.
+
 ## v0.3.2 — 2026-08-13
 
 A bug-fix release with one headline: **accents survive "Save as DWG"**.
