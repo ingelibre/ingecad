@@ -550,7 +550,11 @@ def test_dim_grip_edit_keeps_the_original_text_rotation():
     block = doc.doc.blocks.get(dim.dxf.geometry)
     for e in block:
         if e.dxftype() == "MTEXT":
-            e.dxf.rotation = 0.0        # the author's CAD wrote horizontal
+            # the author's CAD wrote horizontal, and via the VECTOR form
+            # (casa bueno stores orientation as text_direction, not the
+            # rotation attribute)
+            e.dxf.discard("rotation")
+            e.dxf.text_direction = (1.0, 0.0, 0.0)
     History(doc).execute(DimGripCommand(dim, "defpoint", (6.0, 4.0)))
     block = doc.doc.blocks.get(dim.dxf.geometry)
     rotations = [e.dxf.get("rotation", 0.0) for e in block

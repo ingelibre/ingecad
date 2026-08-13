@@ -1177,6 +1177,23 @@ def _drop_dim_block(document, name) -> None:
             pass
 
 
+def _block_text_rotation(entity) -> float:
+    """The rotation a block's text DISPLAYS at, in degrees.
+
+    An MTEXT can store its orientation either as the rotation attribute
+    or as the text_direction vector — casa bueno's dims use the vector
+    ((0,1,0) = 90°), and reading only the attribute forced every aligned
+    label horizontal on the first grip edit.
+    """
+    import math
+
+    direction = entity.dxf.get("text_direction", None)
+    if direction is not None and (abs(direction.x) > 1e-12
+                                  or abs(direction.y) > 1e-12):
+        return math.degrees(math.atan2(direction.y, direction.x)) % 360.0
+    return float(entity.dxf.get("rotation", 0.0))
+
+
 class DimGripCommand(Command):
     """A grip moved one of a dimension's definition points.
 
@@ -1210,7 +1227,7 @@ class DimGripCommand(Command):
                 and old_block in document.doc.blocks:
             for e in document.doc.blocks.get(old_block):
                 if e.dxftype() in ("MTEXT", "TEXT"):
-                    d.dxf.text_rotation = float(e.dxf.get("rotation", 0.0))
+                    d.dxf.text_rotation = _block_text_rotation(e)
                     break
         setattr(d.dxf, self.attr, (self.point[0], self.point[1], 0.0))
         d.render()
