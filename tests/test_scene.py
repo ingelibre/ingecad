@@ -400,3 +400,40 @@ def test_detached_glyph_parts_render():
     scene = build_scene(doc)
     o_verts = sum(n for _b, _s, n in scene.handle_ranges[o.dxf.handle])
     assert o_verts > 0
+
+
+def test_layout_viewport_text_keeps_its_counters():
+    """The paperspace viewport clipper explodes a multi-ring glyph into
+    sibling single-ring paths; per-path nesting then filled the O's
+    counter solid on every layout tab (Marco's capture). The nesting now
+    runs per CALL, so the model copy and the viewport copy of the same
+    text tessellate identically."""
+    doc = Document.new()
+    msp = doc.modelspace()
+    text = msp.add_text("COCINA O", dxfattribs={"height": 2.5,
+                                                "insert": (10.0, 10.0)})
+    layout = doc.doc.layouts.get("Layout1")
+    vp = layout.add_viewport(center=(100, 100), size=(80, 60),
+                             view_center_point=(15, 10), view_height=30)
+    vp.dxf.status = 2
+
+    def filled_area(scene, scale=1.0):
+        total = 0.0
+        for name, start, count in scene.handle_ranges.get(
+                text.dxf.handle, []):
+            if name != "triangles":
+                continue
+            pos = scene.triangles.data["pos"][start:start + count]
+            for i in range(0, len(pos), 3):
+                ax, ay = pos[i]; bx, by = pos[i + 1]; cx, cy = pos[i + 2]
+                total += abs((bx - ax) * (cy - ay)
+                             - (cx - ax) * (by - ay)) / 2.0
+        return total / (scale * scale)
+
+    vp_scale = 60.0 / 30.0        # paper units per model unit in the vp
+    model = filled_area(build_scene(doc, "Model"))
+    paper = filled_area(build_scene(doc, "Layout1"), scale=vp_scale)
+    assert model > 0
+    # filled counters would inflate the paper copy's ink by ~50 %+;
+    # tessellation density differences stay within a few percent
+    assert abs(paper - model) / model < 0.10

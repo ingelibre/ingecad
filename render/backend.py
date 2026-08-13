@@ -166,36 +166,45 @@ class VertexBackend(Backend):
         # bano. Classify by even-odd nesting instead: a ring inside an even
         # number of others is an exterior, odd makes it a hole of its
         # innermost container.
+        # The nesting runs over ALL rings of the CALL, not per path: the
+        # paperspace viewport clipper explodes a multi-ring glyph into
+        # sibling single-ring paths, and per-path nesting then filled the
+        # O's counter solid on every layout tab.
+        rings: list[list] = []
         for path in paths:
-            rings = [list(sub.flattening(self._flatten)) for sub in path.sub_paths()]
-            rings = [r for r in rings if len(r) >= 3]
-            if not rings:
-                continue
-            rings.sort(key=_ring_extent, reverse=True)
-            if self._kind == "T":
-                # Legibility metric for the viewport's tiny-text culling.
-                ys = [v.y for v in rings[0]]
-                bucket = self._bucket(properties)
+            for sub in path.sub_paths():
+                ring = list(sub.flattening(self._flatten))
+                if len(ring) >= 3:
+                    rings.append(ring)
+        if not rings:
+            return
+        rings.sort(key=_ring_extent, reverse=True)
+        groups: list[tuple[list, list]] = []   # (exterior, holes)
+        group_of: dict[int, int] = {}          # ring index -> group index
+        for i, ring in enumerate(rings):
+            containers = [j for j in range(i)
+                          if _point_in_ring(ring[0], rings[j])]
+            if len(containers) % 2 == 0:
+                group_of[i] = len(groups)
+                groups.append((ring, []))
+            else:
+                # innermost container: the smallest ring holding it
+                # (rings are sorted big to small, so the last one).
+                owner = containers[-1]
+                while owner not in group_of and containers:
+                    containers.pop()
+                    owner = containers[-1] if containers else 0
+                groups[group_of.get(owner, 0)][1].append(ring)
+        if self._kind == "T":
+            # Legibility metric for the viewport's tiny-text culling: one
+            # entry per exterior (a glyph), like the old per-path entry.
+            bucket = self._bucket(properties)
+            for exterior, _holes in groups:
+                ys = [v.y for v in exterior]
                 bucket.text_height_sum += max(ys) - min(ys)
                 bucket.text_count += 1
-            groups: list[tuple[list, list]] = []   # (exterior, holes)
-            group_of: dict[int, int] = {}          # ring index -> group index
-            for i, ring in enumerate(rings):
-                containers = [j for j in range(i)
-                              if _point_in_ring(ring[0], rings[j])]
-                if len(containers) % 2 == 0:
-                    group_of[i] = len(groups)
-                    groups.append((ring, []))
-                else:
-                    # innermost container: the smallest ring holding it
-                    # (rings are sorted big to small, so the last one).
-                    owner = containers[-1]
-                    while owner not in group_of and containers:
-                        containers.pop()
-                        owner = containers[-1] if containers else 0
-                    groups[group_of.get(owner, 0)][1].append(ring)
-            for exterior, holes in groups:
-                self._fill(exterior, holes, properties)
+        for exterior, holes in groups:
+            self._fill(exterior, holes, properties)
 
     def _fill(
         self,
