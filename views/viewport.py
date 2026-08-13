@@ -1362,6 +1362,14 @@ class Viewport(QOpenGLWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
+        # Self-healing: if the button that started a pan was released where
+        # we could not see it (over the floating MTEXT editor, another
+        # widget, outside the window), the release never arrives and the
+        # drag would stick to the cursor forever — Esc included, since it
+        # goes to the editor. No button down = no pan.
+        if self._panning and not (event.buttons()
+                                  & (Qt.MiddleButton | Qt.LeftButton)):
+            self._panning = False
         if self._pan_mode:
             if self._panning:
                 delta = pos - self._last_pos

@@ -1144,3 +1144,35 @@ def test_spline_preview_is_a_smooth_polyline(qapp):
         win.tools.cancel()
         win.document.dirty = False
         win.close()
+
+
+def test_a_swallowed_middle_release_does_not_stick_the_pan(qapp):
+    """Panning while the MTEXT editor is open: the middle-button release
+    lands on the editor, the viewport never sees it, and every later
+    mouse move kept panning (Esc included — it goes to the editor). A
+    move with no buttons down now ends the pan by itself."""
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    win = _editor_window(qapp)
+    try:
+        vp = win.viewport
+        vp._panning = True                     # the stuck state
+        vp._last_pos = QPointF(100, 100)
+        before = (vp.view.cx, vp.view.cy) if hasattr(vp.view, "cx") else None
+        move = QMouseEvent(QMouseEvent.Type.MouseMove, QPointF(140, 120),
+                           QPointF(140, 120), Qt.NoButton, Qt.NoButton,
+                           Qt.NoModifier)
+        vp.mouseMoveEvent(move)
+        assert vp._panning is False            # self-healed
+        # and a REAL drag still pans: move with the middle button held
+        vp._panning = True
+        vp._last_pos = QPointF(100, 100)
+        drag = QMouseEvent(QMouseEvent.Type.MouseMove, QPointF(90, 100),
+                           QPointF(90, 100), Qt.NoButton, Qt.MiddleButton,
+                           Qt.NoModifier)
+        vp.mouseMoveEvent(drag)
+        assert vp._panning is True             # still dragging
+    finally:
+        win.document.dirty = False
+        win.close()
