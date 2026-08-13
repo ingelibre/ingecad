@@ -91,6 +91,53 @@ def _maybe_z(rng: Random):
     return rng.uniform(-50, 4_500) if rng.random() < 0.25 else 0.0
 
 
+#: Lineweights AutoCAD accepts, in 1/100 mm, plus the three special values.
+LINEWEIGHTS = [-3, -2, -1, 0, 5, 13, 25, 35, 50, 70, 100, 158, 211]
+
+#: XDATA application names — the "another app wrote here" case that IngeCAD's
+#: conservative round-trip promises to preserve untouched.
+XDATA_APPS = ["ACAD", "INGECAD_TEST", "AEC_MODIFY", "CIVIL3D_XD"]
+
+
+def _gen_xdata(rng: Random) -> list:
+    """One XDATA group list, mixing the code types real files carry.
+
+    Deliberately excludes 1005 (handle) and 1003 (layer name), which name
+    other objects and may legitimately be re-resolved by a converter.
+    """
+    items = [(1000, rng.choice(["eje", "cota", "PT-14", "área"]))]
+    for _ in range(rng.randrange(1, 5)):
+        c = rng.choice([1000, 1040, 1070, 1071, 1010, 1041, 1042])
+        if c == 1000:
+            items.append((c, rng.choice(["norte", "bm-1", "revisión B"])))
+        elif c in (1040, 1041, 1042):
+            items.append((c, round(rng.uniform(-1e4, 1e4), 4)))
+        elif c == 1070:
+            items.append((c, rng.randrange(-32768, 32768)))
+        elif c == 1071:
+            items.append((c, rng.randrange(-2 ** 31, 2 ** 31)))
+        else:
+            items.append((c, (round(rng.uniform(-500, 500), 4),
+                              round(rng.uniform(-500, 500), 4),
+                              round(rng.uniform(-50, 50), 4))))
+    return items
+
+
+def _tilted_normal(rng: Random):
+    """A genuine OCS extrusion — not just the [0,0,-1] flip already covered.
+
+    Real plans carry these (a circle drawn on a rotated UCS), and the arbitrary
+    axis algorithm is where converters trip.
+    """
+    import math as _m
+
+    theta = rng.uniform(0.15, _m.pi / 2)     # away from +Z, never degenerate
+    phi = rng.uniform(0, 2 * _m.pi)
+    return [round(_m.sin(theta) * _m.cos(phi), 6),
+            round(_m.sin(theta) * _m.sin(phi), 6),
+            round(_m.cos(theta), 6)]
+
+
 def _common(rng: Random, header) -> dict:
     d: dict = {"layer": rng.randrange(len(header["layers"]))}
     p = rng.random()
@@ -106,6 +153,13 @@ def _common(rng: Random, header) -> dict:
         d["ltype"] = rng.choice(LINETYPES)
     if rng.random() < 0.2:
         d["ltscale"] = round(rng.uniform(0.01, 100.0), 4)
+    # Lineweight is an R2000+ entity property; an R12 source has nowhere to
+    # put it and an r12 target nowhere to keep it.
+    if (header["version"] != "R12" and header["target"] not in ("r12", "r14")
+            and rng.random() < 0.3):
+        d["lineweight"] = rng.choice(LINEWEIGHTS)
+    if header["version"] != "R12" and rng.random() < 0.25:
+        d["xdata"] = [rng.choice(XDATA_APPS), _gen_xdata(rng)]
     return d
 
 
@@ -167,6 +221,8 @@ def _gen_entity(rng: Random, header, kind: str, spread=200.0) -> dict:
     if kind == "LINE":
         d["start"] = _pt(rng, base, spread, z)
         d["end"] = _pt(rng, base, spread, _maybe_z(rng))
+        if rng.random() < 0.1:
+            d["extrusion"] = _tilted_normal(rng)
     elif kind == "POINT":
         d["loc"] = _pt(rng, base, spread, z)
     elif kind in ("CIRCLE", "ARC"):
@@ -179,6 +235,8 @@ def _gen_entity(rng: Random, header, kind: str, spread=200.0) -> dict:
             d["end_angle"] = round((a + rng.uniform(1, 359)) % 360, 4)
         if rng.random() < 0.15:
             d["extrusion"] = [0, 0, -1]
+        elif rng.random() < 0.12:
+            d["extrusion"] = _tilted_normal(rng)
     elif kind == "ELLIPSE":
         d["center"] = _pt(rng, base, spread, z)
         d["major_axis"] = [round(rng.uniform(1, 300), 6),
@@ -303,53 +361,67 @@ def _add_entity(layout, d: dict, header) -> None:
         at["linetype"] = d["ltype"]
     if "ltscale" in d:
         at["ltscale"] = d["ltscale"]
+    if "lineweight" in d:
+        at["lineweight"] = d["lineweight"]
     t = d["t"]
+    entity = _make_entity(layout, d, header, at, t)
+    if entity is not None and "xdata" in d:
+        app, items = d["xdata"]
+        doc = layout.doc
+        if app not in doc.appids:
+            doc.appids.add(app)
+        entity.set_xdata(app, list(items))
+
+
+def _make_entity(layout, d: dict, header, at: dict, t: str):
     if t == "LINE":
-        layout.add_line(d["start"], d["end"], dxfattribs=at)
+        if "extrusion" in d:
+            at["extrusion"] = d["extrusion"]
+        return layout.add_line(d["start"], d["end"], dxfattribs=at)
     elif t == "POINT":
-        layout.add_point(d["loc"], dxfattribs=at)
+        return layout.add_point(d["loc"], dxfattribs=at)
     elif t == "CIRCLE":
         if "extrusion" in d:
             at["extrusion"] = d["extrusion"]
-        layout.add_circle(d["center"], d["radius"], dxfattribs=at)
+        return layout.add_circle(d["center"], d["radius"], dxfattribs=at)
     elif t == "ARC":
         if "extrusion" in d:
             at["extrusion"] = d["extrusion"]
-        layout.add_arc(d["center"], d["radius"], d["start_angle"],
+        return layout.add_arc(d["center"], d["radius"], d["start_angle"],
                        d["end_angle"], dxfattribs=at)
     elif t == "ELLIPSE":
-        layout.add_ellipse(d["center"], d["major_axis"], d["ratio"],
+        return layout.add_ellipse(d["center"], d["major_axis"], d["ratio"],
                            d["start_param"], d["end_param"], dxfattribs=at)
     elif t == "LWPOLYLINE":
         if "const_width" in d:
             at["const_width"] = d["const_width"]
         if "elevation" in d:
             at["elevation"] = d["elevation"]
-        layout.add_lwpolyline(d["points"], format="xyb",
+        return layout.add_lwpolyline(d["points"], format="xyb",
                               close=d["closed"], dxfattribs=at)
     elif t == "POLYLINE3D":
-        layout.add_polyline3d(d["points"], dxfattribs=at)
+        return layout.add_polyline3d(d["points"], dxfattribs=at)
     elif t == "TEXT":
         at["insert"] = d["insert"]
         at["height"] = d["height"]
         at["rotation"] = d["rotation"]
         if "extrusion" in d:
             at["extrusion"] = d["extrusion"]
-        layout.add_text(d["text"], dxfattribs=at)
+        return layout.add_text(d["text"], dxfattribs=at)
     elif t == "MTEXT":
         at["insert"] = d["insert"]
         at["char_height"] = d["char_height"]
         at["width"] = d["width"]
-        layout.add_mtext(d["text"], dxfattribs=at)
+        return layout.add_mtext(d["text"], dxfattribs=at)
     elif t == "SOLID":
-        layout.add_solid(d["corners"], dxfattribs=at)
+        return layout.add_solid(d["corners"], dxfattribs=at)
     elif t == "3DFACE":
-        layout.add_3dface(d["corners"], dxfattribs=at)
+        return layout.add_3dface(d["corners"], dxfattribs=at)
     elif t == "SPLINE":
         if d["mode"] == "fit":
-            layout.add_spline(d["points"], degree=d["degree"], dxfattribs=at)
+            return layout.add_spline(d["points"], degree=d["degree"], dxfattribs=at)
         else:
-            layout.add_open_spline(d["points"], degree=d["degree"],
+            return layout.add_open_spline(d["points"], degree=d["degree"],
                                    dxfattribs=at)
     elif t == "HATCH":
         h = layout.add_hatch(dxfattribs=at)
@@ -359,10 +431,11 @@ def _add_entity(layout, d: dict, header) -> None:
             h.set_pattern_fill(d["pattern"], scale=d["scale"], angle=d["angle"])
         h.paths.add_polyline_path(
             [(p[0], p[1], p[2]) for p in d["path"]], is_closed=True)
+        return h
     elif t == "XLINE":
-        layout.add_xline(d["start"], d["unit"], dxfattribs=at)
+        return layout.add_xline(d["start"], d["unit"], dxfattribs=at)
     elif t == "RAY":
-        layout.add_ray(d["start"], d["unit"], dxfattribs=at)
+        return layout.add_ray(d["start"], d["unit"], dxfattribs=at)
     elif t in ("INSERT", "MINSERT"):
         at.update(xscale=d["xscale"], yscale=d["yscale"], zscale=d["zscale"],
                   rotation=d["rotation"])
@@ -372,17 +445,20 @@ def _add_entity(layout, d: dict, header) -> None:
                      spacing=(d["row_spacing"], d["col_spacing"]))
         for tag, text, ins in d["attribs"]:
             ref.add_attrib(tag, text, ins)
+        return ref
     elif t == "ATTDEF":
         at.update(insert=d["insert"], height=d["height"], prompt=d["prompt"],
                   tag=d["tag"])
-        layout.add_attdef(d["tag"], text=d["text"], dxfattribs=at)
+        return layout.add_attdef(d["tag"], text=d["text"], dxfattribs=at)
     elif t == "DIMLINEAR":
         dim = layout.add_linear_dim(base=d["base"], p1=d["p1"], p2=d["p2"],
                                     angle=d["angle"], text=d["text"],
                                     dxfattribs=at)
         dim.render()
+        # the DIMENSION itself carries the xdata; its rendered block does not
+        return dim.dimension if hasattr(dim, "dimension") else None
     elif t == "LEADER":
-        layout.add_leader(d["points"], dxfattribs=at)
+        return layout.add_leader(d["points"], dxfattribs=at)
 
 
 # ---------------------------------------------------------------------------
@@ -397,13 +473,53 @@ def _rp(p):
     return (_r(p[0]), _r(p[1]), _r(p[2]) if len(p) > 2 else 0.0)
 
 
+def _fp_xdata(e):
+    """The XDATA of the apps this harness writes, normalized for comparison.
+
+    Only our own appids are compared: ACAD's own groups are rewritten by every
+    converter by design (ACAD_DSTYLE, dimension overrides), and other apps'
+    are not something the generator controls.
+    """
+    xdata = getattr(e, "xdata", None)
+    if xdata is None:
+        return None
+    out = []
+    for app in sorted(XDATA_APPS):
+        if app == "ACAD":
+            continue
+        try:
+            tags = xdata.get(app)
+        except Exception:
+            continue
+        if not tags:
+            continue
+        items = []
+        for code, value in tags:
+            if code == 1001:
+                continue                       # the appid marker itself
+            if code in (1010, 1011, 1012, 1013):
+                items.append((code, _rp(value)))
+            elif code in (1040, 1041, 1042):
+                items.append((code, _r(value)))
+            else:
+                items.append((code, value))
+        out.append((app, tuple(items)))
+    return tuple(out) or None
+
+
 def _fp_common(e):
     dxf = e.dxf
     return (dxf.layer.upper(),
             dxf.color,
             dxf.true_color if dxf.hasattr("true_color") else None,
             dxf.linetype.upper(),
-            _r(dxf.ltscale))
+            _r(dxf.ltscale),
+            # An absent group 370 means BYLAYER (-1) per the DXF reference, so
+            # an explicit -1 and no group at all are the same statement; the
+            # normalization keeps a converter that spells out the default from
+            # reading as a difference. Anything else stated must survive.
+            dxf.lineweight if dxf.hasattr("lineweight") else -1,
+            _fp_xdata(e))
 
 
 def fingerprint(e):
@@ -411,7 +527,7 @@ def fingerprint(e):
     c = _fp_common(e)
     d = e.dxf
     if t == "LINE":
-        g = (_rp(d.start), _rp(d.end))
+        g = (_rp(d.start), _rp(d.end), _rp(d.extrusion))
     elif t == "POINT":
         g = (_rp(d.location),)
     elif t == "CIRCLE":
