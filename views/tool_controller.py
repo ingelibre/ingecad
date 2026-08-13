@@ -95,6 +95,59 @@ ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES,
 _VP_GRIP = "__viewport__"
 
 
+def _dim_grip_preview(entity, role, wx, wy):
+    """A live preview frame for a dimension grip drag, or None.
+
+    Linear/aligned dimensions rebuild their frame from the defpoints with
+    the dragged one replaced; the text grip ghosts the label at the
+    cursor. Rendering nothing while dragging read as "the grip does not
+    work" (Marco asked to SEE the line follow the green point).
+    """
+    import math
+
+    kind = int(entity.dxf.get("dimtype", 0)) & 7
+    measurement = None
+    try:
+        measurement = float(entity.get_measurement())
+    except Exception:
+        pass
+    if role == "dim_text":
+        return {"text_at": (wx, wy),
+                "text": f"{measurement:.2f}" if measurement is not None else ""}
+    if kind not in (0, 1):
+        return None
+    p1 = entity.dxf.get("defpoint2", None)
+    p2 = entity.dxf.get("defpoint3", None)
+    loc = entity.dxf.get("defpoint", None)
+    if p1 is None or p2 is None or loc is None:
+        return None
+    p1 = [p1.x, p1.y]
+    p2 = [p2.x, p2.y]
+    loc = [loc.x, loc.y]
+    if role == "dim_defpoint2":
+        p1 = [wx, wy]
+    elif role == "dim_defpoint3":
+        p2 = [wx, wy]
+    elif role == "dim_defpoint":
+        loc = [wx, wy]
+    if kind == 1:      # aligned: the line lies parallel to p1->p2
+        dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+        length = math.hypot(dx, dy)
+        if length <= 1e-12:
+            return None
+        ux, uy = dx / length, dy / length
+    else:              # linear: the stored angle fixes the direction
+        angle = math.radians(float(entity.dxf.get("angle", 0.0)))
+        ux, uy = math.cos(angle), math.sin(angle)
+        length = abs((p2[0] - p1[0]) * ux + (p2[1] - p1[1]) * uy)
+    t1 = (p1[0] - loc[0]) * ux + (p1[1] - loc[1]) * uy
+    t2 = (p2[0] - loc[0]) * ux + (p2[1] - loc[1]) * uy
+    d1 = (loc[0] + ux * t1, loc[1] + uy * t1)
+    d2 = (loc[0] + ux * t2, loc[1] + uy * t2)
+    return {"p1": tuple(p1), "p2": tuple(p2), "d1": d1, "d2": d2,
+            "text": f"{length:.2f}"}
+
+
 class ToolController(QObject):
     changed = Signal()  # something visual changed: repaint the viewport
 
@@ -757,6 +810,8 @@ class ToolController(QObject):
 
     # Commands whose touched entities are fully known, so the pick index can
     # be patched (remove + re-add) instead of rebuilt from scratch.
+    grip_dim_preview = None
+
     _KNOWN_MODIFY = (actions.EraseCommand, actions.TransformCommand,
                      actions.SetPropertyCommand, actions.ReplaceEntitiesCommand,
                      actions.CreateBlockCommand, actions.ExplodeCommand)
@@ -1446,8 +1501,12 @@ class ToolController(QObject):
         entity = self.index.entity(handle)
         if entity is not None:
             if role.startswith("dim_"):
-                # A dimension only re-renders at the drop: rendering per
-                # mouse move would churn one *D block per frame.
+                # A dimension only re-renders at the drop (a render per
+                # mouse move would churn one *D block per frame) — but the
+                # drag shows a live dimension preview instead of nothing.
+                self.grip_dim_preview = _dim_grip_preview(entity, role,
+                                                          wx, wy)
+                self.window.viewport.update()
                 return
             apply_grip_edit(entity, index, role, (wx, wy))
             # per frame: rebuild only the dragged entity's overlay — no
@@ -1472,6 +1531,7 @@ class ToolController(QObject):
         handle, index, role, snap = self._grip_drag
         self._grip_drag = None
         entity = self.index.entity(handle)
+        self.grip_dim_preview = None
         if entity is not None and role.startswith("dim_"):
             # Route through the dedicated command: it re-renders the block
             # and drops the old one, which the generic snapshot cannot undo.

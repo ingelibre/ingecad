@@ -419,10 +419,11 @@ def test_the_text_grip_never_swaps_a_foreign_block():
     assert dim.dxf.text_midpoint.x == mid_before.x
 
 
-def test_rendered_dim_blocks_wear_byblock_like_autocads():
-    """ezdxf leaves block geometry BYLAYER-on-0 (white); AutoCAD writes
-    BYBLOCK so a dim on a red layer draws red. Both our creation path and
-    the re-measuring grip stamp the block."""
+def test_rendered_dim_blocks_wear_the_dims_layer():
+    """ezdxf leaves block geometry BYLAYER-on-layer-0 (white); real
+    AutoCAD files put it on the DIMENSION'S layer with ByLayer color
+    (casa bueno's autopsy). Both our creation path and the re-measuring
+    grip stamp the block that way."""
     from core import actions
     from core.commands import History
 
@@ -432,14 +433,18 @@ def test_rendered_dim_blocks_wear_byblock_like_autocads():
     history = History(doc)
     history.execute(actions.dim_linear((0, 0), (30, 0), (15, 6)))
     dim = msp.query("DIMENSION")[0]
-    block = doc.doc.blocks.get(dim.dxf.geometry)
-    lines = [e for e in block if e.dxftype() == "LINE"]
-    assert lines and all(e.dxf.get("color", 256) == 0 for e in lines)
+
+    def check():
+        block = doc.doc.blocks.get(dim.dxf.geometry)
+        lines = [e for e in block if e.dxftype() == "LINE"]
+        assert lines
+        assert all(e.dxf.layer == "COTAS" for e in lines)
+        assert all(e.dxf.get("color", 256) == 256 for e in lines)
+
+    check()
     # the re-measure grip keeps the convention on its fresh block
     history.execute(actions.DimGripCommand(dim, "defpoint3", (45.0, 0.0)))
-    block = doc.doc.blocks.get(dim.dxf.geometry)
-    lines = [e for e in block if e.dxftype() == "LINE"]
-    assert lines and all(e.dxf.get("color", 256) == 0 for e in lines)
+    check()
 
 
 def test_a_small_autocad_text_is_pickable_on_its_visible_glyphs():
@@ -510,3 +515,44 @@ def test_a_session_created_entity_moves_without_lag(qapp):
     finally:
         win.document.dirty = False
         win.close()
+
+
+def test_dim_grip_preview_frames_the_dragged_dimension():
+    """While the green grip drags, the dimension shows a live preview
+    frame instead of nothing (Marco asked to SEE the line follow)."""
+    from views.tool_controller import _dim_grip_preview
+
+    _doc, msp = _msp()
+    dim = msp.add_linear_dim(base=(0, 10), p1=(0, 0), p2=(30, 0)) \
+             .render().dimension
+    # dragging the second origin re-measures live
+    preview = _dim_grip_preview(dim, "dim_defpoint3", 45.0, 0.0)
+    assert preview["text"] == "45.00"
+    assert preview["d1"][1] == preview["d2"][1]     # line stays horizontal
+    # dragging the line point relocates it
+    preview = _dim_grip_preview(dim, "dim_defpoint", 15.0, 20.0)
+    assert preview["d1"][1] == 20.0 and preview["text"] == "30.00"
+    # the text grip ghosts the label at the cursor
+    preview = _dim_grip_preview(dim, "dim_text", 5.0, 6.0)
+    assert preview["text_at"] == (5.0, 6.0)
+
+
+def test_dim_grip_edit_keeps_the_original_text_rotation():
+    """casa bueno's style keeps outside text horizontal (dimtoh); ezdxf's
+    renderer re-aligns it with the line. The grip edit preserves the
+    rotation the author's CAD chose."""
+    from core.actions import DimGripCommand
+    from core.commands import History
+
+    doc, msp = _msp()
+    dim = msp.add_linear_dim(base=(4, 10), p1=(0, 0), p2=(0, 8),
+                             angle=90).render().dimension
+    block = doc.doc.blocks.get(dim.dxf.geometry)
+    for e in block:
+        if e.dxftype() == "MTEXT":
+            e.dxf.rotation = 0.0        # the author's CAD wrote horizontal
+    History(doc).execute(DimGripCommand(dim, "defpoint", (6.0, 4.0)))
+    block = doc.doc.blocks.get(dim.dxf.geometry)
+    rotations = [e.dxf.get("rotation", 0.0) for e in block
+                 if e.dxftype() == "MTEXT"]
+    assert rotations == [0.0]

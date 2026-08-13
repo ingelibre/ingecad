@@ -970,6 +970,17 @@ class Viewport(QOpenGLWidget):
             self._draw_grips(p)
             if self.tool_delegate.active():
                 self._draw_tool_preview(p)
+            grip_dim = getattr(self.tool_delegate, "grip_dim_preview", None)
+            if grip_dim is not None:
+                color = (QColor(90, 90, 90) if self._light_background()
+                         else QColor(200, 200, 200))
+                p.setPen(QPen(color, 1, Qt.DashLine))
+                if "text_at" in grip_dim:
+                    tx, ty = self.view.world_to_screen(*grip_dim["text_at"])
+                    p.setPen(QPen(color))
+                    p.drawText(QPointF(tx, ty), grip_dim["text"])
+                else:
+                    self._draw_dim_preview(p, grip_dim, color)
             self._draw_live_text(p)
         if self._cursor is not None and not self._panning:
             self._draw_crosshair(p, self._cursor, self._cursor_mode())

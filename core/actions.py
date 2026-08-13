@@ -945,11 +945,13 @@ class AddDimensionCommand(Command):
         override = self._factory(document.modelspace(), document)
         override.render()
         self.dim = override.dimension
-        _stamp_dim_block_byblock(document, self.dim)
         self._block_name = self.dim.dxf.get("geometry", None)
         current = document.doc.header.get("$CLAYER", "0")
         if current in document.doc.layers:
             self.dim.dxf.layer = current
+        # AFTER the layer lands: the stamp dresses the block in the
+        # dimension's layer.
+        _stamp_dim_block_byblock(document, self.dim)
         document.dirty = True
 
     def undo(self, document) -> None:
@@ -1093,24 +1095,23 @@ def _dim_block_shared(document, name: str) -> bool:
 
 
 def _stamp_dim_block_byblock(document, dim) -> None:
-    """Make a freshly rendered *D block wear AutoCAD's colors.
+    """Make a freshly rendered *D block wear the dimension's own dress.
 
-    AutoCAD writes dimension-block geometry with color BYBLOCK, so it
-    inherits the dimension's own resolved color (a dim on a red layer
-    draws red). ezdxf's renderer leaves entities without an explicit
-    color — BYLAYER on layer 0, i.e. white — which is why re-rendering a
-    colleague's dimension visibly changed its color. Only entities the
-    style did not explicitly color are stamped.
+    Real AutoCAD files (casa bueno's autopsy) write the block geometry on
+    the DIMENSION'S LAYER with ByLayer color — a dim on layer Cota draws
+    Cota's magenta. ezdxf's renderer leaves entities on layer 0 with no
+    color, which resolved white on our canvas after every re-render.
+    Entities the style explicitly colored (dimclrd/e/t as real ACIs) and
+    the Defpoints markers stay untouched.
     """
     name = dim.dxf.get("geometry", None)
     if not name or name not in document.doc.blocks:
         return
+    dim_layer = dim.dxf.get("layer", "0")
     for entity in document.doc.blocks.get(name):
-        # BYLAYER-on-layer-0 is ezdxf's "no explicit style color" output;
-        # a real ACI written from dimclrd/dimclre/dimclrt stays untouched.
         if entity.dxf.get("color", 256) == 256 \
                 and entity.dxf.get("layer", "0") == "0":
-            entity.dxf.color = 0          # BYBLOCK
+            entity.dxf.layer = dim_layer   # ByLayer now means the dim's layer
 
 
 def translate_dim_text(document, dim, dx: float, dy: float) -> bool:
@@ -1201,6 +1202,16 @@ class DimGripCommand(Command):
                 k: v for k, v in d.dxf.all_existing_dxf_attribs().items()
                 if k not in ("geometry", "handle")}
         old_block = d.dxf.get("geometry", None)
+        # Preserve the text rotation the author's CAD chose: this file's
+        # style says outside text lies horizontal (dimtoh), which ezdxf's
+        # renderer does not reproduce — without this the label flipped to
+        # line-aligned on every grip edit.
+        if not d.dxf.hasattr("text_rotation") and old_block \
+                and old_block in document.doc.blocks:
+            for e in document.doc.blocks.get(old_block):
+                if e.dxftype() in ("MTEXT", "TEXT"):
+                    d.dxf.text_rotation = float(e.dxf.get("rotation", 0.0))
+                    break
         setattr(d.dxf, self.attr, (self.point[0], self.point[1], 0.0))
         d.render()
         _stamp_dim_block_byblock(document, d)
