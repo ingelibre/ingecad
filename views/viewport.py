@@ -748,7 +748,8 @@ class Viewport(QOpenGLWidget):
                     gl.glDrawArrays(mode, first, count)
                 vao.release()
             self._program.release()
-            self._draw_thick(gl, scene_mvp, view_rect)
+            self._draw_thick(gl, scene_mvp, view_rect,
+                             self._scene_bufs.get("thick"), self._scene.thick)
             self._draw_images(gl, scene_mvp, front=True)
         else:
             self._program.release()
@@ -762,8 +763,12 @@ class Viewport(QOpenGLWidget):
                         batch: Batch = getattr(group["scene"], name)
                         if batch.vertex_count:
                             group["bufs"][name] = self._make_vao(batch.data)
+                    if group["scene"].thick.vertex_count:
+                        group["bufs"]["thick"] = self._make_thick_vao(
+                            group["scene"].thick.data)
                 ox, oy = group["scene"].origin
                 for dx, dy in group["offsets"].values():
+                    self._program.bind()
                     self._program.setUniformValue(
                         self._loc_mvp, self._mvp(ox + dx, oy + dy))
                     for name, mode in (("triangles", GL_TRIANGLES),
@@ -776,12 +781,16 @@ class Viewport(QOpenGLWidget):
                         vao.bind()
                         gl.glDrawArrays(mode, 0, count)
                         vao.release()
+                    self._program.release()
+                    self._draw_thick(gl, self._mvp(ox + dx, oy + dy), None,
+                                     group["bufs"].get("thick"),
+                                     group["scene"].thick)
             self._program.release()
 
         if self._overlay_scene is not None and self._overlay_bufs:
+            overlay_mvp = self._mvp(*self._overlay_scene.origin)
             self._program.bind()
-            self._program.setUniformValue(
-                self._loc_mvp, self._mvp(*self._overlay_scene.origin))
+            self._program.setUniformValue(self._loc_mvp, overlay_mvp)
             for name, mode in (("triangles", GL_TRIANGLES),
                                ("lines", GL_LINES),
                                ("points", GL_POINTS)):
@@ -793,22 +802,23 @@ class Viewport(QOpenGLWidget):
                 gl.glDrawArrays(mode, 0, count)
                 vao.release()
             self._program.release()
+            self._draw_thick(gl, overlay_mvp, None,
+                             self._overlay_bufs.get("thick"),
+                             self._overlay_scene.thick)
 
         if self._ghost_scene is not None and self._ghost_bufs:
             # The ghost translates by shifting the vertex origin in the MVP:
             # same buffers every frame, only this uniform changes.
             ox, oy = self._ghost_scene.origin
             dx, dy = self._ghost_offset
-            self._program.bind()
             if self._ghost_base is None:
-                self._program.setUniformValue(self._loc_mvp,
-                                              self._mvp(ox + dx, oy + dy))
+                ghost_mvp = self._mvp(ox + dx, oy + dy)
             else:
-                self._program.setUniformValue(
-                    self._loc_mvp,
-                    self._mvp_about(ox, oy, self._ghost_base,
-                                    self._ghost_angle, self._ghost_factor,
-                                    dx, dy))
+                ghost_mvp = self._mvp_about(ox, oy, self._ghost_base,
+                                            self._ghost_angle,
+                                            self._ghost_factor, dx, dy)
+            self._program.bind()
+            self._program.setUniformValue(self._loc_mvp, ghost_mvp)
             for name, mode in (("triangles", GL_TRIANGLES),
                                ("lines", GL_LINES),
                                ("points", GL_POINTS)):
@@ -820,6 +830,9 @@ class Viewport(QOpenGLWidget):
                 gl.glDrawArrays(mode, 0, count)
                 vao.release()
             self._program.release()
+            self._draw_thick(gl, ghost_mvp, None,
+                             self._ghost_bufs.get("thick"),
+                             self._ghost_scene.thick)
 
         self._paint_overlay()
 
@@ -835,9 +848,11 @@ class Viewport(QOpenGLWidget):
             batch: Batch = getattr(self._overlay_scene, name)
             if batch.vertex_count:
                 self._overlay_bufs[name] = self._make_vao(batch.data)
-        # Note: thick-lineweight quads in the overlay are not drawn yet —
-        # freshly drawn entities default to thin lines; the next full regen
-        # merges them with correct weights.
+        # Thick quads too: an entity on a heavyweight layer (0.8 mm columns)
+        # otherwise vanishes between the edit and the deferred regen.
+        if self._overlay_scene.thick.vertex_count:
+            self._overlay_bufs["thick"] = self._make_thick_vao(
+                self._overlay_scene.thick.data)
 
     def _upload_ghost(self) -> None:
         for vao, vbo, _count in self._ghost_bufs.values():
@@ -854,6 +869,10 @@ class Viewport(QOpenGLWidget):
                 # dim so the ghost reads as a preview, not committed geometry
                 data["rgba"][:, 3] = (data["rgba"][:, 3] * 0.55).astype("u1")
                 self._ghost_bufs[name] = self._make_vao(data)
+        if self._ghost_scene.thick.vertex_count:
+            data = self._ghost_scene.thick.data.copy()
+            data["rgba"][:, 3] = (data["rgba"][:, 3] * 0.55).astype("u1")
+            self._ghost_bufs["thick"] = self._make_thick_vao(data)
 
     # Grid colors: faint minor lines, slightly brighter every 5th (major).
     GRID_MINOR = (52, 58, 66, 255)
@@ -920,21 +939,23 @@ class Viewport(QOpenGLWidget):
         x1, y0 = self.view.screen_to_world(self.width(), self.height())
         return (x0, y0, x1, y1)
 
-    def _draw_thick(self, gl, scene_mvp: QMatrix4x4, view_rect) -> None:
-        """Thick lineweight quads: one draw per visible weight range."""
-        buf = self._scene_bufs.get("thick")
+    def _draw_thick(self, gl, mvp: QMatrix4x4, view_rect, buf, batch) -> None:
+        """Thick lineweight quads: one draw per visible weight range.
+
+        ``view_rect`` of None skips culling — the overlay/ghost/stamp scenes
+        are small and their bounds are not view-aligned once offset.
+        """
         if buf is None:
             return
         vao, _vbo, _count = buf
-        batch = self._scene.thick
-        x0, y0, x1, y1 = view_rect
         prog = self._thick_program
         prog.bind()
-        prog.setUniformValue(self._loc_thick_mvp, scene_mvp)
+        prog.setUniformValue(self._loc_thick_mvp, mvp)
         vao.bind()
         # No run merging here: u_half_world changes per lineweight.
         for i, rng in enumerate(batch.ranges):
-            if batch.bounds is not None:
+            if view_rect is not None and batch.bounds is not None:
+                x0, y0, x1, y1 = view_rect
                 bx0, by0, bx1, by1 = batch.bounds[i]
                 if bx0 > x1 or bx1 < x0 or by0 > y1 or by1 < y0:
                     continue

@@ -392,6 +392,13 @@ class TolerantFrontend(Frontend):
         self.skipped: list[str] = []
 
     def draw_entity(self, entity, properties) -> None:
+        # ezdxf's draw_entity calls enter_entity BEFORE drawing and
+        # exit_entity after; an exception mid-draw skips the exit (for the
+        # entity and any open children). Unwind to this depth or the stale
+        # frames own every entity drawn afterwards — their vertices become
+        # invisible to hide_handles and inherit the wrong kind/group.
+        backend = getattr(self.pipeline, "backend", None)
+        depth = len(getattr(backend, "_open", ()))
         try:
             super().draw_entity(entity, properties)
         except Exception as exc:
@@ -399,6 +406,8 @@ class TolerantFrontend(Frontend):
             note = f"{entity.dxftype()}(#{handle}): {exc}"
             self.skipped.append(note)
             logger.warning("skipped unrenderable entity %s", note)
+            while backend is not None and len(backend._open) > depth:
+                backend.exit_entity(entity)
 
 
 def frontend_config(flatten: float) -> Configuration:

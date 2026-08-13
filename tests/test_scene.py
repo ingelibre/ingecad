@@ -471,3 +471,34 @@ def test_byblock_resolution_matches_autocads_doctrine():
     # ByLayer insert on VERDE: byblock -> insert's effective color (green)
     # AND the layer-0 chameleon rule paints the bylayer content green too
     assert colors_of(green) == {(0, 255, 0)}
+
+
+def test_a_failing_entity_does_not_poison_the_owner_stack():
+    """ezdxf calls enter_entity before drawing; an exception mid-draw skips
+    the exit. TolerantFrontend must unwind, or every entity drawn AFTER the
+    broken one is attributed to it (invisible to hide_handles, wrong kind)."""
+    from render.backend import (TolerantFrontend, TolerantRenderContext,
+                                VertexBackend, frontend_config)
+
+    doc = Document.new()
+    msp = doc.modelspace()
+    bad = msp.add_line((0, 0), (1, 0))
+    good = msp.add_circle((5, 5), 2.0)
+
+    backend = VertexBackend(0.01)
+    context = TolerantRenderContext(doc.doc)
+    frontend = TolerantFrontend(context, backend, frontend_config(0.01))
+
+    def boom(entity, properties):
+        raise RuntimeError("broken entity")
+    frontend._dispatch["LINE"] = boom
+
+    frontend.draw_entities([bad, good])
+    assert frontend.skipped and "LINE" in frontend.skipped[0]
+    assert backend._open == []                    # stack fully unwound
+    # the circle's vertices belong to the circle, not to the broken line
+    owners = set()
+    for bucket in backend.buckets.values():
+        owners.update(bucket.lines_owner)
+    assert good.dxf.handle in owners
+    assert bad.dxf.handle not in owners

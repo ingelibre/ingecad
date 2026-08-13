@@ -93,3 +93,33 @@ def test_cut_leaves_nothing_of_the_original(qapp):
     assert t.copy_selection(cut=True)
     assert _visible_alpha(win.viewport) == 0, "the cut original is still on screen"
     win.close()
+
+
+def test_overlay_and_ghost_uploads_carry_the_thick_batch(qapp):
+    """An entity on a heavyweight layer (0.8 mm columns) used to VANISH
+    between an edit and the deferred regen: the overlay upload skipped the
+    thick batch entirely ("not drawn yet"). Pin that overlay and ghost
+    uploads both produce a "thick" buffer for such an entity."""
+    from core.document import Document
+    from render.backend import build_scene_for_entities
+    from views.viewport import Viewport
+
+    doc = Document.new()
+    doc.doc.layers.add("columnas", color=3, lineweight=80)   # 0.8 mm
+    circle = doc.modelspace().add_circle(
+        (10.0, 10.0), 5.0, dxfattribs={"layer": "columnas"})
+    scene = build_scene_for_entities(doc, [circle], 0.01)
+    assert scene.thick.vertex_count > 0          # tessellated as thick quads
+    assert circle.dxf.handle in scene.handle_ranges
+
+    vp = Viewport()
+    vp._make_vao = lambda data: ("vao", "vbo", len(data))
+    vp._make_thick_vao = lambda data: ("vao", "vbo", len(data))
+    vp._overlay_scene = scene
+    vp._upload_overlay()
+    assert "thick" in vp._overlay_bufs
+
+    vp._ghost_bufs = {}
+    vp._ghost_scene = scene
+    vp._upload_ghost()
+    assert "thick" in vp._ghost_bufs
