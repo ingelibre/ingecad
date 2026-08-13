@@ -412,3 +412,41 @@ def test_the_color_combo_offers_byblock_too(qapp):
     texts = [combo.itemText(i) for i in range(combo.count())]
     assert "ByLayer" in texts and "ByBlock" in texts
     assert combo.itemData(texts.index("ByBlock")) == 0
+
+
+def test_picking_a_layer_snaps_the_color_back_to_bylayer(qapp):
+    """Marco's rule: choosing a layer in the Properties bar means 'let the
+    layer drive the look' — the color override (ByBlock, explicit) clears
+    to ByLayer in the same gesture, for the selection or for the current
+    drawing defaults. One undo step reverts both."""
+    from core import layers as layer_ops
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        doc = win.document
+        doc.doc.layers.add("MUROS", color=1)
+        line = doc.modelspace().add_line((0, 0), (1, 1),
+                                         dxfattribs={"color": 0})  # ByBlock
+        win.tools._invalidate_geometry()
+
+        # selection: layer change + color ByLayer, one undo step
+        win.tools.selection = {line.dxf.handle}
+        win._refresh_props_toolbar()
+        win._on_layer_combo(win._layer_combo.findText("MUROS"))
+        assert line.dxf.layer == "MUROS"
+        assert line.dxf.color == 256
+        win.history.undo()
+        assert line.dxf.layer == "0" and line.dxf.color == 0
+
+        # no selection: current layer + current color ByLayer
+        win.tools.selection = set()
+        doc.doc.header["$CECOLOR"] = 0                        # casa bueno's
+        win._refresh_props_toolbar()
+        win._on_layer_combo(win._layer_combo.findText("MUROS"))
+        assert doc.doc.header["$CLAYER"] == "MUROS"
+        assert layer_ops.current_property(doc, "color") == 256
+    finally:
+        win.document.dirty = False
+        win.close()

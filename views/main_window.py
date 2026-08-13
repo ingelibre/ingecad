@@ -1441,12 +1441,20 @@ class MainWindow(QMainWindow):
 
         name = self._layer_combo.itemText(index)
         selection = self.tools._selection_entities() if self.tools else []
+        # Marco's rule: picking a layer here means "let the layer drive the
+        # look" — the color snaps back to ByLayer in the same gesture, so a
+        # ByBlock/explicit override never has to be cleared by hand after.
         if selection:
             from core import actions
-            self.history.execute(actions.SetPropertyCommand(selection, "layer", name))
+            from core.commands import CompositeCommand
+            self.history.execute(CompositeCommand(tr("layer"), [
+                actions.SetPropertyCommand(selection, "layer", name),
+                actions.SetPropertyCommand(selection, "color", 256),
+            ]))
             self.regen_in_memory()
         else:
             layer_ops.set_current_layer(self.document, name)
+            layer_ops.set_current_property(self.document, "color", 256)
         self._sync_panels()
 
     def _on_prop_color(self, index: int) -> None:
