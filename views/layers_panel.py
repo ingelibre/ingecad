@@ -128,6 +128,7 @@ def fill_color_combo(combo, include_bylayer: bool = True) -> None:
     from views.properties_panel import BYLAYER_COLOR
     if include_bylayer:
         combo.addItem(tr("ByLayer"), BYLAYER_COLOR)
+        combo.addItem(tr("ByBlock"), 0)
     for aci in sorted(ACI_RGB):
         name = tr(ACI_NAMES[aci]) if aci in ACI_NAMES else str(aci)
         combo.addItem(swatch_icon(aci), name, aci)

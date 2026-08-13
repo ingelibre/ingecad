@@ -399,3 +399,16 @@ def test_the_layer_combo_reflects_the_selection(qapp):
     finally:
         win.document.dirty = False
         win.close()
+
+
+def test_the_color_combo_offers_byblock_too(qapp):
+    """BricsCAD's Properties color dropdown lists ByLayer AND ByBlock."""
+    from PySide6.QtWidgets import QComboBox
+
+    from views.layers_panel import fill_color_combo
+
+    combo = QComboBox()
+    fill_color_combo(combo)
+    texts = [combo.itemText(i) for i in range(combo.count())]
+    assert "ByLayer" in texts and "ByBlock" in texts
+    assert combo.itemData(texts.index("ByBlock")) == 0
