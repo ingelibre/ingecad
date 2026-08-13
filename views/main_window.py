@@ -1368,10 +1368,17 @@ class MainWindow(QMainWindow):
             for info in layer_ops.layer_list(self.document):
                 # small colour chip beside each layer name (BricsCAD look)
                 self._layer_combo.addItem(swatch_icon(info.color), info.name)
-            current = layer_ops.current_layer_name(self.document)
-            idx = self._layer_combo.findText(current)
-            if idx >= 0:
-                self._layer_combo.setCurrentIndex(idx)
+            # AutoCAD's Layer control: with a selection it shows the
+            # selected object's layer (blank when mixed); with nothing
+            # selected, the current layer.
+            selection = self.tools._selection_entities() if self.tools else []
+            if selection:
+                names = {e.dxf.get("layer", "0") for e in selection}
+                shown = names.pop() if len(names) == 1 else None
+            else:
+                shown = layer_ops.current_layer_name(self.document)
+            idx = self._layer_combo.findText(shown) if shown else -1
+            self._layer_combo.setCurrentIndex(idx)
         fill_color_combo(self._color_combo)
         self._fill_linetype_combo()
         self._fill_lineweight_combo()

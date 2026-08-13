@@ -365,3 +365,37 @@ def test_matchprop_copies_bylayer_itself(qapp):
     history.undo()
     assert dst.dxf.get("color") == 0
     assert dst.dxf.hasattr("true_color")
+
+
+def test_the_layer_combo_reflects_the_selection(qapp):
+    """AutoCAD's Layer control: select an object and the control shows
+    ITS layer; mixed selection shows blank; empty selection shows the
+    current layer (Marco: 'selecciono un dibujo y veo qué capa es')."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        doc = win.document
+        doc.doc.layers.add("MUROS", color=1)
+        doc.doc.layers.add("EJES", color=5)
+        a = doc.modelspace().add_line((0, 0), (1, 1),
+                                      dxfattribs={"layer": "MUROS"})
+        b = doc.modelspace().add_line((2, 0), (3, 1),
+                                      dxfattribs={"layer": "EJES"})
+        win.tools._invalidate_geometry()
+
+        win.tools.selection = {a.dxf.handle}
+        win._refresh_props_toolbar()
+        assert win._layer_combo.currentText() == "MUROS"
+
+        win.tools.selection = {a.dxf.handle, b.dxf.handle}
+        win._refresh_props_toolbar()
+        assert win._layer_combo.currentIndex() == -1        # mixed: blank
+
+        win.tools.selection = set()
+        win._refresh_props_toolbar()
+        assert win._layer_combo.currentText() == "0"        # current layer
+    finally:
+        win.document.dirty = False
+        win.close()
