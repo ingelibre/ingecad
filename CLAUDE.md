@@ -419,6 +419,44 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🧭 PRÓXIMA SESIÓN (acordado 2026-08-13, tras la v0.4.0) — tres frentes, en este orden
+
+**1. Edición de bloques (`BEDIT`).** Es el hueco más caro que queda: hoy están `B`
+(crear), `I` (insertar) y `X` (explotar), pero **no hay forma de cambiar una
+definición** — habría que explotar, editar, re-crear y reinsertar a mano cada
+copia. Investigado ya (manual pp. 222-224 y 1607):
+
+- **BEDIT antes que REFEDIT.** El Editor de bloques abre la definición en su
+  propio espacio y al cerrar (`BCLOSE`) los cambios bajan a todas las
+  inserciones. REFEDIT (editar en contexto, con «conjunto de trabajo») arrastra
+  el concepto de xref, que no tenemos: va después, si hace falta.
+- **La propagación sale gratis:** las inserciones referencian la definición por
+  nombre, así que editarla ya actualiza las cuarenta copias del plano.
+- ⚠️ **El trabajo real no es el editor, es generalizar el «espacio actual».**
+  Toda la maquinaria asume modelspace: **38 llamadas a `.modelspace()`, 16 en
+  `core/actions.py`**, más el índice de picado (`GeometryIndex`), `build_scene` y
+  el controlador. Una definición de bloque es un contenedor de entidades igual
+  que el modelo, así que el editor es «cambiar cuál es el espacio actual» y dejar
+  que dibujar/recortar/acotar sigan andando. Esa generalización es sana por sí
+  misma: es la que después permite editar geometría sobre una lámina.
+- **Bloques dinámicos NO** (parámetros, acciones, estados de visibilidad): es
+  morder el clon feature-por-feature que el rumbo descarta, y el 2D civil no los
+  usa. Acceso: Tools ▸ Block Editor y el menú contextual con una inserción
+  seleccionada, que es lo que documenta el manual.
+
+**2. Afinar la barra lateral derecha** (pestañas Capas / Propiedades / Paleta).
+Marco quiere pulirla; **el detalle se define con él al empezar** — no inventar
+requisitos acá. Lo que ya está: los tres administradores como pestañas (no
+diálogos modales, ver `[[ui-managers-in-sidebar]]`), y Propiedades muestra ya el
+estilo de todo objeto que tenga uno.
+
+**3. Arrancar el complemento de TOPOGRAFÍA (v0.5).** Es el complemento #1 y el
+contrato de plugins se diseña CON él, no en abstracto (decisión del rumbo del
+2026-08-12). Contenido: importar CSV de puntos con cota, cuadro de datos
+técnicos automático (Este/Norte, lados, rumbos, área y perímetro — `TABLE` ya
+existe como base) y perfil de elevaciones. El README y el FAQ del sitio ya dicen
+«v0.5», así que la promesa pública está alineada.
+
 ## 🧭 RUMBO ESTRATÉGICO (2026-08-12) — consolidar, quick wins, y COMPLEMENTOS
 
 Marco revisó los 13 menús de BricsCAD Ultimate (capturas) y validó la dirección. Decisiones:
