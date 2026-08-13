@@ -437,3 +437,37 @@ def test_layout_viewport_text_keeps_its_counters():
     # filled counters would inflate the paper copy's ink by ~50 %+;
     # tessellation density differences stay within a few percent
     assert abs(paper - model) / model < 0.10
+
+
+def test_byblock_resolution_matches_autocads_doctrine():
+    """The reference, p. 339: BYBLOCK objects 'use the default color
+    (white or black, depending on your background) until you group the
+    objects into a block... the objects in the block inherit the current
+    Color setting'; p. 943: exploded/top-level BYBLOCK is white, and
+    layer-0 content stays chameleon. The whole matrix, pinned."""
+    doc = Document.new()
+    d = doc.doc
+    d.layers.add("VERDE", color=3)
+    blk = d.blocks.new("B")
+    blk.add_line((0, 0), (5, 0), dxfattribs={"color": 0})    # byblock
+    blk.add_line((0, 1), (5, 1))                             # bylayer on 0
+    msp = doc.modelspace()
+    top = msp.add_line((0, 10), (5, 10), dxfattribs={"color": 0})
+    red = msp.add_blockref("B", (0, 20), dxfattribs={"color": 1})
+    green = msp.add_blockref("B", (0, 30), dxfattribs={"layer": "VERDE"})
+
+    scene = build_scene(doc)
+
+    def colors_of(e):
+        out = set()
+        for name, start, count in scene.handle_ranges.get(e.dxf.handle, []):
+            arr = getattr(scene, name).data["rgba"][start:start + count]
+            out.update(tuple(int(v) for v in row[:3]) for row in arr)
+        return out
+
+    assert colors_of(top) == {(255, 255, 255)}          # top-level = white
+    # red insert: byblock content red, bylayer-on-0 content stays layer 0
+    assert colors_of(red) == {(255, 0, 0), (255, 255, 255)}
+    # ByLayer insert on VERDE: byblock -> insert's effective color (green)
+    # AND the layer-0 chameleon rule paints the bylayer content green too
+    assert colors_of(green) == {(0, 255, 0)}
