@@ -570,6 +570,51 @@ conviene no re-descubrir:
 - **El sitio solo afirma lo que la app hace hoy**, y la sección «Status» del `README.md` es la
   fuente de verdad del copy. Hay un FAQ que dice explícitamente que la topografía es v0.2.
 
+## 🗓 Sesión 2026-08-13 (ter) — v0.4.0: el menú contextual y sus siete comandos
+
+**Método que vale más que el resultado: el menú del clic derecho se construyó
+grepeando el manual, no recordándolo.** 93 páginas del Command Reference dicen en
+sus «Access Methods» que ese comando aparece en el menú contextual; esa lista es
+la especificación. Lo mismo para cada comando nuevo (ISOLATEOBJECTS p. 956,
+SELECTSIMILAR p. 1726, ADDSELECTED p. 103, QSELECT p. 1584, GROUP p. 861,
+FIND p. 808, QUICKCALC p. 1589, OPTIONS p. 1314).
+
+**Aislamiento de objetos: es SÓLO display.** El manual repite *temporarily*. No
+toca el documento, no va al archivo, no entra al undo (UNISOLATEOBJECTS es el
+deshacer) y una entidad oculta tampoco se puede picar. Vive en
+`document._isolated_hidden` y lo filtran `TolerantFrontend.draw_entity` y
+`GeometryIndex`.
+
+**Rendimiento del viewport: 146 ms → 5,2 ms por tick.** El contenido no cambia al
+navegar, sólo dónde se pone: el modelo se tesela una vez y cada tick es una
+matriz + scissor, como el ghost. ⚠️ **Dos trampas que costaron:** (1) cachear la
+escena por `document.revision` la invalida en cada tick, porque mover la vista
+marca dirty; se invalida desde el camino de edición. (2) Ocultar el horneado
+oculta el de TODOS los viewports (comparten las entidades del modelo), así que
+hay que dibujar todos, no sólo el activo.
+
+⚠️ **Y la lección de verificación, otra vez y más fina:** medí «0 de 674 370
+píxeles distintos» y era cierto — pero con el viewport activo cubriendo toda la
+hoja, o sea el caso que no ejercita el fallo. **Una medida correcta sobre el caso
+equivocado da una conclusión falsa.**
+
+**En el modelo NO había nada que optimizar:** 0,6 ms por cuadro incluso con 4,5
+millones de vértices; los 16,7 ms por movimiento son el refresco de 60 Hz. Queda
+como ajuste opcional (Options ▸ Display), no como cambio impuesto.
+
+**Ctrl+Z no llegaba al dibujo** cuando el foco estaba en la línea de comandos (un
+QLineEdit reclama esa tecla para su propio deshacer). Reproducirlo llamando a la
+función mostraba todo bien: **el bug sólo aparece si la tecla recorre el camino de
+una pulsación real** — los tests nuevos pulsan la tecla, no llaman al método.
+
+**TRIM/EXTEND/FILLET/CHAMFER creaban las piezas sin atributos** (12 sitios), así
+que nacían en la capa actual. Se hereda el estilo en el punto único donde aterriza
+el reemplazo, XDATA incluido.
+
+**Varias ventanas a la vez: funcionan** (probadas tres). No hay guardia de
+instancia única y no hace falta; lo único compartido es QSettings (gana el último
+que escribe) y los temporales son únicos por conversión.
+
 ## 🗓 Sesión 2026-08-13 (bis) — re-vendorización a 0.14.8580 + 17 PRs
 
 ⚠️ **La regla que esta re-vendorización instaura: cada parche se toma del HEAD DEL PR**
