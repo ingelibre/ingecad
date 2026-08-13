@@ -970,6 +970,15 @@ class Viewport(QOpenGLWidget):
             self._draw_grips(p)
             if self.tool_delegate.active():
                 self._draw_tool_preview(p)
+            grip_marker = getattr(self.tool_delegate,
+                                  "grip_align_marker", None)
+            if grip_marker is not None:
+                mx, my = self.view.world_to_screen(*grip_marker)
+                half = self.MARKER_SIZE / 2.0
+                p.save()
+                p.setPen(QPen(QColor(80, 220, 80), 2))
+                p.drawRect(mx - half, my - half, 2 * half, 2 * half)
+                p.restore()
             grip_dim = getattr(self.tool_delegate, "grip_dim_preview", None)
             if grip_dim is not None:
                 color = (QColor(90, 90, 90) if self._light_background()
@@ -1049,7 +1058,9 @@ class Viewport(QOpenGLWidget):
         delegate = self.tool_delegate
         segs, circles, boxes = delegate.highlight_geometry()
         if len(segs) or len(circles) or len(boxes):
-            p.setPen(QPen(self.HIGHLIGHT_COLOR, 2, Qt.DashLine))
+            # Solid, like BricsCAD's selected look: the dashed overlay read
+            # as clutter on a real plan ("ensucia el dibujo").
+            p.setPen(QPen(self.HIGHLIGHT_COLOR, 2))
             for s in segs[:4000]:
                 x1, y1 = self.view.world_to_screen(s[0], s[1])
                 x2, y2 = self.view.world_to_screen(s[2], s[3])

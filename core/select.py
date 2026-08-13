@@ -904,10 +904,22 @@ def entity_grips(entity) -> list[tuple[float, float, str]]:
         # text. Every other dimension type offers its text grip.
         kind = int(entity.dxf.get("dimtype", 0)) & 7
         if kind in (0, 1):
-            for attr in ("defpoint2", "defpoint3", "defpoint"):
+            for attr in ("defpoint2", "defpoint3"):
                 pt = entity.dxf.get(attr, None)
                 if pt is not None:
                     grips.append((pt.x, pt.y, f"dim_{attr}"))
+            # BricsCAD/AutoCAD show the LINE's two arrowhead ends, not a
+            # mid-line point: project the origins onto the dimension line.
+            loc = entity.dxf.get("defpoint", None)
+            p1 = entity.dxf.get("defpoint2", None)
+            p2 = entity.dxf.get("defpoint3", None)
+            if loc is not None and p1 is not None and p2 is not None:
+                angle = math.radians(float(entity.dxf.get("angle", 0.0)))
+                ux, uy = math.cos(angle), math.sin(angle)
+                for pt in (p1, p2):
+                    t = (pt.x - loc.x) * ux + (pt.y - loc.y) * uy
+                    grips.append((loc.x + ux * t, loc.y + uy * t,
+                                  "dim_defpoint"))
         text_mid = entity.dxf.get("text_midpoint", None)
         if text_mid is not None:
             grips.append((text_mid.x, text_mid.y, "dim_text"))

@@ -352,11 +352,13 @@ def test_linear_dimension_grips_match_autocads_set():
              .render().dimension
     grips = entity_grips(dim)
     roles = [r for _x, _y, r in grips]
-    assert roles == ["dim_defpoint2", "dim_defpoint3", "dim_defpoint",
-                     "dim_text"]
-    by_role = {r: (x, y) for x, y, r in grips}
-    assert by_role["dim_defpoint2"] == (0.0, 0.0)
-    assert by_role["dim_defpoint3"] == (30.0, 0.0)
+    # BricsCAD's set: two origins, the LINE's two arrowhead ends, the text
+    assert roles == ["dim_defpoint2", "dim_defpoint3",
+                     "dim_defpoint", "dim_defpoint", "dim_text"]
+    points = [(x, y) for x, y, _r in grips]
+    assert points[0] == (0.0, 0.0) and points[1] == (30.0, 0.0)
+    # the line ends sit ON the dimension line (y = 10), over each origin
+    assert points[2] == (0.0, 10.0) and points[3] == (30.0, 10.0)
 
 
 def test_radial_dimension_offers_its_text_grip():
@@ -581,3 +583,20 @@ def test_dim_grip_keeps_the_texts_side_of_the_line():
     History(doc).execute(DimGripCommand(dim, "defpoint", (6.0, 5.0)))
     new_offset = dim.dxf.text_midpoint.x - dim.dxf.defpoint.x
     assert abs(new_offset - offset) < 1e-6
+
+
+def test_dragging_a_line_grip_magnets_to_a_parallel_dim(qapp):
+    """The BricsCAD aid: dragging a dimension-line grip near another
+    parallel dimension's line snaps to its offset with a marker."""
+    from views.tool_controller import _align_dim_line
+
+    doc, msp = _msp()
+    fixed = msp.add_linear_dim(base=(0, 10), p1=(0, 0), p2=(10, 0)) \
+               .render().dimension
+    moving = msp.add_linear_dim(base=(15, 6), p1=(12, 0), p2=(22, 0)) \
+                .render().dimension
+    x, y, marker = _align_dim_line(doc, moving, 17.0, 10.3, threshold=1.0)
+    assert (x, y) == (17.0, 10.0)            # snapped to the fixed line
+    assert marker == (17.0, 10.0)
+    x, y, marker = _align_dim_line(doc, moving, 17.0, 25.0, threshold=1.0)
+    assert (x, y) == (17.0, 25.0) and marker is None

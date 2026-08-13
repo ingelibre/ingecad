@@ -95,6 +95,37 @@ ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES,
 _VP_GRIP = "__viewport__"
 
 
+def _align_dim_line(document, entity, wx, wy, threshold):
+    """Chained-dimension magnet for the LINE grips: near another parallel
+    dimension's line, the drag snaps to its offset (the BricsCAD aid
+    Marco asked for). Returns (x, y, marker_or_None)."""
+    kind = int(entity.dxf.get("dimtype", 0)) & 7
+    if kind not in (0, 1) or threshold is None:
+        return wx, wy, None
+    angle = float(entity.dxf.get("angle", 0.0)) % 180.0
+    if angle not in (0.0, 90.0):
+        return wx, wy, None
+    axis = 1 if angle == 0.0 else 0
+    best = None
+    for dim in document.modelspace().query("DIMENSION"):
+        if dim is entity or (dim.dxf.dimtype & 7) not in (0, 1):
+            continue
+        if abs((dim.dxf.get("angle", 0.0) % 180.0) - angle) > 0.01:
+            continue
+        defpoint = dim.dxf.get("defpoint", None)
+        if defpoint is None:
+            continue
+        coord = (defpoint.x, defpoint.y)[axis]
+        distance = abs((wx, wy)[axis] - coord)
+        if distance <= threshold and (best is None or distance < best[0]):
+            best = (distance, coord)
+    if best is None:
+        return wx, wy, None
+    snapped = [wx, wy]
+    snapped[axis] = best[1]
+    return snapped[0], snapped[1], (snapped[0], snapped[1])
+
+
 def _dim_grip_preview(entity, role, wx, wy):
     """A live preview frame for a dimension grip drag, or None.
 
@@ -811,6 +842,7 @@ class ToolController(QObject):
     # Commands whose touched entities are fully known, so the pick index can
     # be patched (remove + re-add) instead of rebuilt from scratch.
     grip_dim_preview = None
+    grip_align_marker = None
 
     _KNOWN_MODIFY = (actions.EraseCommand, actions.TransformCommand,
                      actions.SetPropertyCommand, actions.ReplaceEntitiesCommand,
@@ -1504,6 +1536,13 @@ class ToolController(QObject):
                 # A dimension only re-renders at the drop (a render per
                 # mouse move would churn one *D block per frame) — but the
                 # drag shows a live dimension preview instead of nothing.
+                self.grip_align_marker = None
+                if role == "dim_defpoint":
+                    wx, wy, marker = _align_dim_line(
+                        self.window.document, entity, wx, wy,
+                        12.0 / self.window.viewport.view.scale
+                        if self.window.viewport.view.scale else None)
+                    self.grip_align_marker = marker
                 self.grip_dim_preview = _dim_grip_preview(entity, role,
                                                           wx, wy)
                 self.window.viewport.update()
@@ -1532,7 +1571,14 @@ class ToolController(QObject):
         self._grip_drag = None
         entity = self.index.entity(handle)
         self.grip_dim_preview = None
+        self.grip_align_marker = None
         if entity is not None and role.startswith("dim_"):
+            if role == "dim_defpoint":
+                # the drop honors the same magnet the drag showed
+                wx, wy, _marker = _align_dim_line(
+                    self.window.document, entity, wx, wy,
+                    12.0 / self.window.viewport.view.scale
+                    if self.window.viewport.view.scale else None)
             # Route through the dedicated command: it re-renders the block
             # and drops the old one, which the generic snapshot cannot undo.
             self.window.viewport.unhide_handles([handle])
