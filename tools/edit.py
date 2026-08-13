@@ -661,8 +661,17 @@ class _TrimExtendBase(Tool):
 
         A trimmed cutting edge keeps cutting in AutoCAD: when the replaced
         entity was one of our edges, its surviving pieces take its place.
+
+        Every piece inherits the properties of what it came from — a trimmed
+        line is that line, shortened. Wrapping the factories here rather than
+        at each of them means no future one can forget.
         """
-        cmd = actions.ReplaceEntitiesCommand(name, [entity], factories)
+        from core.modify import inherit_style
+
+        cmd = actions.ReplaceEntitiesCommand(
+            name, [entity],
+            [(lambda msp, f=f: inherit_style(f(msp), entity))
+             for f in factories])
         self.ctx.execute(cmd)
         if self._edges_handles is not None:
             handle = None
@@ -863,8 +872,17 @@ class FilletTool(Tool):
                 lambda msp, c=center, rr=radius, s=a0, e=a1:
                     msp.add_arc(c, rr, s, e),
             ]
+        # The two trimmed pieces keep their own object's properties; the
+        # new arc has no object of its own, so it takes them only when both
+        # edges agree — otherwise the current settings decide.
+        from core.modify import common_style_source, inherit_style
+
+        sources = [self._first, entity, common_style_source(
+            [self._first, entity])]
         self.ctx.execute(actions.ReplaceEntitiesCommand(
-            "FILLET", [self._first, entity], factories))
+            "FILLET", [self._first, entity],
+            [(lambda msp, f=f, src=src: inherit_style(f(msp), src))
+             for f, src in zip(factories, sources)]))
         self.ctx.finish()
 
 

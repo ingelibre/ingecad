@@ -877,3 +877,98 @@ def test_the_ghost_placement_matrix_turns_about_the_base(qapp):
         assert grown.x() == pytest.approx(expected.x(), abs=1e-4)
     finally:
         win.close()
+
+
+def _win_with_layers(qapp):
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.new_document("mm")
+    doc = win.document
+    doc.doc.layers.add("MUROS", color=1)
+    doc.doc.layers.add("EJES", color=5)
+    doc.doc.header["$CLAYER"] = "0"      # the current layer is NOT the target's
+    return win
+
+
+def test_trim_keeps_the_properties_of_what_it_cut(qapp):
+    """Marco trimmed lines on a layer and the pieces came back on layer 0.
+    A trimmed line IS that line, shortened: in AutoCAD it keeps its layer,
+    colour, linetype and lineweight, and here it was being created fresh on
+    whatever layer happened to be current."""
+    win = _win_with_layers(qapp)
+    try:
+        doc = win.document
+        msp = doc.modelspace()
+        doc.doc.appids.add("COLEGA")
+        target = msp.add_line((0, 0), (100, 0), dxfattribs={
+            "layer": "MUROS", "color": 30, "lineweight": 50, "ltscale": 2.5})
+        target.set_xdata("COLEGA", [(1000, "dato ajeno")])
+        cutters = [msp.add_line((30, -10), (30, 10), dxfattribs={"layer": "EJES"}),
+                   msp.add_line((70, -10), (70, 10), dxfattribs={"layer": "EJES"})]
+        win.tools._invalidate_geometry()
+
+        win.tools.selection = {c.dxf.handle for c in cutters}
+        win.tools.start_tool("TRIM")
+        win.tools.on_click(50.0, 0.0, False)
+
+        cut = {c.dxf.handle for c in cutters}
+        pieces = [e for e in msp if e.dxftype() == "LINE"
+                  and e.dxf.handle not in cut]
+        assert len(pieces) == 2
+        for piece in pieces:
+            assert piece.dxf.layer == "MUROS"
+            assert piece.dxf.color == 30
+            assert piece.dxf.lineweight == 50
+            assert abs(piece.dxf.ltscale - 2.5) < 1e-9
+            # somebody else's data hangs off that object and travels with it
+            assert [t.value for t in piece.get_xdata("COLEGA")] == ["dato ajeno"]
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_extend_keeps_the_properties_too(qapp):
+    win = _win_with_layers(qapp)
+    try:
+        doc = win.document
+        msp = doc.modelspace()
+        target = msp.add_line((0, 0), (40, 0),
+                              dxfattribs={"layer": "MUROS", "color": 30})
+        boundary = msp.add_line((80, -10), (80, 10),
+                                dxfattribs={"layer": "EJES"})
+        win.tools._invalidate_geometry()
+
+        win.tools.selection = {boundary.dxf.handle}
+        win.tools.start_tool("EXTEND")
+        win.tools.on_click(35.0, 0.0, False)
+
+        pieces = [e for e in msp if e.dxftype() == "LINE"
+                  and e.dxf.handle != boundary.dxf.handle]
+        assert len(pieces) == 1
+        assert pieces[0].dxf.layer == "MUROS" and pieces[0].dxf.color == 30
+        assert pieces[0].dxf.end.x > 79        # it really did extend
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_a_fillet_arc_takes_the_layer_only_when_both_edges_agree(qapp):
+    """The trimmed pieces keep their own object's properties. The new arc has
+    no object of its own: it takes them when both edges agree and leaves the
+    current settings to decide when they do not."""
+    from core.modify import common_style_source
+
+    win = _win_with_layers(qapp)
+    try:
+        msp = win.document.modelspace()
+        same_a = msp.add_line((0, 0), (50, 0), dxfattribs={"layer": "MUROS"})
+        same_b = msp.add_line((50, 0), (50, 50), dxfattribs={"layer": "MUROS"})
+        assert common_style_source([same_a, same_b]) is same_a
+
+        other = msp.add_line((0, 0), (50, 0), dxfattribs={"layer": "EJES"})
+        assert common_style_source([same_a, other]) is None
+        assert common_style_source([]) is None
+    finally:
+        win.document.dirty = False
+        win.close()

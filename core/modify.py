@@ -332,6 +332,52 @@ def _factory_for(piece, template):
     return build
 
 
+def inherit_style(entity, template) -> object:
+    """Give ``entity`` the properties of ``template`` and return it.
+
+    TRIM, EXTEND, FILLET and CHAMFER hand back pieces of the objects they
+    edited: in AutoCAD those pieces ARE the object, shortened, so they keep
+    its layer, colour, linetype, lineweight and the rest. IngeCAD builds new
+    entities instead, which means the properties have to be carried across
+    by hand — without this they were born on whatever layer happened to be
+    current, and a wall trimmed on layer MUROS came back on layer 0.
+
+    XDATA travels too: it is somebody else's data hanging off that object,
+    and the conservative round-trip is the promise this project is built on.
+    """
+    if template is None or entity is None:
+        return entity
+    for name, value in _style_of(template).items():
+        try:
+            entity.dxf.set(name, value)
+        except Exception:
+            pass
+    xdata = getattr(template, "xdata", None)
+    for appid in list(getattr(xdata, "data", {}) or {}):
+        try:
+            entity.set_xdata(appid, list(template.get_xdata(appid)))
+        except Exception:
+            pass
+    return entity
+
+
+def common_style_source(entities):
+    """The object new geometry should look like, or None to leave it alone.
+
+    A fillet arc between two objects of the same layer belongs on that
+    layer; between two different ones there is no such answer, and the
+    current settings decide — which is what AutoCAD does.
+    """
+    alive = [e for e in entities if e is not None]
+    if not alive:
+        return None
+    first = _style_of(alive[0])
+    for other in alive[1:]:
+        if _style_of(other) != first:
+            return None
+    return alive[0]
+
+
 def _style_of(entity) -> dict:
     keep = ("layer", "color", "linetype", "lineweight", "ltscale",
             "transparency", "true_color")
