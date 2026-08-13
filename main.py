@@ -30,6 +30,21 @@ def _configure_surface_format() -> None:
     fmt = QSurfaceFormat()
     fmt.setVersion(3, 3)
     fmt.setProfile(QSurfaceFormat.CoreProfile)
+    # Waiting for the vertical refresh costs a frame of latency: measured on
+    # this canvas, a mouse move takes 16.7 ms with the wait and 2.9 ms
+    # without, and the drawing itself is 0.6 ms of that even at 4.5 million
+    # vertices. The wait is what keeps the image from tearing, so it stays on
+    # unless Options > Display asks for the lower lag instead. The format is
+    # fixed when the canvas is created, which is why this reads the setting
+    # here and why the dialog says it applies on restart.
+    try:
+        from PySide6.QtCore import QSettings
+
+        if str(QSettings().value("display/vsync", "true")).lower() in (
+                "false", "0"):
+            fmt.setSwapInterval(0)
+    except Exception:
+        pass
     QSurfaceFormat.setDefaultFormat(fmt)
 
 

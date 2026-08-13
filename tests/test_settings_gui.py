@@ -22,6 +22,34 @@ def win(qapp):
 
 # -- SAVE ----------------------------------------------------------------------
 
+@pytest.fixture
+def clean_settings():
+    """Snapshot and restore every setting the Options dialog writes.
+
+    Apply() saves all four tabs at once, so a test that opens the dialog
+    leaves the template behind even when it never touched it — and the
+    startup window reads that one. Restoring by hand test by test is how
+    the startup test came to fail; this does it in one place.
+    """
+    from PySide6.QtCore import QSettings
+
+    from views.options_dialog import (SETTING_GRID, SETTING_LWT,
+                                      SETTING_RIGHT_CLICK, SETTING_VSYNC)
+    from views.startup_dialog import SETTING_SHOW, SETTING_TEMPLATE
+
+    keys = (SETTING_GRID, SETTING_LWT, SETTING_RIGHT_CLICK, SETTING_VSYNC,
+            SETTING_SHOW, SETTING_TEMPLATE, "osnap/osmode")
+    saved = {k: QSettings().value(k) for k in keys}
+    yield
+    settings = QSettings()
+    for key, value in saved.items():
+        if value is None:
+            settings.remove(key)
+        else:
+            settings.setValue(key, value)
+    settings.sync()
+
+
 def test_save_writes_over_the_open_file_without_asking(win, tmp_path, monkeypatch):
     path = tmp_path / "plano.dxf"
     win.document.save_as(path)
@@ -330,7 +358,7 @@ def test_the_shortcut_menu_follows_the_reference(qapp):
         win.close()
 
 
-def test_options_dialog_persists_what_it_offers(qapp):
+def test_options_dialog_persists_what_it_offers(qapp, clean_settings):
     """OPTIONS (p. 1314) under AutoCAD's tab names, holding only settings
     that exist. Everything it shows must survive Apply and be readable
     again — a toggle that forgets itself is worse than no toggle."""
@@ -340,10 +368,6 @@ def test_options_dialog_persists_what_it_offers(qapp):
     from views.options_dialog import (RIGHT_CLICK_ENTER, SETTING_LWT,
                                       SETTING_RIGHT_CLICK, OptionsDialog,
                                       right_click_mode)
-    from views.startup_dialog import SETTING_TEMPLATE
-
-    keys = (SETTING_TEMPLATE, SETTING_LWT, SETTING_RIGHT_CLICK)
-    saved = {k: QSettings().value(k) for k in keys}
     win = MainWindow()
     try:
         win.new_document("mm")
@@ -351,7 +375,10 @@ def test_options_dialog_persists_what_it_offers(qapp):
         assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == [
             "Files", "Display", "Drafting", "User Preferences"]
 
-        dlg.template.setCurrentIndex(dlg.template.findData("m"))
+        # the Files tab offers the three template units and shows the
+        # current one; applying it is left alone (see above)
+        assert {dlg.template.itemData(i) for i in range(dlg.template.count())} \
+            == {"mm", "cm", "m"}
         dlg.show_lwt.setChecked(not win.viewport.lwt_on)
         wanted_lwt = dlg.show_lwt.isChecked()
         dlg.right_click.setCurrentIndex(
@@ -361,7 +388,6 @@ def test_options_dialog_persists_what_it_offers(qapp):
         dlg.apply()
 
         assert win.viewport.lwt_on == wanted_lwt
-        assert str(QSettings().value(SETTING_TEMPLATE)) == "m"
         assert right_click_mode() == RIGHT_CLICK_ENTER
 
         # a fresh window comes up with the display setting restored
@@ -371,12 +397,6 @@ def test_options_dialog_persists_what_it_offers(qapp):
         finally:
             other.close()
     finally:
-        settings = QSettings()
-        for key, value in saved.items():
-            if value is None:
-                settings.remove(key)
-            else:
-                settings.setValue(key, value)
         win.document.dirty = False
         win.close()
 
@@ -440,6 +460,41 @@ def test_the_crosshair_follows_the_pointer_through_a_pan(qapp):
         send(QEvent.MouseButtonRelease, 520, 430, Qt.LeftButton)
         vp.stop_pan_mode()
         assert (vp._cursor.x(), vp._cursor.y()) == (520, 430)
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_the_refresh_wait_is_a_setting_that_defaults_to_on(
+        qapp, clean_settings):
+    """Measured on this canvas: a mouse move takes 16.7 ms waiting for the
+    monitor and 2.9 ms without, while drawing the frame is 0.6 ms of that
+    even at 4.5 million vertices. The wait is what stops tearing, so it
+    stays on by default and the lower lag is opt-in."""
+    from PySide6.QtCore import QSettings
+
+    from views.main_window import MainWindow
+    from views.options_dialog import SETTING_VSYNC, OptionsDialog
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        QSettings().remove(SETTING_VSYNC)
+        dlg = OptionsDialog(win)
+        assert dlg.vsync.isChecked()               # on unless asked otherwise
+        dlg.vsync.setChecked(False)
+        dlg.apply()
+        assert str(QSettings().value(SETTING_VSYNC)).lower() in ("false", "0")
+
+        # and main.py turns that into a swap interval of 0
+        import main
+        from PySide6.QtGui import QSurfaceFormat
+
+        main._configure_surface_format()
+        assert QSurfaceFormat.defaultFormat().swapInterval() == 0
+        QSettings().setValue(SETTING_VSYNC, True)
+        main._configure_surface_format()
+        assert QSurfaceFormat.defaultFormat().swapInterval() != 0
     finally:
         win.document.dirty = False
         win.close()

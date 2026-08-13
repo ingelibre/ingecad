@@ -48,6 +48,9 @@ RIGHT_CLICK_ENTER = "enter"
 #: Persisted display toggles that were session-only before.
 SETTING_LWT = "display/lineweight"
 SETTING_GRID = "display/grid"
+#: Wait for the vertical refresh before showing a frame. On costs a frame of
+#: latency and cannot tear; off is the other way round.
+SETTING_VSYNC = "display/vsync"
 
 
 def right_click_mode() -> str:
@@ -139,6 +142,15 @@ class OptionsDialog(QDialog):
         self.show_grid = QCheckBox(tr("Display grid"), box)
         self.show_grid.setChecked(bool(self.window.viewport.grid_on))
         inner.addWidget(self.show_grid)
+        self.vsync = QCheckBox(
+            tr("Wait for the screen refresh (no tearing)"), box)
+        self.vsync.setChecked(_bool_setting(SETTING_VSYNC, True))
+        self.vsync.setToolTip(
+            tr("On, a frame waits for the monitor: nothing ever tears, and "
+               "the pointer runs up to one refresh ahead of the drawing. "
+               "Off, the canvas answers sooner and may show a seam while "
+               "panning. Takes effect the next time IngeCAD starts."))
+        inner.addWidget(self.vsync)
         outer.addWidget(box)
         outer.addStretch(1)
         return page
@@ -188,6 +200,7 @@ class OptionsDialog(QDialog):
         viewport.grid_on = self.show_grid.isChecked()
         settings.setValue(SETTING_LWT, viewport.lwt_on)
         settings.setValue(SETTING_GRID, viewport.grid_on)
+        settings.setValue(SETTING_VSYNC, self.vsync.isChecked())
         viewport.update()
 
         tools = self.window.tools
