@@ -162,6 +162,7 @@ class Viewport(QOpenGLWidget):
         self.setCursor(Qt.BlankCursor)
         self._cursor: Optional[QPointF] = None
         self._panning = False
+        self._pan_last_screen = None
         self._last_pos = QPointF()
         self._gl: Optional[QOpenGLFunctions] = None
         self._program: Optional[QOpenGLShaderProgram] = None
@@ -273,6 +274,14 @@ class Viewport(QOpenGLWidget):
         self._pan_mode = False
         self._panning = False
         self.setCursor(Qt.BlankCursor)
+        # PAN ends where the hand was, so that is where the crosshair goes —
+        # not back to wherever it was before the command started.
+        last = getattr(self, "_pan_last_screen", None)
+        if last is not None:
+            self._cursor = last
+            if self.tool_delegate is not None:
+                wx, wy = self.view.screen_to_world(last.x(), last.y())
+                self.cursorMoved.emit(wx, wy)
         self.update()
 
     def set_overlay_scene(self, scene: Optional[Scene]) -> None:
@@ -1363,6 +1372,7 @@ class Viewport(QOpenGLWidget):
     def mouseReleaseEvent(self, event) -> None:
         if self._pan_mode and event.button() == Qt.LeftButton:
             self._panning = False           # release: back to open hand
+            self._pan_last_screen = event.position()
             self.setCursor(Qt.OpenHandCursor)
             return
         if self._zoom_window and event.button() == Qt.LeftButton:
@@ -1382,7 +1392,14 @@ class Viewport(QOpenGLWidget):
             return
         if event.button() == Qt.MiddleButton and self._panning:
             self._panning = False
+            # the crosshair comes back exactly under the pointer, not where
+            # the last move event happened to land
+            self._cursor = event.position()
             self.setCursor(Qt.BlankCursor)
+            if self.tool_delegate is not None:
+                wx, wy = self.view.screen_to_world(self._cursor.x(),
+                                                   self._cursor.y())
+                self.cursorMoved.emit(wx, wy)
             self.update()
             return
         if (event.button() == Qt.LeftButton and self._sel_press is not None
@@ -1418,7 +1435,12 @@ class Viewport(QOpenGLWidget):
                 delta = pos - self._last_pos
                 self._last_pos = pos
                 self._pan_by(delta)
-                self.update()
+            # The hand hides the crosshair, but PAN ends where the hand is:
+            # remember the position so it comes back under the pointer.
+            self._pan_last_screen = pos
+            wx, wy = self.view.screen_to_world(pos.x(), pos.y())
+            self.cursorMoved.emit(wx, wy)
+            self.update()
             return   # open hand otherwise: no crosshair, no hover
         if self._zoom_window and self._rubber is not None and self._rubber.isVisible():
             x0, y0 = self._rubber_origin.x(), self._rubber_origin.y()
@@ -1440,6 +1462,13 @@ class Viewport(QOpenGLWidget):
             delta = pos - self._last_pos
             self._last_pos = pos
             self._pan_by(delta)
+            # The crosshair is not drawn while panning, but its position has
+            # to keep up: without this it reappears on release wherever the
+            # drag STARTED, and the coordinate readout lies for as long as
+            # the pan lasts.
+            self._cursor = pos
+            wx, wy = self.view.screen_to_world(pos.x(), pos.y())
+            self.cursorMoved.emit(wx, wy)
         else:
             self._cursor = pos
             wx, wy = self.view.screen_to_world(pos.x(), pos.y())

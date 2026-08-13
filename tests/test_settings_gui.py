@@ -401,3 +401,45 @@ def test_options_is_offered_only_with_nothing_selected(qapp):
     finally:
         win.document.dirty = False
         win.close()
+
+
+def test_the_crosshair_follows_the_pointer_through_a_pan(qapp):
+    """Marco: after panning, the crosshair reappeared where the drag STARTED
+    instead of under the hand. It is stored in screen coordinates and was
+    not updated while panning, so it snapped back on release."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.new_document("mm")
+        win.resize(900, 600)
+        vp = win.viewport
+
+        def send(kind, x, y, button=Qt.NoButton, buttons=Qt.NoButton):
+            event = QMouseEvent(kind, QPointF(x, y), QPointF(x, y),
+                                button, buttons, Qt.NoModifier)
+            {QEvent.MouseMove: vp.mouseMoveEvent,
+             QEvent.MouseButtonPress: vp.mousePressEvent,
+             QEvent.MouseButtonRelease: vp.mouseReleaseEvent}[kind](event)
+
+        # middle-button pan
+        send(QEvent.MouseMove, 200, 200)
+        send(QEvent.MouseButtonPress, 200, 200, Qt.MiddleButton, Qt.MiddleButton)
+        send(QEvent.MouseMove, 300, 250, buttons=Qt.MiddleButton)
+        send(QEvent.MouseButtonRelease, 400, 300, Qt.MiddleButton)
+        assert (vp._cursor.x(), vp._cursor.y()) == (400, 300)
+
+        # the PAN command's hand: the crosshair returns where the hand was
+        send(QEvent.MouseMove, 150, 150)
+        vp.start_pan_mode()
+        send(QEvent.MouseButtonPress, 150, 150, Qt.LeftButton, Qt.LeftButton)
+        send(QEvent.MouseMove, 500, 420, buttons=Qt.LeftButton)
+        send(QEvent.MouseButtonRelease, 520, 430, Qt.LeftButton)
+        vp.stop_pan_mode()
+        assert (vp._cursor.x(), vp._cursor.y()) == (520, 430)
+    finally:
+        win.document.dirty = False
+        win.close()
