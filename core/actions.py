@@ -1900,7 +1900,13 @@ def revcloud_vertices(loop, arc_chord: float, reverse: bool = False,
     count = max(int(round(total / arc_chord)), 3)
     samples = _resample(pts, [total * i / count for i in range(count)])
     ring = [(x, y) for x, y, _t in samples]
-    outward_sign = -1.0 if _loop_is_ccw(ring) else 1.0   # right of travel
+    # DXF bulge: positive sweeps CCW from vertex to vertex, and its apex
+    # falls LEFT of the chord. Traveling a CCW loop the exterior lies to
+    # the RIGHT... yet the rendered ink proved the old "-1 for CCW" sign
+    # bulged every arc INWARD (Marco's saw-blade capture; the box test
+    # showed no ink beyond the loop). The apex convention argues one way,
+    # the pixels the other — the pixels win.
+    outward_sign = 1.0 if _loop_is_ccw(ring) else -1.0
     if reverse:
         outward_sign = -outward_sign
     bulge = outward_sign * math.tan(math.radians(110.0) / 4.0)

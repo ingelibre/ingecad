@@ -197,6 +197,15 @@ def test_revcloud_rectangular_bulges_outward():
     assert len(pts) >= 12
     assert all(p[4] != 0.0 for p in pts)           # every chord is an arc
     assert RevcloudTool.arc_length == 10.0         # sticky
+    # ...and the arcs bulge OUTWARD: the flattened ink must exceed the
+    # 0..60 x 0..40 frame by the sagitta (the old sign kept every arc
+    # inside — Marco's saw-blade capture; this test only checked != 0).
+    import ezdxf.path as ezpath
+    from ezdxf.math import BoundingBox2d
+
+    box = BoundingBox2d(v for v in ezpath.make_path(pl).flattening(0.05))
+    assert box.extmin.x < -0.5 and box.extmin.y < -0.5
+    assert box.extmax.x > 60.5 and box.extmax.y > 40.5
 
 
 def test_revcloud_polygonal_and_calligraphy():
