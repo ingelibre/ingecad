@@ -570,6 +570,50 @@ conviene no re-descubrir:
 - **El sitio solo afirma lo que la app hace hoy**, y la sección «Status» del `README.md` es la
   fuente de verdad del copy. Hay un FAQ que dice explícitamente que la topografía es v0.2.
 
+## 🗓 Sesión 2026-08-13 — v0.3.2 (los acentos, y por qué existe `core/encoding.py`)
+
+**`core/encoding.py` no es una decisión de diseño: es un vendaje sobre un bug ajeno**
+(LibreDWG issue #1393) y se va el día que aterrice el arreglo upstream. Lo que hace y
+por qué, para que nadie lo "simplifique" sin saber:
+
+Guardar como DWG corrompía **todo** carácter no ASCII — nombres de capa, de estilo y de
+bloque, TEXT, ATTRIB, texto de cota y XDATA — y sólo se salvaba el MTEXT. Medido con un
+dibujo que lleva `CAÑERÍA Ø m² Nº45°` en las siete ubicaciones. La causa: un DXF moderno
+es UTF-8 y LibreDWG copia esos bytes a un DWG que declara la página de códigos de
+Windows, así que AutoCAD decodifica `CAÑERÍA` como `CAÃ‘ERÃA`.
+
+**Ningún camino solo funciona**, y por eso el arreglo tiene dos mitades:
+
+| | intermedio R2018 (lo de antes) | intermedio R2000 |
+|---|---|---|
+| nombres, TEXT, ATTRIB, cota, XDATA | corrupto | correcto |
+| MTEXT | correcto | corrupto (escapes `\U+` con code points equivocados: la `Ñ` sale `х` cirílica) |
+
+Así que: el DXF intermedio sale en R2000 (la versión que el DWG va a tener igual, de modo
+que el downgrade no puede costar nada que un r2000 pudiera llevar) **y** el MTEXT lo
+pre-escapamos nosotros a `\U+xxxx` — ASCII puro, nada que traducir mal. Al leer un DWG se
+decodifican, lo que además arregla los archivos que **AutoCAD mismo** escribe así.
+
+De regalo: cuatro planos R12 que se guardaban **vacíos** (hueco del escritor pre-R13,
+issue #1386) ahora salen completos.
+
+⚠️ **Dos lecciones de método, las de siempre en otra forma.** (1) *Medir la matriz completa
+antes de elegir el arreglo*: mi primer diagnóstico fue «se pierden caracteres en MTEXT»;
+la matriz de siete ubicaciones × dos versiones mostró que lo grave eran los **nombres de
+capa** y que el MTEXT era el único que sí funcionaba. (2) *El paso de verificación también
+miente*: `git apply` dijo «applied clean» sobre un árbol que no era repo git y no escribió
+nada; sólo el comportamiento medido (el valor seguía mal) lo delató. Verificar el
+verificador.
+
+**Track L en esta sesión:** 9 de los 17 PRs enviados ya están fusionados en master (con
+autoría propia, no reimplementados); **#1387 está APROBADO pero sin fusionar**. Nuevo
+**PR #1392**: los valores negativos de XDATA (grupos 1070/1071) volvían como su complemento
+sin signo — 2595 valores corruptos en 146 de 200 planos reales. Salió de **ensanchar el
+harness de fuzz** (`tools/dwg_fuzz.py`) para que llevara XDATA, grosores y extrusiones
+inclinadas: la primera campaña lo cazó. El patrón de causa se repite por octava vez —
+*el código ya documentaba la conducta correcta y no la ejecutaba*: la tabla de formatos ya
+declaraba esos grupos con signo y el valor le llegaba extendido con ceros.
+
 ## 🗓 Sesión 2026-08-07 — v0.1.3 (borrar borra también en pantalla)
 
 Icono nuevo (el lápiz fuera, cursor de mira) y **un bug propio que Marco cazó
