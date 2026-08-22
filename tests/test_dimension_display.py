@@ -131,3 +131,74 @@ def test_undoing_a_dimension_takes_it_off_the_screen_at_once(qapp) -> None:
     after = _vertices(win.viewport._overlay_scene)
     assert after < with_dim, (
         f"the undone dimension is still drawn ({after} vertices of {with_dim})")
+
+
+def test_matchprop_between_dimensions_shows_at_once(qapp) -> None:
+    """MA from one dimension to another used to wait for a full regen.
+
+    The style transferred correctly all along -- but on a real plan the
+    screen took ~2.7 s to show it, and seconds of nothing after clicking the
+    destination read as "it did not select that dimension". Reported by
+    Marco right after the creation fix landed.
+    """
+    from views.main_window import MainWindow
+    from core import actions, modify
+
+    win = MainWindow()
+    win.new_document()
+    doc = win.document
+    doc.doc.dimstyles.add("PLANO", dxfattribs={"dimtxt": 2.5, "dimasz": 1.8,
+                                               "dimscale": 3.0})
+    for i in range(30):
+        doc.doc.modelspace().add_line((i, 0), (i, 5))
+    win.regen_in_memory()
+    _wait_regen(qapp, win)
+
+    source = actions.dim_linear((0, 20), (40, 20), (20, 26), dimstyle="PLANO")
+    win.tools._execute(source)
+    target = actions.dim_linear((0, 40), (40, 40), (20, 46))
+    win.tools._execute(target)
+    qapp.processEvents()
+
+    def text_height(dim):
+        block = dim.dxf.get("geometry", None)
+        for entity in doc.doc.blocks.get(block):
+            if entity.dxftype() in ("TEXT", "MTEXT"):
+                return round(float(getattr(entity.dxf, "char_height", None)
+                                   or getattr(entity.dxf, "height", 0)), 2)
+        return None
+
+    assert text_height(source.dim) != text_height(target.dim)
+
+    win.tools._execute(modify.match_properties(source.dim, [target.dim]))
+    qapp.processEvents()
+
+    # the style really travelled -- and the screen already shows it
+    assert target.dim.dxf.dimstyle == "PLANO"
+    assert text_height(target.dim) == text_height(source.dim)
+    assert win._regen_worker is None, "MATCHPROP still queued a full regen"
+    overlay = win.viewport._overlay_scene
+    assert target.dim.dxf.handle in overlay.handle_ranges
+
+
+def test_matchprop_does_not_queue_an_entity_twice(qapp) -> None:
+    """Restyling something already on the overlay must not draw it twice."""
+    from views.main_window import MainWindow
+    from core import actions, modify
+
+    win = MainWindow()
+    win.new_document()
+    doc = win.document
+    doc.doc.layers.add("ROJO", color=1)
+    source = doc.doc.modelspace().add_line((0, 50), (10, 50),
+                                           dxfattribs={"layer": "ROJO"})
+    win.regen_in_memory()
+    _wait_regen(qapp, win)
+
+    drawn = actions.dim_linear((0, 20), (40, 20), (20, 26))
+    win.tools._execute(drawn)
+    win.tools._execute(modify.match_properties(source, [drawn.dim]))
+    qapp.processEvents()
+
+    queued = [e.dxf.handle for e in win.tools._pending_render if e.is_alive]
+    assert queued.count(drawn.dim.dxf.handle) == 1, queued

@@ -980,7 +980,12 @@ class ToolController(QObject):
                     if extra:
                         new_ents = list(extra)
                         break
-            self._pending_render.extend(new_ents)
+            # Dedupe: MATCHPROP onto an entity already riding the overlay
+            # (a dimension drawn seconds ago) would otherwise queue it twice
+            # and tessellate it twice on every refresh.
+            for entity in new_ents:
+                if entity not in self._pending_render:
+                    self._pending_render.append(entity)
             alive = [e for e in new_ents if e.is_alive]
             # patch both caches: O(touched) instead of a full rebuild
             # (all calls no-op if the cache was invalidated above)

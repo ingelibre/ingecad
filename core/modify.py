@@ -661,11 +661,13 @@ class MatchPropCommand(Command):
         self.properties = tuple(properties)
         self._before: list = []
         self._before_xdata: list = []
-        # A matched dimension re-renders its block; the overlay cannot
-        # show that, so the display path must run the real regen.
-        self.needs_regen = (
-            source.dxftype() == "DIMENSION"
-            and any(t.dxftype() == "DIMENSION" for t in self.targets))
+        # A matched dimension re-renders its anonymous *D block, and the
+        # overlay draws that through the same frontend the base scene uses
+        # -- so the ordinary surgical path (hide the stale base copy, show
+        # the restyled entity) is enough. It used to ask for a full regen
+        # here, which on a real plan meant waiting seconds with nothing
+        # happening: the user reads that as "it did not select it".
+        self.needs_regen = False
 
     def _dim_pair(self, target) -> bool:
         return (self.source.dxftype() == "DIMENSION"

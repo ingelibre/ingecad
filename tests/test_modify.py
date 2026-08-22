@@ -664,7 +664,11 @@ def test_matchprop_dimension_copies_style_overrides_and_rerenders():
     old_block = dst.dxf.geometry
     history = History(doc)
     command = match_properties(src, [dst])
-    assert command.needs_regen
+    # It used to ask for a full regen here, on the belief that the overlay
+    # could not draw a re-rendered dimension block. It can, and asking cost
+    # ~2.7 s of nothing happening on a real plan -- see
+    # tests/test_dimension_display.py.
+    assert not command.needs_regen
     history.execute(command)
     assert dst.dxf.dimstyle == "Acot-100"
     assert dst.dxf.geometry != old_block    # re-rendered

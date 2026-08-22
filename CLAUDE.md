@@ -449,6 +449,21 @@ investigación. Lo que lo delató fue el **control**: una LÍNEA normal, que sí
 dibuja seguro, también daba 0. *Un cero sólo significa algo si el control da
 distinto de cero.*
 
+**Y el mismo comentario obsoleto estaba en un segundo sitio.** Marco probó `MA`
+para copiar el estilo de una cota a la recién dibujada y reportó *«como que no
+selecciona esa cota»*. `MatchPropCommand` marcaba `needs_regen` cuando origen y
+destino eran cotas, con la misma justificación falsa. **El estilo siempre se
+copiaba bien** (verificado: alto de texto 1,75 → 7,5, bloque re-renderizado); lo
+que fallaba era que **la pantalla tardaba 2 671 ms en mostrarlo**, y segundos sin
+respuesta tras hacer clic se leen como «no lo seleccionó». Ahora: **74 ms**.
+Lección: cuando una premisa falsa se arregla, hay que **buscar dónde más está
+escrita** — el mismo comentario, palabra por palabra, vivía en `core/modify.py`.
+
+De paso, un defecto que sólo aparece al combinar las dos cosas: aplicar MATCHPROP
+a una entidad que **ya viaja en el overlay** la encolaba **dos veces**
+(`_pending_render.extend` sin deduplicar, cuando la rama aditiva sí deduplica),
+así que se teselaba dos veces en cada refresco.
+
 **Lo que NO cambió, y conviene saberlo:** el motor de snap nunca enganchó a la
 geometría de una cota, ni antes ni después — verificado preguntándole
 directamente, con reconstrucción completa incluida. No es una regresión de este
