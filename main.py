@@ -121,12 +121,24 @@ def _self_check() -> int:
         ("fragment shader", root / "resources" / "shaders" / "line.frag"),
         ("thick shader", root / "resources" / "shaders" / "thick.vert"),
         ("app icon", root / "resources" / "ingecad.svg"),
-        ("translations", root / "i18n" / "es.json"),
     ):
         ok = path.is_file()
         print(f"  {label:<14}: {'found' if ok else 'MISSING'}  {path}")
         if not ok:
             problems.append(label)
+
+    # Languages are folders under i18n/, so a bundle that forgot to ship them
+    # starts fine and is simply English-only -- exactly the kind of silent
+    # packaging loss this self-check exists to name out loud.
+    from core import i18n
+    packs = i18n.language_packs()
+    translated = [p for p in packs.values() if p.catalog is not None]
+    print(f"  languages     : {len(packs)} "
+          f"({', '.join(sorted(p.code for p in packs.values()))})")
+    if not translated:
+        print(f"  {'translations':<14}: MISSING  no language pack has a catalog "
+              f"under {i18n.i18n_dir()}")
+        problems.append("translations")
 
     # The drawing frontend resolves hatch patterns and text through these; a
     # missing hidden import shows up here rather than on the first HATCH.

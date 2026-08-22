@@ -1,0 +1,7 @@
+{
+  "code": "en",
+  "name": "English",
+  "maintainer": "Marco Sumari Tellez",
+  "maintained": true,
+  "note": "Source language: the keys are the English strings, so there is no ui.json."
+}

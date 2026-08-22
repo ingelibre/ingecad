@@ -22,13 +22,14 @@ Set) as the translation of "Delete".
 """
 from __future__ import annotations
 
-import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
-I18N_DIR = Path(__file__).resolve().parent.parent / "i18n"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core import i18n  # noqa: E402
 
 
 def _bracket(text: str) -> str | None:
@@ -84,12 +85,11 @@ def check(source: str, translation: str) -> list[str]:
 
 
 def _catalogs() -> list[tuple[str, dict[str, str]]]:
-    out = []
-    for path in sorted(I18N_DIR.glob("*.json")):
-        if path.stem == "en":       # identity map, nothing to check
-            continue
-        out.append((path.stem, json.loads(path.read_text(encoding="utf-8"))))
-    return out
+    """Every installed language that actually carries a catalog."""
+    return [(pack.code, pack.load())
+            for pack in sorted(i18n.language_packs().values(),
+                               key=lambda p: p.code)
+            if pack.catalog is not None]
 
 
 @pytest.mark.parametrize("lang,catalog", _catalogs(),

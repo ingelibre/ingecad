@@ -122,8 +122,9 @@ class OptionsDialog(QDialog):
         form = QFormLayout()
         self.language = QComboBox(page)
         # Each language in its own name: recognizable whichever is active.
-        for code, native in (("en", "English"), ("es", "Español")):
-            self.language.addItem(native, code)
+        # The list comes from the packs in i18n/ — see core/i18n/packs.py.
+        for code in i18n.available_languages():
+            self.language.addItem(i18n.language_name(code), code)
         index = self.language.findData(i18n.current_language())
         self.language.setCurrentIndex(index if index >= 0 else 0)
         form.addRow(tr("Language:"), self.language)

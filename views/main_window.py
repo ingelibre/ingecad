@@ -791,10 +791,11 @@ class MainWindow(QMainWindow):
         tools_menu.addSeparator()
         lang_menu = tools_menu.addMenu(tr("Language"))
         lang_group = QActionGroup(self)
-        # Each language is listed in its own name — recognizable no matter
-        # which language is currently active.
-        for code, native_name in (("en", "English"), ("es", "Español")):
-            act = QAction(native_name, self)
+        # Built from the packs installed under i18n/, so adding a language is
+        # dropping a folder — never editing this file. Each is listed in its
+        # own name, recognizable no matter which language is active.
+        for code in i18n.available_languages():
+            act = QAction(i18n.language_name(code), self)
             act.setCheckable(True)
             act.setChecked(i18n.current_language() == code)
             act.triggered.connect(lambda _=False, c=code: self._set_language(c))

@@ -17,18 +17,30 @@ front of the user, and one that drops ``{count}`` silently swallows the number.
 from __future__ import annotations
 
 import ast
-import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-I18N_DIR = ROOT / "i18n"
+sys.path.insert(0, str(ROOT))
+from core import i18n  # noqa: E402
+
 SKIP_DIRS = {"build", "web", "vendor", ".venv", "venv", "externos", "tests"}
 
-#: Languages the project itself keeps complete. Everything else only reports.
-MAINTAINED = ("es",)
+
+def _maintained() -> list[str]:
+    """Languages whose pack says the project keeps them complete.
+
+    Read from ``meta.json`` rather than hard-coded here, so adding a language
+    touches no Python at all -- not even this test.
+    """
+    return sorted(p.code for p in i18n.language_packs().values()
+                  if p.maintained and p.catalog is not None)
+
+
+MAINTAINED = _maintained()
 
 
 def _scan() -> tuple[dict[str, str], set[str]]:
@@ -74,7 +86,7 @@ def _sources() -> dict[str, str]:
 
 
 def _catalog(lang: str) -> dict[str, str]:
-    return json.loads((I18N_DIR / f"{lang}.json").read_text(encoding="utf-8"))
+    return i18n.language_packs()[lang].load()
 
 
 def _fields(text: str) -> list[str]:
@@ -121,7 +133,9 @@ def test_maintained_language_has_no_dead_keys(lang: str) -> None:
 
 
 def _languages() -> list[str]:
-    return [p.stem for p in sorted(I18N_DIR.glob("*.json")) if p.stem != "en"]
+    """Installed languages that carry a catalog (the source language has none)."""
+    return sorted(p.code for p in i18n.language_packs().values()
+                  if p.catalog is not None)
 
 
 @pytest.mark.parametrize("lang", _languages())

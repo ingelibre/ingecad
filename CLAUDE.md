@@ -438,9 +438,14 @@ no hay que re-discutir:
   los paréntesis daba 28 rotas cuando eran 17. Y las opciones se comparan **por
   posición**: un cotejo laxo daba por buena `Definir` (que es Set) como
   traducción de `Delete`, porque las dos llevan una D mayúscula.
-- **Un idioma debe ser una carpeta, no un parche.** Hoy el menú de idioma tiene
-  la lista fija (`views/main_window.py:796`), por eso el PR del checo tuvo que
-  tocar Python. Meta: `i18n/<lang>/{meta,ui,commands}.json` y cero código.
+- ✅ **I2 hecha el 2026-08-22 — un idioma es una carpeta, no un parche.**
+  `core/i18n.py` es ahora el paquete `core/i18n/` (API pública intacta: ningún
+  llamador se tocó) y `packs.py` descubre `i18n/<lang>/{meta,ui}.json`. Las
+  **dos** listas fijas de idiomas —el menú y el combo de Opciones— salieron.
+  `maintained` vive en `meta.json`, así que agregar un idioma no toca Python
+  **ni los tests**. El layout plano `i18n/<code>.json` sigue cargando (la
+  traducción al checo en curso no se rompe). Verificado de punta a punta:
+  soltar `i18n/qu/` pone *Runa Simi* en el menú de la ventana real.
 - **Comandos localizados (`LINEA`) van al final, y con el inglés siempre
   aceptado** vía prefijo `_`, como la AutoCAD localizada. El invariante sagrado:
   toda la tabla de alias inglesa funciona con cualquier idioma activo.
