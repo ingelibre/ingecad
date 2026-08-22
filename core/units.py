@@ -321,7 +321,7 @@ def units_command(current: "Units", echo, apply, angdir: int = 0,
     through the whole sequence changes nothing — the AutoCAD behaviour.
     """
     from core.actions import Prompt
-    from core.i18n import tr
+    from core.i18n import keywords, tr
 
     chosen = Units(current.lunits, current.luprec, current.aunits,
                    current.auprec, current.insunits)
@@ -451,8 +451,11 @@ def units_command(current: "Units", echo, apply, angdir: int = 0,
                current=tr("Yes") if state["angdir"] else tr("No")),
             on_clockwise)
 
+    CLOCKWISE = "Measure angles clockwise? [Yes/No] <{current}>:"
+
     def on_clockwise(text):
-        token = text.strip().upper()
+        # "Sí" and "_Y" reach the same branch as "Y".
+        token = keywords.match(text, CLOCKWISE) or text.strip().upper()
         if token:
             if token.startswith("Y"):
                 state["angdir"] = 1

@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from core.commands import Command
-from core.i18n import tr
+from core.i18n import keywords, tr
 
 
 # Standard AutoCAD lineweights, hundredths of a millimetre. -3 = Default
@@ -340,10 +340,13 @@ def layer_command(document, history, *, echo, refresh, args=()):
             history.execute(CompositeCommand("LAYER", commands))
         refresh()
 
-    option_text = tr(
-        "Enter an option "
-        "[?/Make/Set/New/Rename/ON/OFF/Color/Ltype/LWeight/Plot/"
-        "Freeze/Thaw/LOck/Unlock/Description]:")
+    # The English source is kept, not just its translation: the keyword
+    # resolver reads the option list out of it and its rendering, so the
+    # Spanish "Inutilizar" answers Freeze exactly as "F" does.
+    option_source = ("Enter an option "
+                     "[?/Make/Set/New/Rename/ON/OFF/Color/Ltype/LWeight/Plot/"
+                     "Freeze/Thaw/LOck/Unlock/Description]:")
+    option_text = tr(option_source)
 
     def loop():
         return step(option_text, on_option)
@@ -502,8 +505,11 @@ def layer_command(document, history, *, echo, refresh, args=()):
             tr("Enter name list of layer(s) for lineweight {lw} <current>:",
                lw=lineweight_label(weight)), on_names)
 
+    PLOT_PROMPT = "Enter a plotting preference [Plot/No plot] <Plot>:"
+
     def on_plot(text: str):
-        key = text.strip().upper()
+        # "No trazar" answers exactly as "N" does.
+        key = keywords.match(text, PLOT_PROMPT) or text.strip().upper()
         plot = not (key in ("N", "NO", "NO PLOT", "NOPLOT"))
 
         def on_names(text2: str):
@@ -527,7 +533,8 @@ def layer_command(document, history, *, echo, refresh, args=()):
         key = text.strip()
         if not key:
             return None                     # Enter exits (official)
-        option = _LAYER_KEYWORDS.get(key.upper())
+        option = _LAYER_KEYWORDS.get(
+            keywords.match(key, option_source) or key.upper())
         if option is None:
             echo(tr("Invalid option keyword."))
             return loop()
@@ -565,8 +572,7 @@ def layer_command(document, history, *, echo, refresh, args=()):
             return step(tr("Enter lineweight in mm (0.00 - 2.11):"),
                         on_lweight)
         if option == "plot":
-            return step(tr("Enter a plotting preference [Plot/No plot] "
-                           "<Plot>:"), on_plot)
+            return step(tr(PLOT_PROMPT), on_plot)
         if option == "description":
             return step(tr("Enter description for the layer(s):"),
                         on_description)

@@ -35,7 +35,7 @@ class BlockTool(Tool):
             self.ctx.finish()
             return
         self._block_name = name.strip()
-        self.ctx.prompt(tr("Specify insertion base point:"))
+        self.prompt("Specify insertion base point:")
 
     def on_point(self, point: Point) -> None:
         if self._block_name and self._entities:
@@ -64,17 +64,20 @@ class InsertTool(Tool):
             self.ctx.finish()
             return
         self._block_name = chosen
-        self.ctx.prompt(tr("Specify insertion point [Scale/Rotate]:"))
+        self.prompt("Specify insertion point [Scale/Rotate]:")
 
     def on_option(self, text: str) -> bool:
-        t = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.strip().upper()
         if self._await is None and t in ("S", "SCALE"):
             self._await = "scale"
-            self.ctx.prompt(tr("Specify scale factor <{v}>:", v=self._xscale))
+            self.prompt("Specify scale factor <{v}>:", v=self._xscale)
             return True
         if self._await is None and t in ("R", "ROTATE"):
             self._await = "rotate"
-            self.ctx.prompt(tr("Specify rotation angle <{v}>:", v=self._rotation))
+            self.prompt("Specify rotation angle <{v}>:", v=self._rotation)
             return True
         if self._await is not None:
             try:
@@ -86,7 +89,7 @@ class InsertTool(Tool):
             else:
                 self._rotation = value
             self._await = None
-            self.ctx.prompt(tr("Specify insertion point [Scale/Rotate]:"))
+            self.prompt("Specify insertion point [Scale/Rotate]:")
             return True
         return False
 
@@ -161,14 +164,17 @@ class HatchTool(Tool):
         self._prompt()
 
     def _prompt(self) -> None:
-        self.ctx.prompt(tr(
-            "Pick internal point or [Select objects/seTtings], Enter to apply:"))
+        self.prompt(
+            "Pick internal point or [Select objects/seTtings], Enter to apply:")
 
     def on_option(self, text: str) -> bool:
-        t = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.strip().upper()
         if t in ("S", "SELECT"):
             self.mode = "select"
-            self.ctx.prompt(tr("Select boundary objects, Enter to apply:"))
+            self.prompt("Select boundary objects, Enter to apply:")
             return True
         if t in ("T", "SETTINGS", "K"):
             chosen = self.ctx.ask_hatch(self.settings)
@@ -241,13 +247,16 @@ class HatchCliTool(HatchTool):
         self._prompt()
 
     def _prompt(self) -> None:
-        self.ctx.prompt(tr(
+        self.prompt(
             "Specify internal point or [Properties/Select objects/"
-            "draW boundary/Advanced/hatch COlor]:"))
+            "draW boundary/Advanced/hatch COlor]:")
 
     # -- option flows ----------------------------------------------------------
     def on_option(self, text: str) -> bool:
-        t = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.strip().upper()
         value = None
         try:
             value = float(text)
@@ -263,8 +272,8 @@ class HatchCliTool(HatchTool):
                 return False
             self.settings["scale"] = value
             self._await = "angle"
-            self.ctx.prompt(tr("Specify an angle for the pattern <{a:g}>:",
-                               a=self.settings["angle"]))
+            self.prompt("Specify an angle for the pattern <{a:g}>:",
+                        a=self.settings["angle"])
             return True
         if self._await == "angle":
             if text == "":
@@ -283,8 +292,8 @@ class HatchCliTool(HatchTool):
                 return False
             self._pending["ua"] = value
             self._await = "user_spacing"
-            self.ctx.prompt(tr("Specify spacing between the lines <{s:g}>:",
-                               s=cls._user[1]))
+            self.prompt("Specify spacing between the lines <{s:g}>:",
+                        s=cls._user[1])
             return True
         if self._await == "user_spacing":
             if text == "":
@@ -293,7 +302,7 @@ class HatchCliTool(HatchTool):
                 return False
             self._pending["us"] = value
             self._await = "user_double"
-            self.ctx.prompt(tr("Double hatch area? [Yes/No] <N>:"))
+            self.prompt("Double hatch area? [Yes/No] <N>:")
             return True
         if self._await == "user_double":
             if t in ("Y", "YES"):
@@ -345,7 +354,7 @@ class HatchCliTool(HatchTool):
                 return False
             self._await = "loop"
             self._loop = []
-            self.ctx.prompt(tr("Specify start point:"))
+            self.prompt("Specify start point:")
             return True
         if self._await == "loop":
             if t in ("C", "CLOSE") and len(self._loop) >= 3:
@@ -358,32 +367,32 @@ class HatchCliTool(HatchTool):
         # main prompt keywords
         if t in ("P", "PROPERTIES"):
             self._await = "pattern"
-            self.ctx.prompt(tr(
+            self.prompt(
                 "Enter a pattern name or [?/Solid/User defined] <{name}>:",
-                name=self.settings["pattern"]))
+                name=self.settings["pattern"])
             return True
         if t in ("S", "SELECT"):
             self.mode = "select"
-            self.ctx.prompt(tr("Select boundary objects, Enter to apply:"))
+            self.prompt("Select boundary objects, Enter to apply:")
             return True
         if t in ("W", "DRAW"):
             self._await = "retain"
-            self.ctx.prompt(tr("Retain polyline boundary? [Yes/No] <N>:"))
+            self.prompt("Retain polyline boundary? [Yes/No] <N>:")
             return True
         if t in ("A", "ADVANCED"):
             self._await = "style"
             names = {actions.HATCH_STYLE_NORMAL: "N",
                      actions.HATCH_STYLE_OUTER: "O",
                      actions.HATCH_STYLE_IGNORE: "I"}
-            self.ctx.prompt(tr("Enter hatch style [Normal/Outer/Ignore] <{s}>:",
-                               s=names[cls._style]))
+            self.prompt("Enter hatch style [Normal/Outer/Ignore] <{s}>:",
+                        s=names[cls._style])
             return True
         if t == "CO":
             self._await = "color"
             current = self.settings.get("color", 256)
-            self.ctx.prompt(tr(
+            self.prompt(
                 "New hatch color (ACI 1-255, . = ByLayer) <{c}>:",
-                c="ByLayer" if current == 256 else current))
+                c="ByLayer" if current == 256 else current)
             return True
         return False
 
@@ -395,9 +404,9 @@ class HatchCliTool(HatchTool):
         if upper == "?":
             names = actions.hatch_pattern_names()
             self.ctx.echo(", ".join(names))
-            self.ctx.prompt(tr(
+            self.prompt(
                 "Enter a pattern name or [?/Solid/User defined] <{name}>:",
-                name=self.settings["pattern"]))
+                name=self.settings["pattern"])
             return True
         if upper in ("S", "SOLID"):
             self.settings["pattern"] = "SOLID"
@@ -408,8 +417,8 @@ class HatchCliTool(HatchTool):
             return True
         if upper in ("U", "USER", "USER DEFINED"):
             self._await = "user_angle"
-            self.ctx.prompt(tr("Specify angle for crosshatch lines <{a:g}>:",
-                               a=type(self)._user[0]))
+            self.prompt("Specify angle for crosshatch lines <{a:g}>:",
+                        a=type(self)._user[0])
             return True
         # optional island-style suffix: NAME,N / NAME,O / NAME,I
         name = upper
@@ -422,9 +431,9 @@ class HatchCliTool(HatchTool):
                 type(self)._style = styles[suffix.strip()]
         if name != "SOLID" and name not in actions._std_patterns():
             self.ctx.echo(tr('Unknown pattern "{name}".', name=name))
-            self.ctx.prompt(tr(
+            self.prompt(
                 "Enter a pattern name or [?/Solid/User defined] <{name}>:",
-                name=self.settings["pattern"]))
+                name=self.settings["pattern"])
             return True
         self.settings["pattern"] = name
         self._user_def = None
@@ -434,8 +443,8 @@ class HatchCliTool(HatchTool):
             self._prompt()
             return True
         self._await = "scale"
-        self.ctx.prompt(tr("Specify a scale for the pattern <{s:g}>:",
-                           s=self.settings["scale"]))
+        self.prompt("Specify a scale for the pattern <{s:g}>:",
+                    s=self.settings["scale"])
         return True
 
     # -- draW boundary ---------------------------------------------------------
@@ -453,7 +462,7 @@ class HatchCliTool(HatchTool):
         if self._await == "loop":
             self._loop.append(point)
             self.last_point = point
-            self.ctx.prompt(tr("Specify next point or [Close/Undo]:"))
+            self.prompt("Specify next point or [Close/Undo]:")
             return
         if self._await is not None:
             return

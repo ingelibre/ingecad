@@ -42,7 +42,7 @@ class MoveTool(Tool):
             self.ctx.finish()
             return
         self._entities = entities
-        self.ctx.prompt(tr("Specify base point:"))
+        self.prompt("Specify base point:")
 
     def on_point(self, point: Point) -> None:
         if self._base is None:
@@ -51,7 +51,7 @@ class MoveTool(Tool):
             # the dragged geometry follows the cursor (ghost preview)
             self.ghost_entities = self._entities
             self.ghost_base = point
-            self.ctx.prompt(tr("Specify second point:"))
+            self.prompt("Specify second point:")
         else:
             dx, dy = point[0] - self._base[0], point[1] - self._base[1]
             self.ctx.execute(actions.move_entities(self._entities, dx, dy))
@@ -74,7 +74,7 @@ class CopyTool(Tool):
             self.ctx.finish()
             return
         self._entities = entities
-        self.ctx.prompt(tr("Specify base point:"))
+        self.prompt("Specify base point:")
 
     def on_point(self, point: Point) -> None:
         if self._base is None:
@@ -82,7 +82,7 @@ class CopyTool(Tool):
             self.last_point = point
             self.ghost_entities = self._entities
             self.ghost_base = point
-            self.ctx.prompt(tr("Specify second point (multiple; Enter ends):"))
+            self.prompt("Specify second point (multiple; Enter ends):")
         else:
             dx, dy = point[0] - self._base[0], point[1] - self._base[1]
             self.ctx.execute(actions.copy_entities(self._entities, dx, dy))
@@ -107,13 +107,16 @@ class RotateTool(Tool):
             self.ctx.finish()
             return
         self._entities = entities
-        self.ctx.prompt(tr("Specify base point:"))
+        self.prompt("Specify base point:")
 
     def on_option(self, text: str) -> bool:
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         if t in ("R", "REFERENCE") and self._base is not None:
             self._reference = -1.0  # waiting for reference angle
-            self.ctx.prompt(tr("Specify reference angle (two points or typed):"))
+            self.prompt("Specify reference angle (two points or typed):")
             return True
         # typed angle
         if self._base is not None:
@@ -123,7 +126,7 @@ class RotateTool(Tool):
                 return False
             if self._reference == -1.0:
                 self._reference = angle
-                self.ctx.prompt(tr("Specify new angle:"))
+                self.prompt("Specify new angle:")
             elif self._reference is not None:
                 self.ctx.execute(actions.rotate_entities(
                     self._entities, self._base, angle - self._reference))
@@ -143,18 +146,18 @@ class RotateTool(Tool):
             # which is what AutoCAD shows and what makes the angle obvious.
             self.ghost_entities = self._entities
             self.ghost_base = point
-            self.ctx.prompt(tr("Specify rotation angle or [Reference]:"))
+            self.prompt("Specify rotation angle or [Reference]:")
             return
         ang = math.degrees(math.atan2(point[1] - self._base[1],
                                       point[0] - self._base[0]))
         if self._reference == -1.0:
             if self._ref_first is None:
                 self._ref_first = point
-                self.ctx.prompt(tr("Specify second point of reference angle:"))
+                self.prompt("Specify second point of reference angle:")
                 return
             self._reference = math.degrees(math.atan2(
                 point[1] - self._ref_first[1], point[0] - self._ref_first[0]))
-            self.ctx.prompt(tr("Specify new angle:"))
+            self.prompt("Specify new angle:")
             return
         if self._reference is not None:
             ang -= self._reference
@@ -189,13 +192,16 @@ class ScaleTool(Tool):
             self.ctx.finish()
             return
         self._entities = entities
-        self.ctx.prompt(tr("Specify base point:"))
+        self.prompt("Specify base point:")
 
     def on_option(self, text: str) -> bool:
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         if t in ("R", "REFERENCE") and self._base is not None:
             self._ref_length = -1.0
-            self.ctx.prompt(tr("Specify reference length:"))
+            self.prompt("Specify reference length:")
             return True
         if self._base is not None:
             try:
@@ -207,7 +213,7 @@ class ScaleTool(Tool):
                 return True
             if self._ref_length == -1.0:
                 self._ref_length = value
-                self.ctx.prompt(tr("Specify new length:"))
+                self.prompt("Specify new length:")
             elif self._ref_length is not None:
                 self.ctx.execute(actions.scale_entities(
                     self._entities, self._base, value / self._ref_length))
@@ -225,7 +231,7 @@ class ScaleTool(Tool):
             self.last_point = point
             self.ghost_entities = self._entities
             self.ghost_base = point
-            self.ctx.prompt(tr("Specify scale factor or [Reference]:"))
+            self.prompt("Specify scale factor or [Reference]:")
             return
         # AutoCAD takes the factor from the distance to the base point, and
         # shows it growing as you go.
@@ -235,7 +241,7 @@ class ScaleTool(Tool):
             return
         if self._ref_length == -1.0:
             self._ref_length = factor
-            self.ctx.prompt(tr("Specify new length:"))
+            self.prompt("Specify new length:")
             return
         if self._ref_length is not None:
             factor = factor / self._ref_length
@@ -269,21 +275,24 @@ class MirrorTool(Tool):
             self.ctx.finish()
             return
         self._entities = entities
-        self.ctx.prompt(tr("Specify first point of mirror line:"))
+        self.prompt("Specify first point of mirror line:")
 
     def on_point(self, point: Point) -> None:
         if self._p1 is None:
             self._p1 = point
             self.last_point = point
-            self.ctx.prompt(tr("Specify second point of mirror line:"))
+            self.prompt("Specify second point of mirror line:")
         elif self._p2 is None:
             self._p2 = point
-            self.ctx.prompt(tr("Erase source objects? [Yes/No] <N>:"))
+            self.prompt("Erase source objects? [Yes/No] <N>:")
 
     def on_option(self, text: str) -> bool:
         if self._p2 is None:
             return False
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         if t in ("Y", "YES", "S", "SI"):
             self.ctx.execute(actions.mirror_entities(
                 self._entities, self._p1, self._p2, keep_source=False))
@@ -337,28 +346,29 @@ class OffsetTool(Tool):
                          erase=tr("Yes") if cls.erase_source else tr("No"),
                          layer=tr("Current") if cls.layer_mode == "current"
                          else tr("Source")))
-        self.ctx.prompt(
-            tr("Specify offset distance or [Through/Erase/Layer] <{d}>:",
-               d=f"{cls.distance:g}"))
+        self.prompt("Specify offset distance or [Through/Erase/Layer] <{d}>:",
+               d=f"{cls.distance:g}")
 
     def _ask_object(self) -> None:
         self._phase = "object"
         self.entity_picker = True
-        self.ctx.prompt(tr("Select object to offset or [Exit/Undo] <Exit>:"))
+        self.prompt("Select object to offset or [Exit/Undo] <Exit>:")
 
     def _ask_side(self) -> None:
         self._phase = "side"
         self.entity_picker = False
         if self._through:
-            self.ctx.prompt(
-                tr("Specify through point or [Exit/Multiple/Undo] <Exit>:"))
+            self.prompt("Specify through point or [Exit/Multiple/Undo] <Exit>:")
         else:
-            self.ctx.prompt(tr("Specify point on side to offset or "
-                               "[Exit/Multiple/Undo] <Exit>:"))
+            self.prompt("Specify point on side to offset or "
+                        "[Exit/Multiple/Undo] <Exit>:")
 
     # -- keywords --------------------------------------------------------------
     def on_option(self, text: str) -> bool:
-        token = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        token = self.option(text) or text.strip().upper()
         cls = type(self)
         if self._await == "erase":
             cls.erase_source = token.startswith("Y")
@@ -378,17 +388,17 @@ class OffsetTool(Tool):
                 return True
             if token in ("E", "ERASE"):
                 self._await = "erase"
-                self.ctx.prompt(tr("Erase source object after offsetting? "
-                                   "[Yes/No] <{cur}>:",
-                                   cur=tr("Yes") if cls.erase_source
-                                   else tr("No")))
+                self.prompt("Erase source object after offsetting? "
+                            "[Yes/No] <{cur}>:",
+                            cur=tr("Yes") if cls.erase_source
+                            else tr("No"))
                 return True
             if token in ("L", "LAYER"):
                 self._await = "layer"
-                self.ctx.prompt(tr("Enter layer option for offset objects "
-                                   "[Current/Source] <{cur}>:",
-                                   cur=tr("Current") if cls.layer_mode
-                                   == "current" else tr("Source")))
+                self.prompt("Enter layer option for offset objects "
+                            "[Current/Source] <{cur}>:",
+                            cur=tr("Current") if cls.layer_mode
+                            == "current" else tr("Source"))
                 return True
             value = _number(text)
             if value is None:
@@ -431,7 +441,7 @@ class OffsetTool(Tool):
             if self._first is None:
                 self._first = point
                 self.last_point = point
-                self.ctx.prompt(tr("Specify second point:"))
+                self.prompt("Specify second point:")
                 return
             distance = math.dist(self._first, point)
             self._first = None
@@ -623,9 +633,8 @@ class _TrimExtendBase(Tool):
     def on_selection(self, entities: list) -> None:
         # Enter with empty selection = all entities are edges (modern AutoCAD)
         self._edges_handles = [e.dxf.handle for e in entities] or None
-        self.ctx.prompt(
-            tr("Select object to trim (Shift extends):") if self.trim_mode
-            else tr("Select object to extend (Shift trims):"))
+        self.prompt("Select object to trim (Shift extends):" if self.trim_mode
+                    else "Select object to extend (Shift trims):")
 
     def on_point(self, point: Point) -> None:
         entity = self.ctx.services.pick_entity(point)
@@ -800,13 +809,16 @@ class FilletTool(Tool):
     def start(self) -> None:
         self.name = "FILLET"
         self._first = None
-        self.ctx.prompt(tr("FILLET (radius {radius}) select first line or [Radius]:",
-                           radius=type(self).radius))
+        self.prompt("FILLET (radius {radius}) select first line or [Radius]:",
+                    radius=type(self).radius)
 
     def on_option(self, text: str) -> bool:
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         if t in ("R", "RADIUS"):
-            self.ctx.prompt(tr("Specify fillet radius:"))
+            self.prompt("Specify fillet radius:")
             self._waiting_radius = True
             return True
         if getattr(self, "_waiting_radius", False):
@@ -819,7 +831,7 @@ class FilletTool(Tool):
                 return True
             type(self).radius = r
             self._waiting_radius = False
-            self.ctx.prompt(tr("Select first line:"))
+            self.prompt("Select first line:")
             return True
         return False
 
@@ -830,7 +842,7 @@ class FilletTool(Tool):
             return
         if self._first is None:
             self._first = entity
-            self.ctx.prompt(tr("Select second line:"))
+            self.prompt("Select second line:")
             return
         if entity is self._first:
             self.ctx.echo(tr("Pick a different line."))
@@ -968,7 +980,7 @@ class PasteTool(Tool):
         # ghost: the actual clipboard geometry follows the cursor
         self.ghost_entities = self._sources
         self.ghost_base = self._base
-        self.ctx.prompt(tr("Specify insertion point:"))
+        self.prompt("Specify insertion point:")
 
     def on_point(self, point: Point) -> None:
         dx, dy = point[0] - self._base[0], point[1] - self._base[1]

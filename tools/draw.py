@@ -69,7 +69,7 @@ class LineTool(Tool):
         self.name = "LINE"
         self._points: list[Point] = []
         self._locked_dir = None       # tangent lock after Continue-from-arc
-        self.ctx.prompt(tr("Specify first point:"))
+        self.prompt("Specify first point:")
 
     def _segment(self, a: Point, b: Point) -> None:
         self.ctx.execute(actions.add_line(a, b))
@@ -77,9 +77,9 @@ class LineTool(Tool):
 
     def _next_prompt(self) -> None:
         if len(self._points) >= 3:
-            self.ctx.prompt(tr("Specify next point or [Close/Undo]:"))
+            self.prompt("Specify next point or [Close/Undo]:")
         else:
-            self.ctx.prompt(tr("Specify next point or [Undo]:"))
+            self.prompt("Specify next point or [Undo]:")
 
     def on_point(self, point: Point) -> None:
         if self._locked_dir is not None and self._points:
@@ -109,14 +109,17 @@ class LineTool(Tool):
             self.last_point = point
             if kind == "arc" and direction is not None:
                 self._locked_dir = direction
-                self.ctx.prompt(tr("Length of line:"))
+                self.prompt("Length of line:")
             else:
                 self._next_prompt()
             return
         self.ctx.finish()
 
     def on_option(self, text: str) -> bool:
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         if t in ("C", "CLOSE") and len(self._points) >= 3:
             self._segment(self._points[-1], self._points[0])
             self.ctx.finish()
@@ -127,8 +130,8 @@ class LineTool(Tool):
                 self.ctx.undo_last()
             self._points.pop()
             self.last_point = self._points[-1] if self._points else None
-            self.ctx.prompt(self._points and tr("Specify next point or [Undo]:")
-                            or tr("Specify first point:"))
+            self.prompt("Specify next point or [Undo]:" if self._points
+                        else "Specify first point:")
             return True
         if self._locked_dir is not None and self._points:
             # tangent continuation accepts a typed length
@@ -165,15 +168,14 @@ class CircleTool(Tool):
         self._mode = "CR"
         self._pts: list[Point] = []
         self._tangents: list = []      # TTR: [(object, pick_point), ...]
-        self.ctx.prompt(
-            tr("Specify center point for circle or [3P/2P/Ttr (tan tan radius)]:"))
+        self.prompt("Specify center point for circle or [3P/2P/Ttr (tan tan radius)]:")
 
     def _radius_prompt(self) -> None:
         r = type(self).last_radius
         if r is not None:
-            self.ctx.prompt(tr("Specify radius of circle or [Diameter] <{r:g}>:", r=r))
+            self.prompt("Specify radius of circle or [Diameter] <{r:g}>:", r=r)
         else:
-            self.ctx.prompt(tr("Specify radius of circle or [Diameter]:"))
+            self.prompt("Specify radius of circle or [Diameter]:")
 
     def _make(self, center: Point, radius: float) -> None:
         if radius > 0:
@@ -182,31 +184,32 @@ class CircleTool(Tool):
         self.ctx.finish()
 
     def on_option(self, text: str) -> bool:
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         if not self._pts and not self._tangents:
             if t == "2P":
                 self._mode = "2P"
-                self.ctx.prompt(tr("Specify first end point of circle's diameter:"))
+                self.prompt("Specify first end point of circle's diameter:")
                 return True
             if t == "3P":
                 self._mode = "3P"
-                self.ctx.prompt(tr("Specify first point on circle:"))
+                self.prompt("Specify first point on circle:")
                 return True
             if t in ("T", "TTR"):
                 self._mode = "TTR"
                 self.entity_picker = True   # raw picks: tangency is deferred
-                self.ctx.prompt(
-                    tr("Specify point on object for first tangent of circle:"))
+                self.prompt("Specify point on object for first tangent of circle:")
                 return True
         if self._mode == "CR" and self._pts:
             if t in ("D", "DIAMETER"):
                 self._mode = "CD"
                 r = type(self).last_radius
                 if r is not None:
-                    self.ctx.prompt(
-                        tr("Specify diameter of circle <{d:g}>:", d=2 * r))
+                    self.prompt("Specify diameter of circle <{d:g}>:", d=2 * r)
                 else:
-                    self.ctx.prompt(tr("Specify diameter of circle:"))
+                    self.prompt("Specify diameter of circle:")
                 return True
             radius = _parse_number(text)
             if radius is not None and radius > 0:
@@ -273,13 +276,13 @@ class CircleTool(Tool):
                 return
             self._tangents.append((obj, point))
             if len(self._tangents) == 1:
-                self.ctx.prompt(
-                    tr("Specify point on object for second tangent of circle:"))
+                self.prompt("Specify point on object for second tangent of circle:")
             else:
                 r = type(self).last_radius
-                self.ctx.prompt(
-                    tr("Specify radius of circle <{r:g}>:", r=r) if r is not None
-                    else tr("Specify radius of circle:"))
+                if r is not None:
+                    self.prompt("Specify radius of circle <{r:g}>:", r=r)
+                else:
+                    self.prompt("Specify radius of circle:")
             return
         self._pts.append(point)
         self.last_point = point
@@ -293,15 +296,15 @@ class CircleTool(Tool):
             self._make(self._pts[0], math.dist(self._pts[0], point) / 2.0)
         elif self._mode == "2P":
             if len(self._pts) == 1:
-                self.ctx.prompt(tr("Specify second end point of circle's diameter:"))
+                self.prompt("Specify second end point of circle's diameter:")
             else:
                 center, radius = actions.circle_from_2p(*self._pts)
                 self._make(center, radius)
         else:  # 3P
             if len(self._pts) < 3:
-                self.ctx.prompt(tr("Specify second point on circle:")
-                                if len(self._pts) == 1
-                                else tr("Specify third point on circle:"))
+                self.prompt("Specify second point on circle:"
+                            if len(self._pts) == 1
+                            else "Specify third point on circle:")
             else:
                 try:
                     center, radius = actions.circle_from_3p(*self._pts)
@@ -346,7 +349,7 @@ class ArcTool(Tool):
         self._center: Point | None = None
         self._end: Point | None = None
         self._continue_dir = None
-        self.ctx.prompt(tr("Specify start point of arc or [Center]:"))
+        self.prompt("Specify start point of arc or [Center]:")
 
     # -- building --------------------------------------------------------------
     def _emit(self, geom) -> None:
@@ -378,14 +381,14 @@ class ArcTool(Tool):
         if state == "S0":
             self._start = point
             self._state = "SECOND"
-            self.ctx.prompt(tr("Specify second point of arc or [Center/End]:"))
+            self.prompt("Specify second point of arc or [Center/End]:")
         elif state == "CONTINUE":
             self._try(lambda: actions.arc_sed(
                 self._start, point, self._continue_dir))
         elif state == "SECOND":
             self._second = point
             self._state = "THIRD"
-            self.ctx.prompt(tr("Specify end point of arc:"))
+            self.prompt("Specify end point of arc:")
         elif state == "THIRD":
             try:
                 geom_cmd = actions.add_arc_3p(self._start, self._second, point)
@@ -409,24 +412,21 @@ class ArcTool(Tool):
         elif state == "C_FIRST":
             self._center = point
             self._state = "C_START"
-            self.ctx.prompt(tr("Specify start point of arc:"))
+            self.prompt("Specify start point of arc:")
         elif state == "C_START":
             self._start = point
             self._state = "SC_END"
-            self.ctx.prompt(
-                tr("Specify end point of arc or [Angle/chord Length]:"))
+            self.prompt("Specify end point of arc or [Angle/chord Length]:")
         elif state == "S_CENTER":
             self._center = point
             self._state = "SC_END"
-            self.ctx.prompt(
-                tr("Specify end point of arc or [Angle/chord Length]:"))
+            self.prompt("Specify end point of arc or [Angle/chord Length]:")
         elif state == "SC_END":
             self._try(lambda: self._sce_geom(point))
         elif state == "S_END":
             self._end = point
             self._state = "SE_KEY"
-            self.ctx.prompt(
-                tr("Specify center point of arc or [Angle/Direction/Radius]:"))
+            self.prompt("Specify center point of arc or [Angle/Direction/Radius]:")
         elif state == "SE_KEY":
             # Start, End, Center: same ray rule, inputs reordered
             self._center = point
@@ -438,29 +438,32 @@ class ArcTool(Tool):
             self._try(lambda: actions.arc_sed(self._start, self._end, direction))
 
     def on_option(self, text: str) -> bool:
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         state = self._state
         if state == "S0" and t in ("C", "CENTER"):
             self._state = "C_FIRST"
-            self.ctx.prompt(tr("Specify center point of arc:"))
+            self.prompt("Specify center point of arc:")
             return True
         if state == "SECOND":
             if t in ("C", "CENTER"):
                 self._state = "S_CENTER"
-                self.ctx.prompt(tr("Specify center point of arc:"))
+                self.prompt("Specify center point of arc:")
                 return True
             if t in ("E", "END"):
                 self._state = "S_END"
-                self.ctx.prompt(tr("Specify end point of arc:"))
+                self.prompt("Specify end point of arc:")
                 return True
         if state == "SC_END":
             if t in ("A", "ANGLE"):
                 self._state = "SC_ANGLE"
-                self.ctx.prompt(tr("Specify included angle:"))
+                self.prompt("Specify included angle:")
                 return True
             if t in ("L", "LENGTH"):
                 self._state = "SC_LENGTH"
-                self.ctx.prompt(tr("Specify length of chord:"))
+                self.prompt("Specify length of chord:")
                 return True
         if state == "SC_ANGLE":
             angle = _parse_number(text)
@@ -475,16 +478,15 @@ class ArcTool(Tool):
         if state == "SE_KEY":
             if t in ("A", "ANGLE"):
                 self._state = "SE_ANGLE"
-                self.ctx.prompt(tr("Specify included angle:"))
+                self.prompt("Specify included angle:")
                 return True
             if t in ("D", "DIRECTION"):
                 self._state = "SE_DIR"
-                self.ctx.prompt(
-                    tr("Specify tangent direction for the start point of arc:"))
+                self.prompt("Specify tangent direction for the start point of arc:")
                 return True
             if t in ("R", "RADIUS"):
                 self._state = "SE_RADIUS"
-                self.ctx.prompt(tr("Specify radius of arc:"))
+                self.prompt("Specify radius of arc:")
                 return True
         if state == "SE_ANGLE":
             angle = _parse_number(text)
@@ -513,7 +515,7 @@ class ArcTool(Tool):
             self._start = point
             self._continue_dir = direction
             self._state = "CONTINUE"
-            self.ctx.prompt(tr("Specify end point of arc:"))
+            self.prompt("Specify end point of arc:")
             return
         self.ctx.finish()
 
@@ -566,7 +568,7 @@ class EllipseTool(Tool):
         self._await = None
         self._start_deg = None
         self._param_mode = False
-        self.ctx.prompt(tr("Specify axis endpoint of ellipse or [Arc/Center]:"))
+        self.prompt("Specify axis endpoint of ellipse or [Arc/Center]:")
 
     # -- shared geometry -------------------------------------------------------
     def _resolve(self, other: float):
@@ -586,7 +588,7 @@ class EllipseTool(Tool):
             if self._arc:
                 self._geom = (center, major, ratio)
                 self._await = "start_angle"
-                self.ctx.prompt(tr("Specify start angle or [Parameter]:"))
+                self.prompt("Specify start angle or [Parameter]:")
                 return
             self.ctx.execute(actions.add_ellipse(center, major, ratio))
         self.ctx.finish()
@@ -617,22 +619,25 @@ class EllipseTool(Tool):
 
     # -- input -----------------------------------------------------------------
     def on_option(self, text: str) -> bool:
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         value = _parse_number(text)
         if not self._pts and self._await is None:
             if t in ("C", "CENTER"):
                 self._mode = "CENTER"
-                self.ctx.prompt(tr("Specify center of ellipse:"))
+                self.prompt("Specify center of ellipse:")
                 return True
             if t in ("A", "ARC") and not self._arc:
                 self._arc = True
-                self.ctx.prompt(tr(
-                    "Specify axis endpoint of elliptical arc or [Center]:"))
+                self.prompt(
+                    "Specify axis endpoint of elliptical arc or [Center]:")
                 return True
         if self._await == "distance":
             if t in ("R", "ROTATION"):
                 self._await = "rotation"
-                self.ctx.prompt(tr("Specify rotation around major axis:"))
+                self.prompt("Specify rotation around major axis:")
                 return True
             if value is not None and value > 0:
                 self._await = None
@@ -656,33 +661,31 @@ class EllipseTool(Tool):
         if self._await == "start_angle":
             if t in ("P", "PARAMETER"):
                 self._param_mode = not self._param_mode
-                self.ctx.prompt(
-                    tr("Specify start parameter or [Angle]:")
-                    if self._param_mode
-                    else tr("Specify start angle or [Parameter]:"))
+                self.prompt("Specify start parameter or [Angle]:"
+                            if self._param_mode
+                            else "Specify start angle or [Parameter]:")
                 return True
             if t in ("A", "ANGLE") and self._param_mode:
                 self._param_mode = False
-                self.ctx.prompt(tr("Specify start angle or [Parameter]:"))
+                self.prompt("Specify start angle or [Parameter]:")
                 return True
             if value is None:
                 return False
             self._start_deg = value
             self._await = "end_angle"
-            self.ctx.prompt(
-                tr("Specify end angle or [Parameter/Included angle]:"))
+            self.prompt("Specify end angle or [Parameter/Included angle]:")
             return True
         if self._await == "end_angle":
             if t in ("P", "PARAMETER"):
                 self._param_mode = not self._param_mode
-                self.ctx.prompt(
-                    tr("Specify end parameter or [Angle/Included angle]:")
-                    if self._param_mode
-                    else tr("Specify end angle or [Parameter/Included angle]:"))
+                self.prompt("Specify end parameter or [Angle/Included angle]:"
+                            if self._param_mode
+                            else "Specify end angle or "
+                                 "[Parameter/Included angle]:")
                 return True
             if t in ("I", "INCLUDED"):
                 self._await = "included"
-                self.ctx.prompt(tr("Specify included angle for arc <180>:"))
+                self.prompt("Specify included angle for arc <180>:")
                 return True
             if value is None:
                 return False
@@ -711,8 +714,7 @@ class EllipseTool(Tool):
             self._param_mode = False
             self._start_deg = self._angle_of_point(point)
             self._await = "end_angle"
-            self.ctx.prompt(
-                tr("Specify end angle or [Parameter/Included angle]:"))
+            self.prompt("Specify end angle or [Parameter/Included angle]:")
             return
         if self._await == "end_angle":
             self._param_mode = False
@@ -723,12 +725,12 @@ class EllipseTool(Tool):
         self._pts.append(point)
         self.last_point = point
         if len(self._pts) < 2:
-            self.ctx.prompt(tr("Specify other endpoint of axis:")
-                            if self._mode == "AXIS"
-                            else tr("Specify endpoint of axis:"))
+            self.prompt("Specify other endpoint of axis:"
+                        if self._mode == "AXIS"
+                        else "Specify endpoint of axis:")
         else:
             self._await = "distance"
-            self.ctx.prompt(tr("Specify distance to other axis or [Rotation]:"))
+            self.prompt("Specify distance to other axis or [Rotation]:")
 
     def preview_segments(self, cursor: Point):
         if self._await == "distance" and len(self._pts) == 2:
@@ -743,13 +745,13 @@ class EllipseTool(Tool):
 class PointTool(Tool):
     def start(self) -> None:
         self.name = "POINT"
-        self.ctx.prompt(tr("POINT Specify a point (Enter ends):"))
+        self.prompt("POINT Specify a point (Enter ends):")
 
     def on_point(self, point: Point) -> None:
         self.ctx.execute(actions.add_point(point))
         self.last_point = point
         # POINT repeats until Enter/Esc (AutoCAD behavior).
-        self.ctx.prompt(tr("Specify a point (Enter ends):"))
+        self.prompt("Specify a point (Enter ends):")
 
 
 _JUSTIFY_KEYS = {
@@ -791,7 +793,7 @@ class TextTool(Tool):
         style, fixed = self._style_info()
         self.ctx.echo(tr('Current text style: "{s}"  Text height: {h:g}',
                          s=style, h=fixed or type(self).default_height))
-        self.ctx.prompt(tr("Specify start point of text or [Justify/Style]:"))
+        self.prompt("Specify start point of text or [Justify/Style]:")
 
     # -- style plumbing --------------------------------------------------------
     def _document(self):
@@ -821,12 +823,12 @@ class TextTool(Tool):
             self._height = fixed
             self._rotation_prompt()
         else:
-            self.ctx.prompt(tr("Specify height <{h:g}>:",
-                               h=type(self).default_height))
+            self.prompt("Specify height <{h:g}>:",
+                        h=type(self).default_height)
 
     def _rotation_prompt(self) -> None:
-        self.ctx.prompt(tr("Specify rotation angle of text <{r:g}>:",
-                           r=type(self).last_rotation))
+        self.prompt("Specify rotation angle of text <{r:g}>:",
+                    r=type(self).last_rotation)
 
     def on_point(self, point: Point) -> None:
         if self.typing:
@@ -838,7 +840,7 @@ class TextTool(Tool):
             self._pos = point
             self.last_point = point
             self._await = "align_p2"
-            self.ctx.prompt(tr("Specify second endpoint of text baseline:"))
+            self.prompt("Specify second endpoint of text baseline:")
             return
         if self._await == "align_p2":
             self._p2 = point
@@ -846,8 +848,8 @@ class TextTool(Tool):
                 point[1] - self._pos[1], point[0] - self._pos[0]))
             self._await = None
             if self._align == "FIT":
-                self.ctx.prompt(tr("Specify height <{h:g}>:",
-                                   h=type(self).default_height))
+                self.prompt("Specify height <{h:g}>:",
+                            h=type(self).default_height)
                 return
             # ALIGNED: height derives from the fit; nominal for the entity
             span = max(math.dist(self._pos, self._p2), 1e-9)
@@ -860,7 +862,10 @@ class TextTool(Tool):
             self._after_point()
 
     def on_option(self, text: str) -> bool:
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         if self.typing:
             return False
         if self._await == "justify":
@@ -877,8 +882,7 @@ class TextTool(Tool):
                 if document is not None:
                     names = ", ".join(s.dxf.name for s in document.doc.styles)
                     self.ctx.echo(tr("Text styles: {names}", names=names))
-                self.ctx.prompt(
-                    tr("Specify start point of text or [Justify/Style]:"))
+                self.prompt("Specify start point of text or [Justify/Style]:")
                 return True
             if text.strip():
                 document = self._document()
@@ -891,20 +895,19 @@ class TextTool(Tool):
                     if document is not None:
                         document.doc.header["$TEXTSTYLE"] = self._style
                         document.dirty = True
-            self.ctx.prompt(
-                tr("Specify start point of text or [Justify/Style]:"))
+            self.prompt("Specify start point of text or [Justify/Style]:")
             return True
         if self._pos is None and self._await is None:
             if t in ("J", "JUSTIFY"):
                 self._await = "justify"
-                self.ctx.prompt(tr(
+                self.prompt(
                     "Enter an option [Left/Center/Right/Align/Middle/Fit/"
-                    "TL/TC/TR/ML/MC/MR/BL/BC/BR]:"))
+                    "TL/TC/TR/ML/MC/MR/BL/BC/BR]:")
                 return True
             if t in ("S", "STYLE"):
                 self._await = "style"
                 style, _f = self._style_info()
-                self.ctx.prompt(tr("Enter style name or [?] <{s}>:", s=style))
+                self.prompt("Enter style name or [?] <{s}>:", s=style)
                 return True
             align = _JUSTIFY_KEYS.get(t)
             if align is not None and t not in ("L", "LEFT"):
@@ -939,9 +942,9 @@ class TextTool(Tool):
         self._align = align
         if align in ("ALIGNED", "FIT"):
             self._await = "align_p1"
-            self.ctx.prompt(tr("Specify first endpoint of text baseline:"))
+            self.prompt("Specify first endpoint of text baseline:")
         else:
-            self.ctx.prompt(tr("Specify start point of text or [Justify/Style]:"))
+            self.prompt("Specify start point of text or [Justify/Style]:")
 
     def on_enter(self) -> None:
         if self.typing:
@@ -978,7 +981,7 @@ class TextTool(Tool):
             self._rotation = type(self).last_rotation
         self.typing = True
         self._buffer = ""
-        self.ctx.prompt(tr("Enter text (Enter for new line, Esc to finish):"))
+        self.prompt("Enter text (Enter for new line, Esc to finish):")
 
     # -- live in-place typing --------------------------------------------------
     def on_char(self, ch: str) -> None:
@@ -1020,13 +1023,13 @@ class MTextTool(Tool):
     def start(self) -> None:
         self.name = "MTEXT"
         self._first = None
-        self.ctx.prompt(tr("MTEXT Specify first corner:"))
+        self.prompt("MTEXT Specify first corner:")
 
     def on_point(self, point: Point) -> None:
         if self._first is None:
             self._first = point
             self.last_point = point
-            self.ctx.prompt(tr("Specify opposite corner:"))
+            self.prompt("Specify opposite corner:")
         else:
             # The in-place editor when the GUI provides one; the plain text
             # prompt keeps the tool testable headless.
@@ -1090,21 +1093,21 @@ class PlineTool(Tool):
         self._pending = {}                  # partial data for arc sub-flows
         self._sw = type(self).current_width
         self._ew = type(self).current_width
-        self.ctx.prompt(tr("Specify start point:"))
+        self.prompt("Specify start point:")
 
     # -- prompts ---------------------------------------------------------------
     def _line_prompt(self) -> None:
         if self._segs:
-            self.ctx.prompt(tr(
-                "Specify next point or [Arc/Close/Halfwidth/Length/Undo/Width]:"))
+            self.prompt(
+                "Specify next point or [Arc/Close/Halfwidth/Length/Undo/Width]:")
         else:
-            self.ctx.prompt(tr(
-                "Specify next point or [Arc/Halfwidth/Length/Undo/Width]:"))
+            self.prompt(
+                "Specify next point or [Arc/Halfwidth/Length/Undo/Width]:")
 
     def _arc_prompt(self) -> None:
-        self.ctx.prompt(tr(
+        self.prompt(
             "Specify endpoint of arc or "
-            "[Angle/CEnter/CLose/Direction/Halfwidth/Line/Radius/Second pt/Undo/Width]:"))
+            "[Angle/CEnter/CLose/Direction/Halfwidth/Line/Radius/Second pt/Undo/Width]:")
 
     def _mode_prompt(self) -> None:
         self._arc_prompt() if self._arc_mode else self._line_prompt()
@@ -1220,7 +1223,7 @@ class PlineTool(Tool):
         if self._await == "arc_second":
             self._pending["second"] = point
             self._await = "arc_second_end"
-            self.ctx.prompt(tr("Specify end point of arc:"))
+            self.prompt("Specify end point of arc:")
             return
         if self._await == "arc_second_end":
             start = self._verts[-1]
@@ -1250,7 +1253,7 @@ class PlineTool(Tool):
         if self._await == "arc_center":
             self._pending["center"] = point
             self._await = "arc_center_end"
-            self.ctx.prompt(tr("Specify endpoint of arc or [Angle/Length]:"))
+            self.prompt("Specify endpoint of arc or [Angle/Length]:")
             return
         if self._await == "arc_center_end":
             start, center = self._verts[-1], self._pending["center"]
@@ -1283,7 +1286,7 @@ class PlineTool(Tool):
                                                 point[0] - self._verts[-1][0]))
             self._pending["direction"] = direction
             self._await = "arc_direction_end"
-            self.ctx.prompt(tr("Specify endpoint of arc:"))
+            self.prompt("Specify endpoint of arc:")
             return
         if self._await == "arc_direction_end":
             try:
@@ -1337,7 +1340,10 @@ class PlineTool(Tool):
         self._line_prompt()
 
     def on_option(self, text: str) -> bool:
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         # numeric sub-prompts first
         if self._await in ("width_start", "halfwidth_start"):
             value = _parse_number(text) if text else self._sw
@@ -1348,11 +1354,11 @@ class PlineTool(Tool):
             key = "halfwidth_end" if factor == 2.0 else "width_end"
             self._await = key
             if factor == 2.0:
-                self.ctx.prompt(tr("Specify ending half-width <{w:g}>:",
-                                   w=self._pending["sw"] / 2.0))
+                self.prompt("Specify ending half-width <{w:g}>:",
+                            w=self._pending["sw"] / 2.0)
             else:
-                self.ctx.prompt(tr("Specify ending width <{w:g}>:",
-                                   w=self._pending["sw"]))
+                self.prompt("Specify ending width <{w:g}>:",
+                            w=self._pending["sw"])
             return True
         if self._await in ("width_end", "halfwidth_end"):
             factor = 2.0 if self._await == "halfwidth_end" else 1.0
@@ -1385,16 +1391,16 @@ class PlineTool(Tool):
                 return False
             self._pending["angle"] = value
             self._await = "arc_angle_end"
-            self.ctx.prompt(tr("Specify endpoint of arc or [CEnter/Radius]:"))
+            self.prompt("Specify endpoint of arc or [CEnter/Radius]:")
             return True
         if self._await == "arc_angle_end" and t in ("CE", "CENTER"):
             # angle + center: sweep the stored angle around the picked center
             self._await = "arc_angle_center"
-            self.ctx.prompt(tr("Specify center point of arc:"))
+            self.prompt("Specify center point of arc:")
             return True
         if self._await == "arc_angle_end" and t in ("R", "RADIUS"):
             self._await = "arc_angle_radius"
-            self.ctx.prompt(tr("Specify radius of arc:"))
+            self.prompt("Specify radius of arc:")
             return True
         if self._await == "arc_angle_radius":
             value = _parse_number(text)
@@ -1404,11 +1410,11 @@ class PlineTool(Tool):
             return True
         if self._await == "arc_center_end" and t in ("A", "ANGLE"):
             self._await = "arc_center_angle"
-            self.ctx.prompt(tr("Specify included angle:"))
+            self.prompt("Specify included angle:")
             return True
         if self._await == "arc_center_end" and t in ("L", "LENGTH"):
             self._await = "arc_center_length"
-            self.ctx.prompt(tr("Specify length of chord:"))
+            self.prompt("Specify length of chord:")
             return True
         if self._await == "arc_center_angle":
             value = _parse_number(text)
@@ -1445,7 +1451,7 @@ class PlineTool(Tool):
             if value is not None:
                 self._pending["direction"] = value
                 self._await = "arc_direction_end"
-                self.ctx.prompt(tr("Specify endpoint of arc:"))
+                self.prompt("Specify endpoint of arc:")
                 return True
             return False
         if self._await == "arc_radius":
@@ -1454,11 +1460,11 @@ class PlineTool(Tool):
                 return False
             self._pending["radius"] = value
             self._await = "arc_radius_end"
-            self.ctx.prompt(tr("Specify endpoint of arc or [Angle]:"))
+            self.prompt("Specify endpoint of arc or [Angle]:")
             return True
         if self._await == "arc_radius_end" and t in ("A", "ANGLE"):
             self._await = "arc_radius_angle"
-            self.ctx.prompt(tr("Specify included angle:"))
+            self.prompt("Specify included angle:")
             return True
         if self._await == "arc_radius_angle":
             value = _parse_number(text)
@@ -1486,16 +1492,16 @@ class PlineTool(Tool):
                 return True
             if t in ("W", "WIDTH"):
                 self._await = "width_start"
-                self.ctx.prompt(tr("Specify starting width <{w:g}>:", w=self._sw))
+                self.prompt("Specify starting width <{w:g}>:", w=self._sw)
                 return True
             if t in ("H", "HALFWIDTH"):
                 self._await = "halfwidth_start"
-                self.ctx.prompt(tr("Specify starting half-width <{w:g}>:",
-                                   w=self._sw / 2.0))
+                self.prompt("Specify starting half-width <{w:g}>:",
+                            w=self._sw / 2.0)
                 return True
             if t in ("L", "LENGTH"):
                 self._await = "length"
-                self.ctx.prompt(tr("Specify length of line:"))
+                self.prompt("Specify length of line:")
                 return True
             if t in ("U", "UNDO") and self._segs:
                 self._segs.pop()
@@ -1528,33 +1534,32 @@ class PlineTool(Tool):
             return False
         if t in ("A", "ANGLE"):
             self._await = "arc_angle"
-            self.ctx.prompt(tr("Specify included angle:"))
+            self.prompt("Specify included angle:")
             return True
         if t == "CE":
             self._await = "arc_center"
-            self.ctx.prompt(tr("Specify center point of arc:"))
+            self.prompt("Specify center point of arc:")
             return True
         if t in ("D", "DIRECTION"):
             self._await = "arc_direction"
-            self.ctx.prompt(
-                tr("Specify the tangent direction from the start point of arc:"))
+            self.prompt("Specify the tangent direction from the start point of arc:")
             return True
         if t in ("R", "RADIUS"):
             self._await = "arc_radius"
-            self.ctx.prompt(tr("Specify radius of arc:"))
+            self.prompt("Specify radius of arc:")
             return True
         if t in ("S", "SECOND"):
             self._await = "arc_second"
-            self.ctx.prompt(tr("Specify second point on arc:"))
+            self.prompt("Specify second point on arc:")
             return True
         if t in ("W", "WIDTH"):
             self._await = "width_start"
-            self.ctx.prompt(tr("Specify starting width <{w:g}>:", w=self._sw))
+            self.prompt("Specify starting width <{w:g}>:", w=self._sw)
             return True
         if t in ("H", "HALFWIDTH"):
             self._await = "halfwidth_start"
-            self.ctx.prompt(tr("Specify starting half-width <{w:g}>:",
-                               w=self._sw / 2.0))
+            self.prompt("Specify starting half-width <{w:g}>:",
+                        w=self._sw / 2.0)
             return True
         if t in ("U", "UNDO") and self._segs:
             self._segs.pop()
@@ -1628,13 +1633,13 @@ class RectangTool(Tool):
         self._first_prompt()
 
     def _first_prompt(self) -> None:
-        self.ctx.prompt(tr(
+        self.prompt(
             "Specify first corner point or "
-            "[Chamfer/Elevation/Fillet/Thickness/Width]:"))
+            "[Chamfer/Elevation/Fillet/Thickness/Width]:")
 
     def _corner_prompt(self) -> None:
-        self.ctx.prompt(tr(
-            "Specify other corner point or [Area/Dimensions/Rotation]:"))
+        self.prompt(
+            "Specify other corner point or [Area/Dimensions/Rotation]:")
 
     # -- geometry --------------------------------------------------------------
     def _to_local(self, point: Point) -> tuple[float, float]:
@@ -1677,7 +1682,7 @@ class RectangTool(Tool):
             if self._await == "rot_p1":
                 self._pending["rp1"] = point
                 self._await = "rot_p2"
-                self.ctx.prompt(tr("Specify second point:"))
+                self.prompt("Specify second point:")
             else:
                 p1 = self._pending["rp1"]
                 type(self).rotation = math.degrees(
@@ -1730,7 +1735,10 @@ class RectangTool(Tool):
         self.ctx.finish()
 
     def on_option(self, text: str) -> bool:
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         value = _parse_number(text)
         cls = type(self)
         # numeric sub-prompts
@@ -1739,9 +1747,9 @@ class RectangTool(Tool):
                 return False
             self._pending["d1"] = value
             self._await = "chamfer2"
-            self.ctx.prompt(tr(
+            self.prompt(
                 "Specify second chamfer distance for rectangles <{d:g}>:",
-                d=value))
+                d=value)
             return True
         if self._await == "chamfer2":
             if value is None or value < 0:
@@ -1772,20 +1780,20 @@ class RectangTool(Tool):
                 return False
             cls.last_area = value
             self._await = "area_lw"
-            self.ctx.prompt(tr(
+            self.prompt(
                 "Calculate rectangle dimensions based on [Length/Width] "
-                "<Length>:"))
+                "<Length>:")
             return True
         if self._await == "area_lw":
             if t in ("L", "LENGTH"):
                 self._await = "area_len"
-                self.ctx.prompt(tr("Enter rectangle length <{v:g}>:",
-                                   v=cls.last_length))
+                self.prompt("Enter rectangle length <{v:g}>:",
+                            v=cls.last_length)
                 return True
             if t in ("W", "WIDTH"):
                 self._await = "area_wid"
-                self.ctx.prompt(tr("Enter rectangle width <{v:g}>:",
-                                   v=cls.last_width))
+                self.prompt("Enter rectangle width <{v:g}>:",
+                            v=cls.last_width)
                 return True
             return False
         if self._await in ("area_len", "area_wid"):
@@ -1807,8 +1815,8 @@ class RectangTool(Tool):
                 return False
             cls.last_length = value
             self._await = "dim_wid"
-            self.ctx.prompt(tr("Specify width for rectangles <{v:g}>:",
-                               v=cls.last_width))
+            self.prompt("Specify width for rectangles <{v:g}>:",
+                        v=cls.last_width)
             return True
         if self._await == "dim_wid":
             if value is None or value <= 0:
@@ -1821,7 +1829,7 @@ class RectangTool(Tool):
         if self._await == "rot":
             if t in ("P", "PICK", "POINTS"):
                 self._await = "rot_p1"
-                self.ctx.prompt(tr("Specify first point:"))
+                self.prompt("Specify first point:")
                 return True
             if value is None:
                 return False
@@ -1836,51 +1844,51 @@ class RectangTool(Tool):
         if self._first is None:
             if t in ("C", "CHAMFER"):
                 self._await = "chamfer1"
-                self.ctx.prompt(tr(
+                self.prompt(
                     "Specify first chamfer distance for rectangles <{d:g}>:",
-                    d=cls.chamfer[0]))
+                    d=cls.chamfer[0])
                 return True
             if t in ("E", "ELEVATION"):
                 self._await = "elevation"
-                self.ctx.prompt(tr(
+                self.prompt(
                     "Specify the elevation for rectangles <{v:g}>:",
-                    v=cls.elevation))
+                    v=cls.elevation)
                 return True
             if t in ("F", "FILLET"):
                 self._await = "fillet"
-                self.ctx.prompt(tr(
+                self.prompt(
                     "Specify fillet radius for rectangles <{v:g}>:",
-                    v=cls.fillet))
+                    v=cls.fillet)
                 return True
             if t in ("T", "THICKNESS"):
                 self._await = "thickness"
-                self.ctx.prompt(tr(
+                self.prompt(
                     "Specify thickness for rectangles <{v:g}>:",
-                    v=cls.thickness))
+                    v=cls.thickness)
                 return True
             if t in ("W", "WIDTH"):
                 self._await = "plwidth"
-                self.ctx.prompt(tr(
+                self.prompt(
                     "Specify line width for rectangles <{v:g}>:",
-                    v=cls.pl_width))
+                    v=cls.pl_width)
                 return True
             return False
         if t in ("A", "AREA"):
             self._await = "area"
-            self.ctx.prompt(tr(
+            self.prompt(
                 "Enter area of rectangle in current units <{v:g}>:",
-                v=cls.last_area))
+                v=cls.last_area)
             return True
         if t in ("D", "DIMENSIONS"):
             self._await = "dim_len"
-            self.ctx.prompt(tr("Specify length for rectangles <{v:g}>:",
-                               v=cls.last_length))
+            self.prompt("Specify length for rectangles <{v:g}>:",
+                        v=cls.last_length)
             return True
         if t in ("R", "ROTATION"):
             self._await = "rot"
-            self.ctx.prompt(tr(
+            self.prompt(
                 "Specify rotation angle or [Pick points] <{v:g}>:",
-                v=cls.rotation))
+                v=cls.rotation)
             return True
         return False
 
@@ -1921,14 +1929,14 @@ class PolygonTool(Tool):
         self._mode = None
         self._edge_first: Point | None = None
         self._stage = "sides"
-        self.ctx.prompt(tr("Enter number of sides <{n}>:",
-                           n=type(self).last_sides))
+        self.prompt("Enter number of sides <{n}>:",
+                    n=type(self).last_sides)
 
     def _mode_prompt(self) -> None:
         self._stage = "mode"
-        self.ctx.prompt(tr(
+        self.prompt(
             "Enter an option [Inscribed in circle/Circumscribed about "
-            "circle] <{m}>:", m=type(self).last_mode))
+            "circle] <{m}>:", m=type(self).last_mode)
 
     def _build_ring(self, ring) -> None:
         self.ctx.execute(actions.add_polyline(ring, closed=True))
@@ -1957,7 +1965,10 @@ class PolygonTool(Tool):
             self._center, self._sides, r, first))
 
     def on_option(self, text: str) -> bool:
-        t = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.upper()
         if self._stage == "sides":
             try:
                 sides = int(text)
@@ -1967,13 +1978,13 @@ class PolygonTool(Tool):
                 self._sides = sides
                 type(self).last_sides = sides
                 self._stage = "center"
-                self.ctx.prompt(tr("Specify center of polygon or [Edge]:"))
+                self.prompt("Specify center of polygon or [Edge]:")
                 return True
             self.ctx.echo(tr("Between 3 and 1024 sides."))
             return True
         if self._stage == "center" and t in ("E", "EDGE"):
             self._stage = "edge1"
-            self.ctx.prompt(tr("Specify first endpoint of edge:"))
+            self.prompt("Specify first endpoint of edge:")
             return True
         if self._stage == "mode":
             if t in ("I", "INSCRIBED"):
@@ -1984,7 +1995,7 @@ class PolygonTool(Tool):
                 return False
             type(self).last_mode = self._mode
             self._stage = "radius"
-            self.ctx.prompt(tr("Specify radius of circle:"))
+            self.prompt("Specify radius of circle:")
             return True
         if self._stage == "radius":
             radius = _parse_number(text)
@@ -1998,7 +2009,7 @@ class PolygonTool(Tool):
         if self._stage == "sides":
             self._sides = type(self).last_sides
             self._stage = "center"
-            self.ctx.prompt(tr("Specify center of polygon or [Edge]:"))
+            self.prompt("Specify center of polygon or [Edge]:")
             return
         if self._stage == "mode":
             self.on_option(type(self).last_mode)
@@ -2025,7 +2036,7 @@ class PolygonTool(Tool):
             self._edge_first = point
             self.last_point = point
             self._stage = "edge2"
-            self.ctx.prompt(tr("Specify second endpoint of edge:"))
+            self.prompt("Specify second endpoint of edge:")
             return
         if self._stage == "edge2":
             try:
@@ -2094,7 +2105,7 @@ class ImageAttachTool(Tool):
             self.ctx.finish()
             return
         self._path = filename
-        self.ctx.prompt(tr("Specify insertion point <0,0>:"))
+        self.prompt("Specify insertion point <0,0>:")
 
     def wants_raw_text(self) -> bool:
         return self._insert is not None
@@ -2104,9 +2115,9 @@ class ImageAttachTool(Tool):
             return
         self._insert = (point[0], point[1])
         width, height = self._size
-        self.ctx.prompt(tr(
+        self.prompt(
             "Base image size: {w} x {h} units. Specify scale factor <1>:",
-            w=width, h=height))
+            w=width, h=height)
 
     def _place(self, scale: float) -> None:
         self.ctx.execute(actions.attach_image(
@@ -2155,7 +2166,7 @@ class TableTool(Tool):
             self.ctx.finish()
             return
         self._spec = dialog.result_table()
-        self.ctx.prompt(tr("Specify insertion point:"))
+        self.prompt("Specify insertion point:")
 
     def on_point(self, point: Point) -> None:
         if self._spec is None:
@@ -2243,7 +2254,7 @@ class PdfAttachTool(Tool):
             image.save(str(target))
         self._png = str(target)
         self._size_px = (px.width(), px.height())
-        self.ctx.prompt(tr("Specify insertion point:"))
+        self.prompt("Specify insertion point:")
 
     def _ask_page(self, count: int):
         window = getattr(self.ctx.services, "window", None)
@@ -2260,9 +2271,9 @@ class PdfAttachTool(Tool):
         self._insert = (point[0], point[1])
         width_mm = self._size_px[0] * self._scale_unit
         height_mm = self._size_px[1] * self._scale_unit
-        self.ctx.prompt(tr(
+        self.prompt(
             "Page size: {w:.0f} x {h:.0f} units. Specify scale factor <1>:",
-            w=width_mm, h=height_mm))
+            w=width_mm, h=height_mm)
 
     def _place(self, factor: float) -> None:
         self.ctx.execute(actions.attach_image(
@@ -2297,15 +2308,15 @@ class SplineTool(Tool):
     def start(self) -> None:
         self.name = "SPLINE"
         self._pts: list[Point] = []
-        self.ctx.prompt(tr("Specify first point:"))
+        self.prompt("Specify first point:")
 
     def _prompt(self) -> None:
         if len(self._pts) >= 3:
-            self.ctx.prompt(tr("Enter next point or [Close/Undo]:"))
+            self.prompt("Enter next point or [Close/Undo]:")
         elif len(self._pts) >= 1:
-            self.ctx.prompt(tr("Enter next point or [Undo]:"))
+            self.prompt("Enter next point or [Undo]:")
         else:
-            self.ctx.prompt(tr("Specify first point:"))
+            self.prompt("Specify first point:")
 
     def on_point(self, point: Point) -> None:
         self._pts.append(point)
@@ -2313,7 +2324,10 @@ class SplineTool(Tool):
         self._prompt()
 
     def on_option(self, text: str) -> bool:
-        word = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        word = self.option(text) or text.strip().upper()
         if word in ("U", "UNDO") and self._pts:
             self._pts.pop()
             self._prompt()

@@ -51,15 +51,14 @@ class StretchTool(Tool):
             # Picked one by one: AutoCAD moves those rather than stretching
             # them, which is what an all-covering rectangle produces here.
             self._rects = [(-1e18, -1e18, 1e18, 1e18)]
-        self.ctx.prompt(tr("Specify base point or [Displacement] "
-                           "<Displacement>:"))
+        self.prompt("Specify base point or [Displacement] "
+                    "<Displacement>:")
 
     def on_point(self, point: Point) -> None:
         if self._base is None:
             self._base = point
             self.last_point = point
-            self.ctx.prompt(
-                tr("Specify second point or <use first point as displacement>:"))
+            self.prompt("Specify second point or <use first point as displacement>:")
             return
         self._commit(point[0] - self._base[0], point[1] - self._base[1])
 
@@ -90,14 +89,17 @@ class BreakTool(Tool):
         self._entity = None
         self._first: Point | None = None
         self._await_first = False
-        self.ctx.prompt(tr("Select object:"))
+        self.prompt("Select object:")
 
     def on_option(self, text: str) -> bool:
-        token = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        token = self.option(text) or text.strip().upper()
         if self._entity is not None and token in ("F", "FIRST"):
             self._await_first = True
             self.entity_picker = False       # a real point now, so snap it
-            self.ctx.prompt(tr("Specify first break point:"))
+            self.prompt("Specify first break point:")
             return True
         return False
 
@@ -106,7 +108,7 @@ class BreakTool(Tool):
             services = self.ctx.services
             entity = services.pick_entity(point) if services else None
             if entity is None:
-                self.ctx.prompt(tr("Nothing selected. Select object:"))
+                self.prompt("Nothing selected. Select object:")
                 return
             if modify.break_pieces(entity, point, point) is None:
                 self.ctx.echo(
@@ -118,14 +120,13 @@ class BreakTool(Tool):
             # p.269) — until the user says First point.
             self._first = point
             self.entity_picker = False
-            self.ctx.prompt(
-                tr("Specify second break point or [First point]:"))
+            self.prompt("Specify second break point or [First point]:")
             return
 
         if self._await_first:
             self._first = point
             self._await_first = False
-            self.ctx.prompt(tr("Specify second break point:"))
+            self.prompt("Specify second break point:")
             return
 
         command = modify.break_entity(self._entity, self._first, point)
@@ -192,10 +193,13 @@ class ChamferTool(Tool):
         self.ctx.echo(tr("({mode} mode) Current chamfer Dist1 = {d1}, "
                          "Dist2 = {d2}", mode=mode,
                          d1=f"{cls.dist1:g}", d2=f"{cls.dist2:g}"))
-        self.ctx.prompt(tr("Select first line or [Distance/Trim]:"))
+        self.prompt("Select first line or [Distance/Trim]:")
 
     def on_option(self, text: str) -> bool:
-        token = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        token = self.option(text) or text.strip().upper()
         cls = type(self)
         if self._await == "d1":
             value = _number(text)
@@ -204,8 +208,8 @@ class ChamferTool(Tool):
                 return True
             cls.dist1 = value
             self._await = "d2"
-            self.ctx.prompt(tr("Specify second chamfer distance <{d}>:",
-                               d=f"{cls.dist1:g}"))
+            self.prompt("Specify second chamfer distance <{d}>:",
+                        d=f"{cls.dist1:g}")
             return True
         if self._await == "d2":
             value = _number(text) if text.strip() else cls.dist1
@@ -229,14 +233,14 @@ class ChamferTool(Tool):
             return True
         if token in ("D", "DISTANCE"):
             self._await = "d1"
-            self.ctx.prompt(tr("Specify first chamfer distance <{d}>:",
-                               d=f"{cls.dist1:g}"))
+            self.prompt("Specify first chamfer distance <{d}>:",
+                        d=f"{cls.dist1:g}")
             return True
         if token in ("T", "TRIM"):
             self._await = "trim"
-            self.ctx.prompt(tr("Enter Trim mode option [Trim/No trim] "
-                               "<{mode}>:",
-                               mode=tr("Trim") if cls.trim else tr("No trim")))
+            self.prompt("Enter Trim mode option [Trim/No trim] "
+                        "<{mode}>:",
+                        mode=tr("Trim") if cls.trim else tr("No trim"))
             return True
         return False
 
@@ -254,7 +258,7 @@ class ChamferTool(Tool):
             return
         if self._first is None:
             self._first = entity
-            self.ctx.prompt(tr("Select second line:"))
+            self.prompt("Select second line:")
             return
         if entity is self._first:
             self.ctx.echo(tr("Pick a different line."))
@@ -305,20 +309,22 @@ class ArrayTool(Tool):
             self.ctx.finish()
             return
         self._entities = entities
-        self.ctx.prompt(
-            tr("Enter the type of array [Rectangular/Polar] <R>:"))
+        self.prompt("Enter the type of array [Rectangular/Polar] <R>:")
 
     def on_option(self, text: str) -> bool:
-        token = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        token = self.option(text) or text.strip().upper()
         if self._mode is None:
             if token in ("", "R", "RECTANGULAR"):
                 self._mode = "rect"
                 self._await = "rows"
-                self.ctx.prompt(tr("Enter the number of rows (---) <1>:"))
+                self.prompt("Enter the number of rows (---) <1>:")
                 return True
             if token in ("P", "POLAR"):
                 self._mode = "polar"
-                self.ctx.prompt(tr("Specify center point of array:"))
+                self.prompt("Specify center point of array:")
                 return True
             return False
         handler = getattr(self, f"_take_{self._await}", None)
@@ -337,7 +343,7 @@ class ArrayTool(Tool):
     def _take_rows(self, text: str) -> bool:
         self._rows = int(_number(text) or 1)
         self._await = "cols"
-        self.ctx.prompt(tr("Enter the number of columns (|||) <1>:"))
+        self.prompt("Enter the number of columns (|||) <1>:")
         return True
 
     def _take_cols(self, text: str) -> bool:
@@ -347,13 +353,13 @@ class ArrayTool(Tool):
             self.ctx.finish()
             return True
         self._await = "row_spacing"
-        self.ctx.prompt(tr("Enter the distance between rows (---):"))
+        self.prompt("Enter the distance between rows (---):")
         return True
 
     def _take_row_spacing(self, text: str) -> bool:
         self._row_spacing = _number(text) or 0.0
         self._await = "col_spacing"
-        self.ctx.prompt(tr("Specify the distance between columns (|||):"))
+        self.prompt("Specify the distance between columns (|||):")
         return True
 
     def _take_col_spacing(self, text: str) -> bool:
@@ -375,17 +381,19 @@ class ArrayTool(Tool):
             self.ctx.finish()
             return True
         self._await = "fill"
-        self.ctx.prompt(tr("Specify the angle to fill (+=ccw, -=cw) <360>:"))
+        self.prompt("Specify the angle to fill (+=ccw, -=cw) <360>:")
         return True
 
     def _take_fill(self, text: str) -> bool:
         self._fill = _number(text) if text.strip() else 360.0
         self._await = "rotate"
-        self.ctx.prompt(tr("Rotate arrayed objects? [Yes/No] <Y>:"))
+        self.prompt("Rotate arrayed objects? [Yes/No] <Y>:")
         return True
 
     def _take_rotate(self, text: str) -> bool:
-        rotate = not text.strip().upper().startswith("N")
+        # "No", "N" and "_N" all decline; anything else (including Enter,
+        # which takes the <Y> default) rotates.
+        rotate = not (self.option(text) or text.strip().upper()).startswith("N")
         self.ctx.execute(modify.array_polar(
             self._entities, self._center, self._count, self._fill, rotate))
         self.ctx.echo(tr("{count} copies placed.",
@@ -397,7 +405,7 @@ class ArrayTool(Tool):
         if self._mode == "polar" and self._center is None:
             self._center = point
             self._await = "count"
-            self.ctx.prompt(tr("Enter the number of items in the array:"))
+            self.prompt("Enter the number of items in the array:")
 
 
 class MatchPropTool(Tool):
@@ -408,19 +416,19 @@ class MatchPropTool(Tool):
     def start(self) -> None:
         self.name = "MATCHPROP"
         self._source = None
-        self.ctx.prompt(tr("Select source object:"))
+        self.prompt("Select source object:")
 
     def on_point(self, point: Point) -> None:
         services = self.ctx.services
         entity = services.pick_entity(point) if services else None
         if entity is None:
-            self.ctx.prompt(tr("Nothing selected. Select source object:"))
+            self.prompt("Nothing selected. Select source object:")
             return
         if self._source is None:
             self._source = entity
             self.ctx.echo(tr("Current active settings: Color Layer Ltype "
                              "Ltscale Lineweight Thickness"))
-            self.ctx.prompt(tr("Select destination object(s):"))
+            self.prompt("Select destination object(s):")
             return
         if entity is self._source:
             return
@@ -442,14 +450,13 @@ class PeditTool(Tool):
         self.name = "PEDIT"
         self._entity = None
         self._await = None
-        self.ctx.prompt(tr("Select polyline:"))
+        self.prompt("Select polyline:")
 
     def _menu(self) -> None:
         closed = bool(getattr(self._entity, "closed", False))
         first = tr("Open") if closed else tr("Close")
-        self.ctx.prompt(
-            tr("Enter an option [{first}/Width/Reverse/Undo/eXit] <eXit>:",
-               first=first))
+        self.prompt("Enter an option [{first}/Width/Reverse/Undo/eXit] <eXit>:",
+               first=first)
 
     def on_point(self, point: Point) -> None:
         if self._entity is not None:
@@ -457,13 +464,13 @@ class PeditTool(Tool):
         services = self.ctx.services
         entity = services.pick_entity(point) if services else None
         if entity is None:
-            self.ctx.prompt(tr("Nothing selected. Select polyline:"))
+            self.prompt("Nothing selected. Select polyline:")
             return
         if entity.dxftype() in ("LINE", "ARC"):
             self._await = "convert"
             self._candidate = entity
-            self.ctx.prompt(tr("Object selected is not a polyline. Do you "
-                               "want it to turn into one? <Y>:"))
+            self.prompt("Object selected is not a polyline. Do you "
+                        "want it to turn into one? <Y>:")
             return
         if entity.dxftype() != "LWPOLYLINE":
             self.ctx.echo(tr("PEDIT works on polylines, lines and arcs."))
@@ -494,7 +501,10 @@ class PeditTool(Tool):
         self._menu()
 
     def on_option(self, text: str) -> bool:
-        token = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        token = self.option(text) or text.strip().upper()
         if self._await == "convert":
             if token.startswith("N"):
                 self.ctx.finish()
@@ -522,7 +532,7 @@ class PeditTool(Tool):
             return True
         if token in ("W", "WIDTH"):
             self._await = "width"
-            self.ctx.prompt(tr("Specify new width for all segments:"))
+            self.prompt("Specify new width for all segments:")
             return True
         if token in ("R", "REVERSE"):
             self.ctx.execute(modify.polyline_edit(self._entity, "reverse"))
@@ -578,7 +588,7 @@ class DrawOrderTool(Tool):
         if self.mode:
             self._apply(self.mode)
             return
-        self.ctx.prompt(tr("Enter object ordering option [Front/Back] <Back>:"))
+        self.prompt("Enter object ordering option [Front/Back] <Back>:")
 
     def _apply(self, mode: str) -> None:
         from core.draworder import DrawOrderCommand
@@ -591,7 +601,10 @@ class DrawOrderTool(Tool):
     def on_option(self, text: str) -> bool:
         if not self._entities:
             return False
-        word = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        word = self.option(text) or text.strip().upper()
         if word in ("F", "FRONT"):
             self._apply("front")
             return True
@@ -667,8 +680,7 @@ class LayOffTool(Tool):
 
     def start(self) -> None:
         self.name = "LAYOFF"
-        self.ctx.prompt(
-            tr("Select an object on the layer to be turned off or [Undo]:"))
+        self.prompt("Select an object on the layer to be turned off or [Undo]:")
 
     def on_point(self, point: Point) -> None:
         services = self.ctx.services
@@ -682,7 +694,7 @@ class LayOffTool(Tool):
         self.ctx.echo(tr('Layer "{name}" has been turned off.', name=name))
 
     def on_option(self, text: str) -> bool:
-        if text.strip().upper() in ("U", "UNDO"):
+        if (self.option(text) or text.strip().upper()) in ("U", "UNDO"):
             self.ctx.undo_last()
             return True
         return False
@@ -714,8 +726,8 @@ class ImageAdjustTool(Tool):
             self.ctx.echo(tr("No images selected."))
             self.ctx.finish()
             return
-        self.ctx.prompt(tr(
-            "Enter image option [Contrast/Fade/Brightness] <Brightness>:"))
+        self.prompt(
+            "Enter image option [Contrast/Fade/Brightness] <Brightness>:")
 
     def wants_raw_text(self) -> bool:
         return bool(self._images)
@@ -726,7 +738,10 @@ class ImageAdjustTool(Tool):
     def on_option(self, text: str) -> bool:
         if not self._images:
             return False
-        word = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        word = self.option(text) or text.strip().upper()
         if self._attr is None:
             named = {"C": "contrast", "CONTRAST": "contrast",
                      "F": "fade", "FADE": "fade",
@@ -735,8 +750,8 @@ class ImageAdjustTool(Tool):
             if word not in named:
                 return False
             self._attr = named[word]
-            self.ctx.prompt(tr("Enter {name} value (0-100) <{value}>:",
-                               name=self._attr, value=self._current(self._attr)))
+            self.prompt("Enter {name} value (0-100) <{value}>:",
+                        name=self._attr, value=self._current(self._attr))
             return True
         try:
             value = int(float(text)) if text.strip() else self._current(self._attr)
@@ -783,8 +798,8 @@ class ImageTransparencyTool(Tool):
 
         current = "ON" if (self._images[0].dxf.flags
                            & Image.USE_TRANSPARENCY) else "OFF"
-        self.ctx.prompt(tr("Enter transparency mode [ON/OFF] <{current}>:",
-                           current=current))
+        self.prompt("Enter transparency mode [ON/OFF] <{current}>:",
+                    current=current)
 
     def _apply(self, on: bool) -> None:
         from core.image_ops import ImageTransparencyCommand
@@ -795,7 +810,10 @@ class ImageTransparencyTool(Tool):
     def on_option(self, text: str) -> bool:
         if not self._images:
             return False
-        word = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        word = self.option(text) or text.strip().upper()
         if word in ("ON",):
             self._apply(True)
             return True
@@ -899,7 +917,10 @@ class SelectSimilarTool(Tool):
         self.ctx.echo(tr("{count} object(s) selected.", count=len(found)))
 
     def on_option(self, text: str) -> bool:
-        word = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        word = self.option(text) or text.strip().upper()
         if word in ("SE", "SETTINGS"):
             from views.similar_dialog import (SelectSimilarSettingsDialog,
                                               save_keys)
@@ -944,7 +965,7 @@ class AddSelectedTool(Tool):
         if len(picked) == 1:
             self._use(picked[0])
             return
-        self.ctx.prompt(tr("Select object:"))
+        self.prompt("Select object:")
 
     def on_point(self, point) -> None:
         services = self.ctx.services

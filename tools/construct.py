@@ -31,13 +31,16 @@ class XlineTool(Tool):
         self._angle = 0.0
         self._pending = {}
         self._await = None
-        self.ctx.prompt(tr("Specify a point or [Hor/Ver/Ang/Bisect/Offset]:"))
+        self.prompt("Specify a point or [Hor/Ver/Ang/Bisect/Offset]:")
 
     def _emit(self, point: Point, angle_deg: float) -> None:
         self.ctx.execute(actions.add_xline(point, angle_deg))
 
     def on_option(self, text: str) -> bool:
-        t = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.strip().upper()
         value = None
         try:
             value = float(text)
@@ -47,14 +50,14 @@ class XlineTool(Tool):
             if t in ("R", "REFERENCE"):
                 self._await = "ref_pick"
                 self.entity_picker = True
-                self.ctx.prompt(tr("Select a line object:"))
+                self.prompt("Select a line object:")
                 return True
             if value is None:
                 return False
             self._angle = value
             self._await = None
             self._mode = "angled"
-            self.ctx.prompt(tr("Specify through point:"))
+            self.prompt("Specify through point:")
             return True
         if self._await == "ref_angle":
             if value is None:
@@ -63,14 +66,14 @@ class XlineTool(Tool):
             self._await = None
             self._mode = "angled"
             self.entity_picker = False
-            self.ctx.prompt(tr("Specify through point:"))
+            self.prompt("Specify through point:")
             return True
         if self._await == "offset_dist":
             if t in ("T", "THROUGH"):
                 self._pending["through"] = True
                 self._await = "offset_pick"
                 self.entity_picker = True
-                self.ctx.prompt(tr("Select a line object:"))
+                self.prompt("Select a line object:")
                 return True
             if value is None or value <= 0:
                 return False
@@ -78,32 +81,32 @@ class XlineTool(Tool):
             self._pending["through"] = False
             self._await = "offset_pick"
             self.entity_picker = True
-            self.ctx.prompt(tr("Select a line object:"))
+            self.prompt("Select a line object:")
             return True
         if self._await is not None:
             return False
         if self._mode == "point" and self._root is None:
             if t in ("H", "HOR", "HORIZONTAL"):
                 self._mode = "hor"
-                self.ctx.prompt(tr("Specify through point:"))
+                self.prompt("Specify through point:")
                 return True
             if t in ("V", "VER", "VERTICAL"):
                 self._mode = "ver"
-                self.ctx.prompt(tr("Specify through point:"))
+                self.prompt("Specify through point:")
                 return True
             if t in ("A", "ANG", "ANGLE"):
                 self._await = "angle"
-                self.ctx.prompt(tr("Enter angle of xline (0) or [Reference]:"))
+                self.prompt("Enter angle of xline (0) or [Reference]:")
                 return True
             if t in ("B", "BISECT"):
                 self._mode = "bisect"
-                self.ctx.prompt(tr("Specify angle vertex point:"))
+                self.prompt("Specify angle vertex point:")
                 return True
             if t in ("O", "OFFSET"):
                 self._await = "offset_dist"
-                self.ctx.prompt(tr(
+                self.prompt(
                     "Specify offset distance or [Through] <{d:g}>:",
-                    d=getattr(type(self), "_offset", 1.0)))
+                    d=getattr(type(self), "_offset", 1.0))
                 return True
         return False
 
@@ -125,7 +128,7 @@ class XlineTool(Tool):
             self._pending["ref"] = _dir_deg(*ends)
             self._await = "ref_angle"
             self.entity_picker = False
-            self.ctx.prompt(tr("Enter angle of xline <0>:"))
+            self.prompt("Enter angle of xline <0>:")
             return
         if self._await == "offset_pick":
             ends = self._line_of(services.pick_entity(point) if services else None)
@@ -135,9 +138,9 @@ class XlineTool(Tool):
             self._await = "offset_side"
             if self._pending.get("through"):
                 self.entity_picker = False
-                self.ctx.prompt(tr("Specify through point:"))
+                self.prompt("Specify through point:")
             else:
-                self.ctx.prompt(tr("Specify side to offset:"))
+                self.prompt("Specify side to offset:")
             return
         if self._await == "offset_side":
             (a, b) = self._pending["line"]
@@ -155,44 +158,44 @@ class XlineTool(Tool):
             # keep looping on the same line-select prompt
             self._await = "offset_pick"
             self.entity_picker = True
-            self.ctx.prompt(tr("Select a line object:"))
+            self.prompt("Select a line object:")
             return
         if self._mode == "point":
             if self._root is None:
                 self._root = point
                 self.last_point = point
-                self.ctx.prompt(tr("Specify through point:"))
+                self.prompt("Specify through point:")
             else:
                 if math.dist(self._root, point) > 1e-9:
                     self._emit(self._root, _dir_deg(self._root, point))
-                self.ctx.prompt(tr("Specify through point:"))
+                self.prompt("Specify through point:")
             return
         if self._mode == "hor":
             self._emit(point, 0.0)
-            self.ctx.prompt(tr("Specify through point:"))
+            self.prompt("Specify through point:")
             return
         if self._mode == "ver":
             self._emit(point, 90.0)
-            self.ctx.prompt(tr("Specify through point:"))
+            self.prompt("Specify through point:")
             return
         if self._mode == "angled":
             self._emit(point, self._angle)
-            self.ctx.prompt(tr("Specify through point:"))
+            self.prompt("Specify through point:")
             return
         if self._mode == "bisect":
             if self._root is None:
                 self._root = point
                 self.last_point = point
-                self.ctx.prompt(tr("Specify angle start point:"))
+                self.prompt("Specify angle start point:")
             elif "start" not in self._pending:
                 self._pending["start"] = point
-                self.ctx.prompt(tr("Specify angle end point:"))
+                self.prompt("Specify angle end point:")
             else:
                 a1 = _dir_deg(self._root, self._pending["start"])
                 a2 = _dir_deg(self._root, point)
                 half = a1 + (((a2 - a1) % 360.0) / 2.0)
                 self._emit(self._root, half)
-                self.ctx.prompt(tr("Specify angle end point:"))
+                self.prompt("Specify angle end point:")
 
     def preview_segments(self, cursor: Point):
         span = 1e5
@@ -217,18 +220,18 @@ class RayTool(Tool):
     def start(self) -> None:
         self.name = "RAY"
         self._start: Point | None = None
-        self.ctx.prompt(tr("Specify start point:"))
+        self.prompt("Specify start point:")
 
     def on_point(self, point: Point) -> None:
         if self._start is None:
             self._start = point
             self.last_point = point
-            self.ctx.prompt(tr("Specify through point:"))
+            self.prompt("Specify through point:")
         else:
             if math.dist(self._start, point) > 1e-9:
                 self.ctx.execute(actions.add_ray(
                     self._start, _dir_deg(self._start, point)))
-            self.ctx.prompt(tr("Specify through point:"))
+            self.prompt("Specify through point:")
 
     def preview_segments(self, cursor: Point):
         if self._start is None or math.dist(self._start, cursor) < 1e-9:
@@ -252,7 +255,7 @@ class _DivideMeasure(Tool):
         self._block = None
         self._align = True
         self._await = None
-        self.ctx.prompt(self._select_prompt())
+        self.prompt(self._select_prompt())
 
     def _select_prompt(self) -> str:
         raise NotImplementedError
@@ -275,10 +278,13 @@ class _DivideMeasure(Tool):
                 return
             self._entity = e
             self._pick = point
-            self.ctx.prompt(self.value_prompt)
+            self.prompt(self.value_prompt)
 
     def on_option(self, text: str) -> bool:
-        t = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.strip().upper()
         if self._entity is None:
             return False
         if self._await == "block_name":
@@ -288,18 +294,18 @@ class _DivideMeasure(Tool):
                 names = services.block_names() if services else []
                 self.ctx.echo(", ".join(names) if names
                               else tr("No blocks defined."))
-                self.ctx.prompt(tr("Enter name of block to insert:"))
+                self.prompt("Enter name of block to insert:")
                 return True
             if not name:
                 return False
             services = self.ctx.services
             if services is not None and name not in services.block_names():
                 self.ctx.echo(tr('Unknown block "{name}".', name=name))
-                self.ctx.prompt(tr("Enter name of block to insert:"))
+                self.prompt("Enter name of block to insert:")
                 return True
             self._block = name
             self._await = "block_align"
-            self.ctx.prompt(tr("Align block with object? [Yes/No] <Y>:"))
+            self.prompt("Align block with object? [Yes/No] <Y>:")
             return True
         if self._await == "block_align":
             if t in ("", "Y", "YES"):
@@ -309,11 +315,11 @@ class _DivideMeasure(Tool):
             else:
                 return False
             self._await = None
-            self.ctx.prompt(self.value_prompt)
+            self.prompt(self.value_prompt)
             return True
         if t in ("B", "BLOCK") and self._await is None:
             self._await = "block_name"
-            self.ctx.prompt(tr("Enter name of block to insert:"))
+            self.prompt("Enter name of block to insert:")
             return True
         value = self._parse_value(text)
         if value is None:
@@ -351,11 +357,11 @@ class _DivideMeasure(Tool):
 class DivideTool(_DivideMeasure):
     def start(self) -> None:
         self.name = "DIVIDE"
-        self.value_prompt = tr("Enter the number of segments or [Block]:")
+        self.value_prompt = "Enter the number of segments or [Block]:"
         super().start()
 
     def _select_prompt(self) -> str:
-        return tr("Select object to divide:")
+        return "Select object to divide:"
 
     def _parse_value(self, text: str):
         try:
@@ -370,11 +376,11 @@ class DivideTool(_DivideMeasure):
 class MeasureTool(_DivideMeasure):
     def start(self) -> None:
         self.name = "MEASURE"
-        self.value_prompt = tr("Specify length of segment or [Block]:")
+        self.value_prompt = "Specify length of segment or [Block]:"
         super().start()
 
     def _select_prompt(self) -> str:
-        return tr("Select object to measure:")
+        return "Select object to measure:"
 
     def _parse_value(self, text: str):
         try:
@@ -408,9 +414,9 @@ class RevcloudTool(Tool):
         self.ctx.echo(tr(
             "Minimum arc length: {a:g}   Style: {s}", a=cls.arc_length,
             s=tr(cls.style)))
-        self.ctx.prompt(tr(
+        self.prompt(
             "Specify first point or [Arc length/Object/Rectangular/"
-            "Polygonal/Freehand/Style] <{m}>:", m=tr(cls.last_mode)))
+            "Polygonal/Freehand/Style] <{m}>:", m=tr(cls.last_mode))
 
     def _auto_arc_length(self) -> float:
         # AutoCAD derives the first default from the view size
@@ -444,7 +450,10 @@ class RevcloudTool(Tool):
 
     # -- input -----------------------------------------------------------------
     def on_option(self, text: str) -> bool:
-        t = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        t = self.option(text) or text.strip().upper()
         cls = type(self)
         value = None
         try:
@@ -456,9 +465,9 @@ class RevcloudTool(Tool):
                 return False
             cls.arc_length = value
             self._await = None
-            self.ctx.prompt(tr(
+            self.prompt(
                 "Specify first point or [Arc length/Object/Rectangular/"
-                "Polygonal/Freehand/Style] <{m}>:", m=tr(cls.last_mode)))
+                "Polygonal/Freehand/Style] <{m}>:", m=tr(cls.last_mode))
             return True
         if self._await == "style":
             if t in ("N", "NORMAL"):
@@ -468,9 +477,9 @@ class RevcloudTool(Tool):
             elif t != "":
                 return False
             self._await = None
-            self.ctx.prompt(tr(
+            self.prompt(
                 "Specify first point or [Arc length/Object/Rectangular/"
-                "Polygonal/Freehand/Style] <{m}>:", m=tr(cls.last_mode)))
+                "Polygonal/Freehand/Style] <{m}>:", m=tr(cls.last_mode))
             return True
         if self._await == "reverse":
             if t in ("", "N", "NO"):
@@ -485,35 +494,35 @@ class RevcloudTool(Tool):
         if self._mode is None:
             if t in ("A", "ARC"):
                 self._await = "arc"
-                self.ctx.prompt(tr("Specify minimum length of arc <{a:g}>:",
-                                   a=cls.arc_length))
+                self.prompt("Specify minimum length of arc <{a:g}>:",
+                            a=cls.arc_length)
                 return True
             if t in ("S", "STYLE"):
                 self._await = "style"
-                self.ctx.prompt(tr(
+                self.prompt(
                     "Select arc style [Normal/Calligraphy] <{s}>:",
-                    s=tr(cls.style)))
+                    s=tr(cls.style))
                 return True
             if t in ("O", "OBJECT"):
                 self._mode = "Object"
                 cls.last_mode = "Object"
                 self.entity_picker = True
-                self.ctx.prompt(tr("Select object:"))
+                self.prompt("Select object:")
                 return True
             if t in ("R", "RECTANGULAR"):
                 self._mode = "Rectangular"
                 cls.last_mode = "Rectangular"
-                self.ctx.prompt(tr("Specify first corner point:"))
+                self.prompt("Specify first corner point:")
                 return True
             if t in ("P", "POLYGONAL"):
                 self._mode = "Polygonal"
                 cls.last_mode = "Polygonal"
-                self.ctx.prompt(tr("Specify start point:"))
+                self.prompt("Specify start point:")
                 return True
             if t in ("F", "FREEHAND"):
                 self._mode = "Freehand"
                 cls.last_mode = "Freehand"
-                self.ctx.prompt(tr("Specify first point:"))
+                self.prompt("Specify first point:")
                 return True
         return False
 
@@ -564,13 +573,13 @@ class RevcloudTool(Tool):
             self._object = e
             self._await = "reverse"
             self.entity_picker = False
-            self.ctx.prompt(tr("Reverse direction [Yes/No] <No>:"))
+            self.prompt("Reverse direction [Yes/No] <No>:")
             return
         if self._mode == "Rectangular":
             if not self._pts:
                 self._pts = [point]
                 self.last_point = point
-                self.ctx.prompt(tr("Specify opposite corner:"))
+                self.prompt("Specify opposite corner:")
             else:
                 a, b = self._pts[0], point
                 self._finish_cloud([(a[0], a[1]), (b[0], a[1]),
@@ -579,15 +588,15 @@ class RevcloudTool(Tool):
         if self._mode == "Polygonal":
             self._pts.append(point)
             self.last_point = point
-            self.ctx.prompt(tr("Specify next point or [Enter to close]:"))
+            self.prompt("Specify next point or [Enter to close]:")
             return
         if self._mode == "Freehand":
             if not self._freehand:
                 self._freehand = True
                 self._pts = [point]
                 self.last_point = point
-                self.ctx.prompt(tr(
-                    "Guide crosshairs along cloud path; click to close."))
+                self.prompt(
+                    "Guide crosshairs along cloud path; click to close.")
             else:
                 self._pts.append(point)
                 self._finish_cloud(self._pts)

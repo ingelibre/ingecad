@@ -462,8 +462,25 @@ no hay que re-discutir:
   parecía verde: no encontraba los menús (`main_window` tiene su propio
   `_menu_bar`). **Un conteo de cero nunca es un aprobado**; el recorrido
   arreglado ve 132.
-- Quedan **143 comparaciones de opción escritas a mano**, que son las que hoy
-  impiden cualquier keyword localizado (fase I3).
+- ✅ **I3 hecha el 2026-08-22 — `core/i18n/keywords.py`**: la palabra traducida,
+  la inglesa, la tecla y la forma global `_` resuelven todas a **la tecla
+  inglesa**, leídas de la propia traducción (`Suprimir(D)`), así que un idioma
+  nuevo trae sus keywords en su `ui.json` sin tocar Python. ⚠️ **La migración
+  salió más chica que lo planeado**: en vez de reescribir las 143 comparaciones,
+  se normaliza el token en la puerta (34 `on_option` abren con
+  `t = self.option(text) or text.upper()`), y las ramas de siempre siguen
+  sirviendo porque la tecla inglesa ya era su primer elemento. Lo que sí cambió
+  en todas partes es **de dónde sale el prompt**: los 286 de `tools/` pasan por
+  `Tool.prompt(source, **kw)`, que traduce y recuerda la fuente — un prompt con
+  `{marcadores}` ya sustituidos no se puede mapear de vuelta, y un prompt sin
+  opciones limpia el conjunto, de modo que una `D` tecleada como distancia
+  nunca se come un keyword viejo. ⚠️ **Dos hallazgos**: un dígito es parte de la
+  tecla (`2P` daba `P` y chocaba con `3P`; lo cazó la suite), y el reescritor
+  mecánico tuvo que distinguir sangría colgante de alineada al paréntesis —
+  quitar `tr(` de los helpers que **devuelven** prompts producía código
+  inválido, porque esos paréntesis sostenían la concatenación implícita; ahí
+  `tr(` se convierte en `(`. Cada reescritura re-parseaba su salida antes de
+  escribir.
 
 Fases I0-I4 con su DoD en `docs/i18n.md`. **I0 (arreglar las 28 + el test que
 las vigila) es lo único urgente**: hasta que la regla se haga cumplir, cada

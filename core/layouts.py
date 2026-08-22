@@ -24,7 +24,7 @@ from ezdxf.lldxf.const import DXFValueError
 
 from core.actions import Prompt
 from core.commands import Command
-from core.i18n import tr
+from core.i18n import keywords, tr
 
 # AcDbPlotSettings defaults (A3 paper, mm): used when a file carries no
 # usable page setup — AutoCAD also shows *some* sheet in every layout tab.
@@ -937,7 +937,9 @@ def layout_command(
         switch(name)
 
     def on_option(text: str) -> Optional[Prompt]:
-        opt = text.strip().upper()
+        # The resolver turns the localized keyword ("Suprimir") and the
+        # _global form into the English key the branches below compare.
+        opt = keywords.match(text, LAYOUT_PROMPT) or text.strip().upper()
         if opt in ("", "S", "SET"):
             return Prompt(
                 tr("Enter layout to make current <{name}>:",

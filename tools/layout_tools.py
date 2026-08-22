@@ -23,14 +23,14 @@ class MviewTool(Tool):
 
     def start(self) -> None:
         self._first: Point | None = None
-        self.ctx.prompt(tr("Specify corner of viewport or [Fit] <Fit>:"))
+        self.prompt("Specify corner of viewport or [Fit] <Fit>:")
 
     def _paper(self):
         """(document, layout_name) from the controller (fake in tests)."""
         return self.ctx.services.paper_context()
 
     def on_option(self, text: str) -> bool:
-        if text.strip().upper() in ("F", "FIT"):
+        if self.option(text) == "F":
             document, layout_name = self._paper()
             command = layout_ops.viewport_fit_printable(document, layout_name)
             if command is not None:
@@ -51,7 +51,7 @@ class MviewTool(Tool):
         if self._first is None:
             self._first = point
             self.preview_points = [point]     # rubber rectangle anchor
-            self.ctx.prompt(tr("Specify opposite corner:"))
+            self.prompt("Specify opposite corner:")
             return
         document, layout_name = self._paper()
         command = layout_ops.viewport_from_corners(

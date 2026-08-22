@@ -121,10 +121,13 @@ class DistTool(Tool):
         self._first: Point | None = None
         self._chain: list[Point] = []
         self._multiple = False
-        self.ctx.prompt(tr("Specify first point:"))
+        self.prompt("Specify first point:")
 
     def on_option(self, text: str) -> bool:
-        token = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        token = self.option(text) or text.strip().upper()
         if self._first is not None and not self._multiple and token in ("M", "MULTIPLE"):
             self._start_multiple()
             return True
@@ -146,7 +149,7 @@ class DistTool(Tool):
     def _start_multiple(self) -> None:
         self._multiple = True
         self._chain = [self._first] if self._first else []
-        self.ctx.prompt(tr("Specify next point or [Total] <Total>:"))
+        self.prompt("Specify next point or [Total] <Total>:")
 
     def _report_total(self) -> None:
         units = _units(self)
@@ -158,7 +161,7 @@ class DistTool(Tool):
         if self._first is None:
             self._first = point
             self.last_point = point
-            self.ctx.prompt(tr("Specify second point or <Multiple points>:"))
+            self.prompt("Specify second point or <Multiple points>:")
             return
         if self._multiple:
             self._chain.append(point)
@@ -166,7 +169,7 @@ class DistTool(Tool):
             units = _units(self)
             running = _polyline_perimeter(self._chain, closed=False)
             self.ctx.echo(tr("Distance = {value}", value=units.length(running)))
-            self.ctx.prompt(tr("Specify next point or [Total] <Total>:"))
+            self.prompt("Specify next point or [Total] <Total>:")
             return
         self._report(self._first, point)
 
@@ -196,7 +199,7 @@ class IdTool(Tool):
 
     def start(self) -> None:
         self.name = "ID"
-        self.ctx.prompt(tr("Specify point:"))
+        self.prompt("Specify point:")
 
     def on_point(self, point: Point) -> None:
         units = _units(self)
@@ -221,37 +224,40 @@ class AreaTool(Tool):
         self._mode = "start"        # start | points | object
         self._running = 0.0         # Add/Subtract balance
         self._sign = 0              # 0 = plain, +1 = add mode, -1 = subtract
-        self.ctx.prompt(self._root_prompt())
+        self.prompt(self._root_prompt())
 
     # -- prompts --------------------------------------------------------------
     def _root_prompt(self) -> str:
         if self._sign > 0:
-            return tr("(ADD mode) Specify first corner point or "
-                      "[Object/Subtract area/eXit]:")
+            return ("(ADD mode) Specify first corner point or "
+                    "[Object/Subtract area/eXit]:")
         if self._sign < 0:
-            return tr("(SUBTRACT mode) Specify first corner point or "
-                      "[Object/Add area/eXit]:")
-        return tr("Specify first corner point or "
-                  "[Object/Add area/Subtract area] <Object>:")
+            return ("(SUBTRACT mode) Specify first corner point or "
+                    "[Object/Add area/eXit]:")
+        return ("Specify first corner point or "
+                "[Object/Add area/Subtract area] <Object>:")
 
     def on_option(self, text: str) -> bool:
-        token = text.strip().upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        token = self.option(text) or text.strip().upper()
         if self._mode == "points" and self._points:
             return False        # inside a polygon only points and Enter apply
         if token in ("O", "OBJECT"):
             self._mode = "object"
             self.entity_picker = True
-            self.ctx.prompt(tr("Select object:"))
+            self.prompt("Select object:")
             return True
         if token in ("A", "ADD", "ADD AREA"):
             self._sign = 1
             self._mode = "start"
-            self.ctx.prompt(self._root_prompt())
+            self.prompt(self._root_prompt())
             return True
         if token in ("S", "SUBTRACT", "SUBTRACT AREA"):
             self._sign = -1
             self._mode = "start"
-            self.ctx.prompt(self._root_prompt())
+            self.prompt(self._root_prompt())
             return True
         if token in ("X", "EXIT") and self._sign:
             self._report_total()
@@ -267,7 +273,7 @@ class AreaTool(Tool):
             # <Object> is the bracketed default.
             self._mode = "object"
             self.entity_picker = True
-            self.ctx.prompt(tr("Select object:"))
+            self.prompt("Select object:")
             return
         self.ctx.finish()
 
@@ -277,13 +283,13 @@ class AreaTool(Tool):
             services = self.ctx.services
             entity = services.pick_entity(point) if services else None
             if entity is None:
-                self.ctx.prompt(tr("Nothing selected. Select object:"))
+                self.prompt("Nothing selected. Select object:")
                 return
             measured = entity_area_perimeter(entity)
             if measured is None:
                 self.ctx.echo(
                     tr("{kind} has no area to report.", kind=entity.dxftype()))
-                self.ctx.prompt(tr("Select object:"))
+                self.prompt("Select object:")
                 return
             area, perimeter, closed = measured
             self._announce(area, perimeter, closed)
@@ -291,7 +297,7 @@ class AreaTool(Tool):
             if self._sign:
                 self.entity_picker = False
                 self._mode = "start"
-                self.ctx.prompt(self._root_prompt())
+                self.prompt(self._root_prompt())
             else:
                 self.entity_picker = False
                 self.ctx.finish()
@@ -300,7 +306,7 @@ class AreaTool(Tool):
         self._mode = "points"
         self._points.append(point)
         self.last_point = point
-        self.ctx.prompt(tr("Specify next point or press Enter for total:"))
+        self.prompt("Specify next point or press Enter for total:")
 
     def _finish_polygon(self) -> None:
         area = polygon_area(self._points)
@@ -310,7 +316,7 @@ class AreaTool(Tool):
         self._points = []
         if self._sign:
             self._mode = "start"
-            self.ctx.prompt(self._root_prompt())
+            self.prompt(self._root_prompt())
         else:
             self.ctx.finish()
 

@@ -2440,7 +2440,11 @@ class MainWindow(QMainWindow):
                                       scale=layout_ops.scale_label(factor)))
             self.regen_in_memory()
             return
-        opt = option.strip().upper() or "E"
+        # Both ZOOM prompts offer the same options, so either source resolves
+        # "Ventana" and "_W" to the W the branches below expect.
+        opt = (i18n.keywords.match(option, "ZOOM [Extents/Window/Previous] "
+                                           "<Extents>:")
+               or option.strip().upper() or "E")
         if opt in ("E", "EXTENTS"):
             if active_vp is not None:
                 # inside a viewport, Extents fits the MODEL in it

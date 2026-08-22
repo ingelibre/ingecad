@@ -58,6 +58,37 @@ class Tool:
     # (TRIM/EXTEND): a drag or empty-click window feeds many targets.
     accepts_target_windows: ClassVar[bool] = False
 
+    #: Source (English) text of the prompt currently on screen. Every prompt a
+    #: tool shows goes through :meth:`prompt`, so this is always the one the
+    #: user is answering -- which is what lets :meth:`option` know which
+    #: keywords are live. A prompt with no options clears them, so a "D" typed
+    #: as a distance can never be eaten by an earlier prompt's Delete.
+    _prompt_source: str = ""
+
+    def prompt(self, source: str, **kwargs) -> None:
+        """Show ``source`` translated, and remember it for :meth:`option`.
+
+        Takes the **English source**, not a translated string: a prompt whose
+        ``{placeholders}`` are already filled in cannot be mapped back to the
+        catalog entry that lists its options.
+        """
+        from core.i18n import tr
+
+        self._prompt_source = source
+        self.ctx.prompt(tr(source, **kwargs))
+
+    def option(self, text: str) -> str:
+        """The English key ``text`` selects in the current prompt, or "".
+
+        Returns what call sites have always compared against -- ``"D"``,
+        ``"CE"`` -- so tools never learn that other languages exist. What
+        arrives may be the English key, the English word, the translated word,
+        or either behind AutoCAD's ``_`` global prefix.
+        """
+        from core.i18n import keywords
+
+        return keywords.match(text, self._prompt_source) or ""
+
     def on_target_entities(self, entities: list, rect) -> None:
         """Targets captured by a window/crossing during the tool's pick phase."""
 

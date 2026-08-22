@@ -91,7 +91,7 @@ class _DimTextMixin:
         self._pending: str | None = None
 
     def _location_prompt(self) -> str:
-        return tr("Specify dimension line location or [Mtext/Text/Angle]:")
+        return "Specify dimension line location or [Mtext/Text/Angle]:"
 
     def _measured(self) -> float:
         """Representative measurement for the ``<measured>`` default."""
@@ -110,7 +110,7 @@ class _DimTextMixin:
         if self._pending == "text":
             self._text = raw if raw else "<>"
             self._pending = None
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return True
         if self._pending == "textangle":
             try:
@@ -119,20 +119,22 @@ class _DimTextMixin:
                 self.ctx.echo(tr("Requires a numeric angle."))
                 return True
             self._pending = None
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return True
         if not ready:
             return False
-        key = raw.upper()
+        # The resolver first, so the localized keyword and _global form reach
+        # the same branches as the English key.
+        key = self.option(raw) or raw.upper()
         # Mtext falls back to the same single-line prompt (honest v0.2).
         if key in ("M", "MTEXT", "T", "TEXT"):
             self._pending = "text"
-            self.ctx.prompt(tr("Enter dimension text <{measured}>:",
-                               measured=f"{self._measured():.2f}"))
+            self.prompt("Enter dimension text <{measured}>:",
+                        measured=f"{self._measured():.2f}")
             return True
         if key in ("A", "ANGLE"):
             self._pending = "textangle"
-            self.ctx.prompt(tr("Specify angle of dimension text:"))
+            self.prompt("Specify angle of dimension text:")
             return True
         return False
 
@@ -146,11 +148,11 @@ class _DimTextMixin:
         if self._pending == "text":
             self._text = "<>"
             self._pending = None
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return True
         if self._pending == "textangle":
             self._pending = None
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return True
         return False
 
@@ -166,8 +168,7 @@ class _TwoPointDim(_DimTextMixin, Tool):
         self._p2: Point | None = None
         self._select_mode = False
         self._reset_text_state()
-        self.ctx.prompt(
-            tr("Specify first extension line origin or <select object>:"))
+        self.prompt("Specify first extension line origin or <select object>:")
 
     def _make(self, location: Point):
         raise NotImplementedError
@@ -256,7 +257,7 @@ class _TwoPointDim(_DimTextMixin, Tool):
         if self._p1 is None and not self._select_mode:
             self._select_mode = True
             self.entity_picker = True   # raw cursor for object picking
-            self.ctx.prompt(tr("Select object to dimension:"))
+            self.prompt("Select object to dimension:")
             return
         self.ctx.finish()
 
@@ -276,16 +277,16 @@ class _TwoPointDim(_DimTextMixin, Tool):
                 return
             self._p1, self._p2 = ends
             self.entity_picker = False   # snap returns for the line location
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return
         if self._p1 is None:
             self._p1 = point
             self.last_point = point
-            self.ctx.prompt(tr("Specify second extension line origin:"))
+            self.prompt("Specify second extension line origin:")
         elif self._p2 is None:
             self._p2 = point
             self.last_point = point
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
         else:
             point = self._adjust_location(point)
             cmd = self._make(point)
@@ -311,8 +312,8 @@ class DimLinearTool(_TwoPointDim):
         super().start()
 
     def _location_prompt(self) -> str:
-        return tr("Specify dimension line location or "
-                  "[Mtext/Text/Angle/Horizontal/Vertical/Rotated]:")
+        return ("Specify dimension line location or "
+                "[Mtext/Text/Angle/Horizontal/Vertical/Rotated]:")
 
     def on_option(self, text: str) -> bool:
         if self._pending == "dimangle":
@@ -322,24 +323,27 @@ class DimLinearTool(_TwoPointDim):
                 self.ctx.echo(tr("Requires a numeric angle."))
                 return True
             self._pending = None
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return True
         if super().on_option(text):
             return True
         if self._p2 is None:
             return False
-        key = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        key = self.option(text) or text.upper()
         if key in ("H", "HORIZONTAL"):
             self._forced_angle = 0.0
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return True
         if key in ("V", "VERTICAL"):
             self._forced_angle = 90.0
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return True
         if key in ("R", "ROTATED"):
             self._pending = "dimangle"
-            self.ctx.prompt(tr("Specify angle of dimension line <0>:"))
+            self.prompt("Specify angle of dimension line <0>:")
             return True
         return False
 
@@ -347,7 +351,7 @@ class DimLinearTool(_TwoPointDim):
         if self._pending == "dimangle":
             self._forced_angle = 0.0
             self._pending = None
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return
         super().on_enter()
 
@@ -419,7 +423,7 @@ class _CurvedDim(_DimTextMixin, Tool):
     def start(self) -> None:
         self._ent = None
         self._reset_text_state()
-        self.ctx.prompt(tr("Select arc or circle:"))
+        self.prompt("Select arc or circle:")
 
     def _make(self, center, radius, location):
         raise NotImplementedError
@@ -441,7 +445,7 @@ class _CurvedDim(_DimTextMixin, Tool):
                 self.ctx.echo(tr("Select an arc or circle."))
                 return
             self._ent = e
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
         else:
             c = self._ent.dxf.center
             self.ctx.execute(self._make((c.x, c.y), self._ent.dxf.radius, point))
@@ -497,11 +501,11 @@ class DimAngularTool(_DimTextMixin, Tool):
         self._line2 = None
         self._region_free = True    # arc path keeps its own included angle
         self._quadrant: Point | None = None
-        self.ctx.prompt(tr("Select arc, circle, line, or <specify vertex>:"))
+        self.prompt("Select arc, circle, line, or <specify vertex>:")
 
     def _location_prompt(self) -> str:
-        return tr("Specify dimension arc line location or "
-                  "[Mtext/Text/Angle/Quadrant]:")
+        return ("Specify dimension arc line location or "
+                "[Mtext/Text/Angle/Quadrant]:")
 
     def _measured(self) -> float:
         if self._line1 and self._line2:
@@ -530,16 +534,16 @@ class DimAngularTool(_DimTextMixin, Tool):
         if self._mode == "select":
             self._mode = "vertex"
             self.entity_picker = False
-            self.ctx.prompt(tr("Specify angle vertex:"))
+            self.prompt("Specify angle vertex:")
             return
         self.ctx.finish()
 
     def on_option(self, text: str) -> bool:
         if self._text_options(text, ready=self._mode == "locate"):
             return True
-        if self._mode == "locate" and text.upper() in ("Q", "QUADRANT"):
+        if self._mode == "locate" and self.option(text) == "Q":
             self._pending = "quadrant"
-            self.ctx.prompt(tr("Specify quadrant:"))
+            self.prompt("Specify quadrant:")
             return True
         return False
 
@@ -547,7 +551,7 @@ class DimAngularTool(_DimTextMixin, Tool):
         if self._pending == "quadrant":
             self._quadrant = point
             self._pending = None
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return
         if self._pending is not None:
             return
@@ -571,12 +575,12 @@ class DimAngularTool(_DimTextMixin, Tool):
                 self._p1 = (c.x + r * math.cos(a), c.y + r * math.sin(a))
                 self._mode = "circle2"
                 self.entity_picker = False
-                self.ctx.prompt(tr("Specify second angle endpoint:"))
+                self.prompt("Specify second angle endpoint:")
             elif t == "LINE":
                 s, w = e.dxf.start, e.dxf.end
                 self._line1 = ((s.x, s.y), (w.x, w.y))
                 self._mode = "line2"
-                self.ctx.prompt(tr("Select second line:"))
+                self.prompt("Select second line:")
             else:
                 self.ctx.echo(tr("Select an arc, circle, or line."))
         elif mode == "line2":
@@ -595,11 +599,11 @@ class DimAngularTool(_DimTextMixin, Tool):
             self._vertex = point
             self.last_point = point
             self._mode = "vp1"
-            self.ctx.prompt(tr("Specify first angle endpoint:"))
+            self.prompt("Specify first angle endpoint:")
         elif mode == "vp1":
             self._p1 = point
             self._mode = "vp2"
-            self.ctx.prompt(tr("Specify second angle endpoint:"))
+            self.prompt("Specify second angle endpoint:")
         elif mode == "vp2":
             self._p2 = point
             self._to_locate()
@@ -626,7 +630,7 @@ class DimAngularTool(_DimTextMixin, Tool):
     def _to_locate(self) -> None:
         self._mode = "locate"
         self.entity_picker = False
-        self.ctx.prompt(self._location_prompt())
+        self.prompt(self._location_prompt())
 
     def preview_segments(self, cursor: Point):
         if self._mode == "locate" and self._vertex is not None:
@@ -648,11 +652,11 @@ class DimArcTool(_DimTextMixin, Tool):
         self._reset_text_state()
         self._arc = None            # (center, radius, start_deg, end_deg)
         self._partial_first: float | None = None
-        self.ctx.prompt(tr("Select arc or polyline arc segment:"))
+        self.prompt("Select arc or polyline arc segment:")
 
     def _location_prompt(self) -> str:
-        return tr("Specify arc length dimension location or "
-                  "[Mtext/Text/Angle/Partial]:")
+        return ("Specify arc length dimension location or "
+                "[Mtext/Text/Angle/Partial]:")
 
     def _measured(self) -> float:
         if self._arc is None:
@@ -663,9 +667,9 @@ class DimArcTool(_DimTextMixin, Tool):
     def on_option(self, text: str) -> bool:
         if self._text_options(text, ready=self._arc is not None):
             return True
-        if self._arc is not None and text.upper() in ("P", "PARTIAL"):
+        if self._arc is not None and self.option(text) == "P":
             self._pending = "partial1"
-            self.ctx.prompt(tr("Specify first point for arc length dimension:"))
+            self.prompt("Specify first point for arc length dimension:")
             return True
         return False
 
@@ -674,7 +678,7 @@ class DimArcTool(_DimTextMixin, Tool):
             c, _r, a0, a1 = self._arc
             self._partial_first = actions.clamp_angle_to_arc(point, c, a0, a1)
             self._pending = "partial2"
-            self.ctx.prompt(tr("Specify second point for arc length dimension:"))
+            self.prompt("Specify second point for arc length dimension:")
             return
         if self._pending == "partial2":
             c, r, a0, a1 = self._arc
@@ -687,7 +691,7 @@ class DimArcTool(_DimTextMixin, Tool):
                 first, second = second, first
             self._arc = (c, r, first, second)
             self._pending = None
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return
         if self._pending is not None:
             return
@@ -699,7 +703,7 @@ class DimArcTool(_DimTextMixin, Tool):
                 return
             self._arc = arc
             self.entity_picker = False
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
         else:
             c, r, a0, a1 = self._arc
             self.ctx.execute(actions.dim_arc(
@@ -746,11 +750,11 @@ class DimOrdinateTool(_DimTextMixin, Tool):
         self._reset_text_state()
         self._feature: Point | None = None
         self._dtype: str | None = None
-        self.ctx.prompt(tr("Specify feature location:"))
+        self.prompt("Specify feature location:")
 
     def _location_prompt(self) -> str:
-        return tr("Specify leader endpoint or "
-                  "[Xdatum/Ydatum/Mtext/Text/Angle]:")
+        return ("Specify leader endpoint or "
+                "[Xdatum/Ydatum/Mtext/Text/Angle]:")
 
     def _measured(self) -> float:
         if self._feature is None:
@@ -762,14 +766,17 @@ class DimOrdinateTool(_DimTextMixin, Tool):
             return True
         if self._feature is None:
             return False
-        key = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        key = self.option(text) or text.upper()
         if key in ("X", "XDATUM"):
             self._dtype = "X"
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return True
         if key in ("Y", "YDATUM"):
             self._dtype = "Y"
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return True
         return False
 
@@ -784,7 +791,7 @@ class DimOrdinateTool(_DimTextMixin, Tool):
         if self._feature is None:
             self._feature = point
             self.last_point = point
-            self.ctx.prompt(self._location_prompt())
+            self.prompt(self._location_prompt())
             return
         self.ctx.execute(actions.dim_ordinate(
             self._feature, point, dtype=self._dtype,
@@ -804,7 +811,7 @@ class DimCenterTool(Tool):
 
     def start(self) -> None:
         self.name = "DIMCENTER"
-        self.ctx.prompt(tr("Select arc or circle:"))
+        self.prompt("Select arc or circle:")
 
     def on_point(self, point: Point) -> None:
         e = self.ctx.services.pick_entity(point) if self.ctx.services else None
@@ -835,21 +842,21 @@ class _ChainDim(Tool):
             self._enter_select()
         else:
             self._prev_location = self._base_location(self._base)
-            self.ctx.prompt(self._chain_prompt())
+            self.prompt(self._chain_prompt())
 
     def _chain_prompt(self) -> str:
-        return tr("Specify a second extension line origin or "
-                  "[Undo/Select] <Select>:")
+        return ("Specify a second extension line origin or "
+                "[Undo/Select] <Select>:")
 
     def _select_prompt(self) -> str:
         if self.BASELINE:
-            return tr("Select base dimension:")
-        return tr("Select continued dimension:")
+            return "Select base dimension:"
+        return "Select continued dimension:"
 
     def _enter_select(self) -> None:
         self._selecting = True
         self.entity_picker = True
-        self.ctx.prompt(self._select_prompt())
+        self.prompt(self._select_prompt())
 
     @staticmethod
     def _base_location(base) -> Point:
@@ -866,14 +873,17 @@ class _ChainDim(Tool):
     def on_option(self, text: str) -> bool:
         if getattr(self, "_selecting", False):
             return False
-        key = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        key = self.option(text) or text.upper()
         if key in ("U", "UNDO"):
             if not self._stack:
                 self.ctx.echo(tr("Nothing to undo."))
                 return True
             self.ctx.undo_last()
             self._base, self._prev_location = self._stack.pop()
-            self.ctx.prompt(self._chain_prompt())
+            self.prompt(self._chain_prompt())
             return True
         if key in ("S", "SELECT"):
             self._enter_select()
@@ -892,7 +902,7 @@ class _ChainDim(Tool):
             self._selecting = False
             self.entity_picker = False
             self._stack.clear()
-            self.ctx.prompt(self._chain_prompt())
+            self.prompt(self._chain_prompt())
             return
         base = self._base
         if base is None or not base.is_alive:
@@ -922,7 +932,7 @@ class _ChainDim(Tool):
             # the new dimension becomes the base: successive continuation
             self._base = cmd.dim
             self._prev_location = self._base_location(cmd.dim)
-        self.ctx.prompt(self._chain_prompt())
+        self.prompt(self._chain_prompt())
 
     def _baseline_location(self, p1: Point, p2: Point) -> Point:
         """The previous dimension line shifted DIMDLI away from the points."""
@@ -976,7 +986,7 @@ class DimTextEditTool(Tool):
         self.name = "DIMTEDIT"
         self._dim = None
         self._pending_angle = False
-        self.ctx.prompt(tr("Select dimension:"))
+        self.prompt("Select dimension:")
 
     def on_option(self, text: str) -> bool:
         if self._pending_angle:
@@ -990,7 +1000,10 @@ class DimTextEditTool(Tool):
             return True
         if self._dim is None:
             return False
-        key = text.upper()
+        # The resolver first: it turns the localized keyword, or
+        # AutoCAD's _global form, into the English key the
+        # branches below have always compared against.
+        key = self.option(text) or text.upper()
         halign = {"L": "left", "LEFT": "left", "R": "right", "RIGHT": "right",
                   "C": "center", "CENTER": "center"}.get(key)
         if halign:
@@ -1003,7 +1016,7 @@ class DimTextEditTool(Tool):
             return True
         if key in ("A", "ANGLE"):
             self._pending_angle = True
-            self.ctx.prompt(tr("Specify angle for dimension text:"))
+            self.prompt("Specify angle for dimension text:")
             return True
         return False
 
@@ -1017,8 +1030,8 @@ class DimTextEditTool(Tool):
                 return
             self._dim = e
             self.entity_picker = False
-            self.ctx.prompt(tr("Specify new location for dimension text or "
-                               "[Left/Right/Center/Home/Angle]:"))
+            self.prompt("Specify new location for dimension text or "
+                        "[Left/Right/Center/Home/Angle]:")
             return
         self.ctx.execute(actions.dim_text_edit(self._dim, location=point))
         self.ctx.finish()
