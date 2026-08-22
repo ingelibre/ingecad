@@ -1,0 +1,30 @@
+name: Something is missing
+description: A command or behaviour you need that IngeCAD does not have.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Escribe en español si prefieres** — English or Spanish, both are read.
+
+        IngeCAD is deliberately not a clone of AutoCAD: it aims at the commands
+        a civil engineer actually uses to draw, edit and print a plan. The test
+        a request has to pass is *"does this help the engineer who opens a
+        colleague's drawing and draws fast with the keyboard?"* — so please
+        say what you were trying to do, not only which command you want.
+  - type: textarea
+    id: need
+    attributes:
+      label: What you were trying to do
+      placeholder: |
+        I have to hand in a plan with a table of coordinates for every vertex
+        of the boundary. Today I type it by hand.
+    validations:
+      required: true
+  - type: input
+    id: autocad
+    attributes:
+      label: How AutoCAD (or BricsCAD) does it, if it does
+      description: The command name helps a lot.
+      placeholder: TABLE, or a LISP routine everyone passes around

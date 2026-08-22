@@ -2,7 +2,16 @@
 
 Patches, bug reports and translations are welcome. IngeCAD is
 GPL-3.0-or-later; by contributing you agree your work ships under that
-licence. Contributors are listed in `AUTHORS`.
+licence. Contributors are listed in `AUTHORS`, and the project follows the
+[Contributor Covenant](CODE_OF_CONDUCT.md).
+
+**Write in English or Spanish, whichever you prefer** — both are read. Only
+the code itself, its comments and the commit messages have to be English, so
+that any contributor can read them.
+
+You do not need any permission on this repository to contribute: fork it, push
+your change to a branch of your fork, and open a pull request. That is how
+every outside change has arrived so far.
 
 ## Getting it running
 

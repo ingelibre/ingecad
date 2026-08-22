@@ -1,0 +1,47 @@
+name: Something else goes wrong
+description: A crash, a command that misbehaves, a window that will not open.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "**Escribe en español si prefieres** — English or Spanish, both are read."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: What you did, what happened, and what you expected instead.
+      placeholder: |
+        I type TR, pick a cutting edge, click the piece to remove, and the
+        whole line disappears instead of the piece.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Step by step
+      description: The shortest sequence that shows it, starting from a new drawing.
+      placeholder: |
+        1. New drawing
+        2. L, two points, Enter
+        3. …
+  - type: input
+    id: version
+    attributes:
+      label: IngeCAD version
+      placeholder: 0.4.0
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      placeholder: Ubuntu 24.04, Wayland, AppImage
+  - type: textarea
+    id: terminal
+    attributes:
+      label: Terminal output, if you have it
+      description: |
+        If it crashed and you started it from a terminal, paste what it
+        printed. Not required.
+      render: shell

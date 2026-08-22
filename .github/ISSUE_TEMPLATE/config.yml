@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How a drawing is converted (DWG support)
+    url: https://github.com/LibreDWG/libredwg/issues
+    about: >
+      IngeCAD reads and writes DWG through LibreDWG. If a drawing converts
+      badly, report it here first anyway — it is often fixed upstream, and
+      that path is walked for you.
