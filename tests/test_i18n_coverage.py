@@ -65,9 +65,19 @@ def _scan() -> tuple[dict[str, str], set[str]]:
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 literals.add(node.value)
-            if not (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name) and node.func.id == "tr"
-                    and node.args):
+            if not (isinstance(node, ast.Call) and node.args):
+                continue
+            func = node.func
+            # tr("...") directly, and the prompt funnel that translates for
+            # its callers: `self.prompt("Specify next point:")` reaches tr()
+            # with that exact string, so it is a translatable source too. It
+            # is counted here because the I3 refactor moved 200 prompts out
+            # of tr() call sites, and without this the coverage guarantee
+            # quietly stopped covering them.
+            translated = ((isinstance(func, ast.Name) and func.id == "tr")
+                          or (isinstance(func, ast.Attribute)
+                              and func.attr == "prompt"))
+            if not translated:
                 continue
             first = node.args[0]
             if isinstance(first, ast.Constant) and isinstance(first.value, str):

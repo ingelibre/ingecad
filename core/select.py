@@ -643,6 +643,69 @@ class GeometryIndex:
                     self._pick_box_oidx[hits[int(np.argmin(areas))]]])
         return best[1] if best else None
 
+    def pick_all(self, cursor: tuple[float, float],
+                 tolerance: float) -> list[str]:
+        """Every entity within ``tolerance``, nearest first.
+
+        Selection cycling needs the candidates, not just the winner: on a
+        dense plan a dimension and the text somebody typed next to it sit on
+        top of each other, and picking always gave the same one.
+
+        The ordering is the one :meth:`pick` uses, so the first element is
+        exactly what a single click has always selected -- cycling only ever
+        offers what comes *after* it.
+        """
+        if self._dirty:
+            self._build()
+        cx, cy = cursor
+        best: dict[str, float] = {}
+
+        def offer(handle: str, distance: float) -> None:
+            if handle not in best or distance < best[handle]:
+                best[handle] = distance
+
+        if len(self._segs):
+            b = self._seg_bounds
+            cand = np.nonzero(
+                (b[:, 0] - tolerance <= cx) & (b[:, 2] + tolerance >= cx)
+                & (b[:, 1] - tolerance <= cy) & (b[:, 3] + tolerance >= cy))[0]
+            if len(cand):
+                d = _dist_point_segments(self._segs[cand], cx, cy)
+                near = np.nonzero(d <= tolerance)[0]
+                for k in near:
+                    offer(self._owners[self._seg_oidx[cand[k]]], float(d[k]))
+        if len(self._circles):
+            c = self._circles
+            dc = np.hypot(c[:, 0] - cx, c[:, 1] - cy)
+            d = np.abs(dc - c[:, 2])
+            ang = np.arctan2(cy - c[:, 1], cx - c[:, 0]) % math.tau
+            rel = (ang - c[:, 4]) % math.tau
+            on_span = (c[:, 3] == 0.0) | (rel <= (c[:, 5] - c[:, 4]))
+            d = np.where(on_span, d, np.inf)
+            for k in np.nonzero(d <= tolerance)[0]:
+                offer(self._owners[self._circle_oidx[k]], float(d[k]))
+        # Boxes and click-only regions rank behind real geometry, smallest
+        # first -- the same last-resort order pick() applies.
+        for boxes, oidx in ((self._boxes, self._box_oidx),
+                            (self._pick_boxes, self._pick_box_oidx)):
+            if not len(boxes):
+                continue
+            inside = ((cx >= boxes[:, 0] - tolerance)
+                      & (cx <= boxes[:, 2] + tolerance)
+                      & (cy >= boxes[:, 1] - tolerance)
+                      & (cy <= boxes[:, 3] + tolerance))
+            hits = np.nonzero(inside)[0]
+            if not len(hits):
+                continue
+            areas = ((boxes[hits, 2] - boxes[hits, 0])
+                     * (boxes[hits, 3] - boxes[hits, 1]))
+            order = np.argsort(areas)
+            for rank, k in enumerate(hits[order]):
+                # tolerance + a hair keeps them behind every real hit while
+                # preserving smallest-box-first among themselves
+                offer(self._owners[oidx[k]], tolerance * (1.0 + 1e-6 * (rank + 1)))
+        return [h for h, _ in sorted(best.items(), key=lambda kv: kv[1])]
+
     def window(self, rect: tuple[float, float, float, float]) -> list[str]:
         """Entities FULLY inside the rect (left-to-right blue window)."""
         if self._dirty:

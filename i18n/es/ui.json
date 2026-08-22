@@ -1214,5 +1214,6 @@
   "Column width:": "Ancho de columna:",
   "Data rows:": "Filas de datos:",
   "Row height:": "Altura de fila:",
-  "Text height:": "Altura del texto:"
+  "Text height:": "Altura del texto:",
+  "Cycling: {n} of {total} ({kind}) — click again for the next.": "Ciclando: {n} de {total} ({kind}) — vuelva a hacer clic para el siguiente."
 }

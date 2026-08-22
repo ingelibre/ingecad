@@ -314,6 +314,7 @@ class ToolController(QObject):
         return self.tool is not None
 
     def start_tool(self, name: str) -> None:
+        self.reset_pick_cycle()   # a new command starts picking fresh
         in_paper = getattr(self.window, "_active_layout", "Model") != "Model"
         if name in LAYOUT_TOOL_CLASSES and not in_paper:
             # AutoCAD: "** Command not allowed in Model Tab **"
@@ -371,8 +372,58 @@ class ToolController(QObject):
     def pick_entity(self, point):
         if self.index is None:
             return None
-        handle = self.index.pick(point, self._pick_tolerance)
+        handle = self.pick_cycling(point)
         return self.index.entity(handle) if handle else None
+
+    # -- selection cycling -----------------------------------------------------
+    #: (point, candidate handles, index into them) of the click being cycled.
+    _cycle = None
+
+    def reset_pick_cycle(self) -> None:
+        """Forget the cycle: the next click starts from the nearest again."""
+        self._cycle = None
+
+    def pick_cycling(self, point) -> Optional[str]:
+        """The handle this click selects, advancing on a repeated click.
+
+        On a dense plan things sit on top of each other -- a dimension and
+        the number somebody typed beside it -- and a click always answered
+        with the same one, so the other was unreachable. Clicking the same
+        spot again now offers the next candidate, which is what AutoCAD's
+        selection cycling does (SELECTIONCYCLING, p. 2505) without the list
+        dialog its value 2 shows.
+
+        The first answer is unchanged: ``pick_all`` orders candidates exactly
+        as ``pick`` chose its winner, so cycling only ever reaches what a
+        single click was already skipping.
+        """
+        if self.index is None:
+            return None
+        tolerance = self._pick_tolerance
+        cycle = self._cycle
+        if cycle is not None:
+            (px, py), handles, position = cycle
+            near = abs(point[0] - px) <= tolerance and abs(point[1] - py) <= tolerance
+            handles = [h for h in handles
+                       if (e := self.index.entity(h)) is not None and e.is_alive]
+            if near and len(handles) > 1:
+                position = (position + 1) % len(handles)
+                self._cycle = ((px, py), handles, position)
+                self._echo_cycle(handles, position)
+                return handles[position]
+        handles = self.index.pick_all(point, tolerance)
+        if not handles:
+            self._cycle = None
+            return None
+        self._cycle = (point, handles, 0)
+        return handles[0]
+
+    def _echo_cycle(self, handles, position) -> None:
+        entity = self.index.entity(handles[position])
+        kind = entity.dxftype() if entity is not None else "?"
+        self.window.command_line.echo(
+            tr("Cycling: {n} of {total} ({kind}) — click again for the next.",
+               n=position + 1, total=len(handles), kind=kind))
 
     def edges_geometry(self, handles=None, exclude=None, near=None):
         """(segments, circles) for TRIM/EXTEND edge math.
@@ -426,6 +477,7 @@ class ToolController(QObject):
         return out
 
     def clear_selection(self) -> None:
+        self.reset_pick_cycle()
         self.selection = set()
         self.paper_vp = None
         self._window_anchor = None
@@ -691,6 +743,7 @@ class ToolController(QObject):
         self.changed.emit()
 
     def cancel(self) -> None:
+        self.reset_pick_cycle()
         if self._grip_drag is not None and self._grip_drag[0] == _VP_GRIP:
             # Esc mid-drag of a viewport grip: nothing was mutated yet
             # (the drag only moves the rubber rectangle) — just drop it.
@@ -855,6 +908,8 @@ class ToolController(QObject):
                      actions.CreateBlockCommand, actions.ExplodeCommand)
 
     def _execute(self, command) -> None:
+        # the drawing changed under the candidates: never cycle stale ones
+        self.reset_pick_cycle()
         self.window.history.execute(command)
         # Any real edit invalidates the model tessellation the layout tab
         # keeps for live viewport navigation.
@@ -1337,13 +1392,26 @@ class ToolController(QObject):
                 self.selection |= self._with_groups(hits)
             self._echo_count()
             return
-        handle = self.index.pick((wx, wy), self._pick_tolerance)
+        previous = self._cycle
+        if shift:
+            # Shift removes from the selection; cycling under it would take
+            # away something the user never pointed at. Reset BEFORE picking,
+            # or this very click already advances to the next candidate.
+            self.reset_pick_cycle()
+            previous = None
+        handle = self.pick_cycling((wx, wy))
         if handle is None:
             self._window_anchor = (wx, wy)
             return
         if shift:
+            self.reset_pick_cycle()
             self.selection -= self._with_groups([handle])
         else:
+            if previous is not None and self._cycle is not None \
+                    and previous[1] and self._cycle[2] != previous[2]:
+                # cycled: swap the previous candidate out instead of adding
+                # the second one -- "I meant the other object", not "both".
+                self.selection -= self._with_groups([previous[1][previous[2]]])
             self.selection |= self._with_groups([handle])
         self._echo_count()
 

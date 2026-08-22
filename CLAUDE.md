@@ -419,6 +419,40 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-22 (ter) — ciclado de selección, y un plano que no tenía cotas
+
+**Marco: «no hay como seleccionar esa cota».** El diagnóstico salió de SUS dos
+capturas y del archivo que guardó, no de suposiciones: en la primera el panel
+decía **Dimension** (su cota) y en la segunda **Text** con altura 1 (un número
+del plano). Es decir: **los números de los lotes del COFOPRI no son cotas, son
+TEXT escritos a mano.** Cotas reales hay 11 y están en la capa SECCIONES, todas
+**con anulaciones XDATA**; la suya no las tenía, y el estilo `DISTAN-G` suprime
+las cuatro líneas (`dimse1/2`, `dimsd1/2` = 1, y las variables de cabecera dicen
+lo mismo, así que AutoCAD dibujaría igual de pelado). Por eso su cota era casi
+impicable: medido, **3,8 % de su caja contra 51 %** de una del archivo.
+
+**Lo que faltaba de verdad era el ciclado de selección.** Su cota y el texto del
+plano estaban superpuestos, y picar devolvía siempre el mismo. Ahora
+`GeometryIndex.pick_all()` da todos los candidatos **con el mismo orden que
+usaba `pick`** —invariante clave: el primer clic sigue seleccionando lo de
+siempre, el ciclado sólo alcanza lo que ese clic ya se saltaba— y volver a
+clicar en el mismo punto ofrece el siguiente (SELECTIONCYCLING valor 1, sin el
+diálogo de lista). Vale igual para las herramientas que pican, que es donde él
+se trabó con `MA`. Verificado en su archivo: 2 candidatos, clics alternando.
+
+⚠️ **Tres trampas de fixture, todas del mismo tipo: el test pasaba probando
+nada.** (1) Añadir entidades directo al modelspace no las mete en el índice de
+picado. (2) Re-adjuntar el documento tampoco basta: como añadir sin Command no
+cambia `document.revision`, **el pre-calentador en segundo plano da por vigente
+su índice vacío y lo adopta**. Lo correcto es dibujar por Commands, como la app.
+(3) El shift-clic seguía ciclando porque yo reseteaba **después** de picar.
+
+**Y un hueco de cobertura que este trabajo destapó:** el refactor de prompts de
+la fase I3 sacó **200 cadenas** de las llamadas a `tr()` (ahora van por
+`self.prompt("...")`), así que el test de cobertura dejó de vigilarlas sin que
+nadie lo notara — contaba 886 en vez de 1086. Estaban todas traducidas, pero la
+garantía se había perdido. El escáner ahora también lee el embudo de prompts.
+
 ## 🗓 Sesión 2026-08-22 (bis) — acotar en un plano grande tardaba segundos
 
 **Marco lo cazó dogfoodeando**: en un plano real, `DIMLINEAR` dibujaba la cota
