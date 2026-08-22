@@ -401,7 +401,9 @@ class OffsetTool(Tool):
             return True
 
         if self._phase in ("object", "side"):
-            if token in ("X", "EXIT", ""):
+            # The prompt reads [Exit/...], so E is the key AutoCAD documents;
+            # X stayed accepted because it is what this tool took before.
+            if token in ("E", "X", "EXIT", ""):
                 self.ctx.finish()
                 return True
             if token in ("U", "UNDO"):

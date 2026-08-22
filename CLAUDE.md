@@ -430,9 +430,14 @@ no hay que re-discutir:
   comandos es inglesa en cualquier idioma de la interfaz, porque la tesis del
   producto es la memoria muscular. Los menús y los prompts sí se traducen.
 - **La convención de los prompts con opciones: traducir la palabra y dejar la
-  letra inglesa entre paréntesis** — `[Copiar(C)/Suprimir(D)]`. La cumplen 59 de
-  87 cadenas; las 28 que no (LAYOUT, todo OFFSET, AREA…) son el bug del issue #4.
-  Una traducción sin la letra ofrece palabras que el parser rechaza.
+  letra inglesa entre paréntesis** — `[Copiar(C)/Suprimir(D)]`. ✅ **I0 hecha el
+  2026-08-22**: 17 cadenas arregladas (eran 87, cumplían 70) y
+  `tests/test_i18n_prompt_keys.py` vigila todos los idiomas. ⚠️ Se aceptan **tres**
+  formas, no una: `Suprimir(D)`, las mayúsculas de la palabra como las escribe
+  AutoCAD (`CEntro` = CE), o el keyword sin traducir (`3P`, `Ttr`) — contar sólo
+  los paréntesis daba 28 rotas cuando eran 17. Y las opciones se comparan **por
+  posición**: un cotejo laxo daba por buena `Definir` (que es Set) como
+  traducción de `Delete`, porque las dos llevan una D mayúscula.
 - **Un idioma debe ser una carpeta, no un parche.** Hoy el menú de idioma tiene
   la lista fija (`views/main_window.py:796`), por eso el PR del checo tuvo que
   tocar Python. Meta: `i18n/<lang>/{meta,ui,commands}.json` y cero código.
