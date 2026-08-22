@@ -419,6 +419,41 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-22 (bis) — acotar en un plano grande tardaba segundos
+
+**Marco lo cazó dogfoodeando**: en un plano real, `DIMLINEAR` dibujaba la cota
+correcta pero tardaba 3-5 s en aparecer. Medido: **crear la cota cuesta 1-2 ms;
+verla costaba 2 300-2 900 ms** en el COFOPRI de 5 406 entidades y **10 300-16 200
+ms** en el SEDAPAR de 10 847. Todo eso era `regen_in_memory()` reteselando el
+dibujo entero para mostrar UNA entidad nueva.
+
+**La causa era un comentario que dejó de ser cierto.** El controlador forzaba
+ese regen a propósito: *«a dimension renders into an anonymous block … the
+overlay can't show it»*. Eso valía antes de que el contenido de bloque se
+atribuyera a la entidad más externa con handle (v0.1.3); desde entonces **el
+overlay dibuja una cota con el mismo frontend que la escena base** — medido:
+1 035 vértices para un DIMLINEAR simple, todos atribuidos a su handle. La
+exclusión había quedado obsoleta y nadie volvió a preguntárselo.
+
+Cuatro puntos en `views/tool_controller.py`: `_added_entities` reconoce
+`AddDimensionCommand`; crear una cota ya no fuerza regen; el regen que sí queda
+es sólo para cotas **pegadas** (que pueden llegar sin su bloque `*D`); y
+deshacer/rehacer pasa por el camino quirúrgico. **Resultado: 38-335 ms en el
+COFOPRI y 148-293 ms en el SEDAPAR** — de 50 a 70 veces más rápido.
+
+⚠️ **Y otra vez la trampa del medidor, en su forma más peligrosa.** Al probar si
+el overlay sabía dibujar una cota conté los vértices con un atributo que no
+existe (`batch.verts` en vez de `batch.data`) y **leí 0**. Estuve a un paso de
+concluir «el overlay no puede, la exclusión es correcta» y cerrar la
+investigación. Lo que lo delató fue el **control**: una LÍNEA normal, que sí se
+dibuja seguro, también daba 0. *Un cero sólo significa algo si el control da
+distinto de cero.*
+
+**Lo que NO cambió, y conviene saberlo:** el motor de snap nunca enganchó a la
+geometría de una cota, ni antes ni después — verificado preguntándole
+directamente, con reconstrucción completa incluida. No es una regresión de este
+arreglo; es una función que no existe.
+
 ## 🧭 IDIOMAS — la regla, y el plan (2026-08-22) → `docs/i18n.md`
 
 **El primer contribuidor externo llegó por acá.** Michal Josef Špaček (Red Hat,

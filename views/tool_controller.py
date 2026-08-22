@@ -732,6 +732,12 @@ class ToolController(QObject):
         """
         if isinstance(command, actions.AddEntityCommand):
             return [command.entity] if command.entity is not None else []
+        if isinstance(command, actions.AddDimensionCommand):
+            # Its graphics live in an anonymous *D block, which the overlay
+            # renders through the same frontend the base scene uses -- 1035
+            # vertices for a plain DIMLINEAR, measured. Nothing about it needs
+            # a full regen.
+            return [command.dim] if command.dim is not None else []
         if isinstance(command, (actions.PasteCommand,
                                 actions.CopyEntitiesCommand)):
             return list(command.copies)
@@ -882,11 +888,9 @@ class ToolController(QObject):
                 h for h in self.selection
                 if (e := self.index.entity(h)) is not None and e.is_alive
             }
-        if isinstance(command, actions.AddDimensionCommand) \
-                or getattr(command, "needs_regen", False):
-            # A dimension renders into an anonymous block, a viewport's
-            # content is the model re-projected; the overlay can't show
-            # either cheaply, so regen now (creating one is not hot).
+        if getattr(command, "needs_regen", False):
+            # A viewport's content is the model re-projected: the overlay
+            # cannot show that, so only a regen is right.
             self.window.regen_in_memory()
         elif added is not None:
             # Additive: show through the overlay, no hide, no urgent regen —
@@ -902,8 +906,11 @@ class ToolController(QObject):
                     # drawn entities reach the overlay via _draw_commands()
                     self._pending_render.extend(added)
                 self._refresh_overlay()
-            if any(e.dxftype() == "DIMENSION" for e in added):
-                # pasted dimension: only a regen renders its block right
+            if (not isinstance(command, actions.AddDimensionCommand)
+                    and any(e.dxftype() == "DIMENSION" for e in added)):
+                # A PASTED dimension may arrive without its *D block, so only
+                # a regen renders it right. One this app just created carries
+                # the block render() produced, and the overlay draws it.
                 self._regen_timer.start()
             elif stamp is not None or (
                     len(self._draw_commands()) + len(self._pending_render)
@@ -1014,9 +1021,8 @@ class ToolController(QObject):
         everything the command touched are hidden surgically and the restored
         or current entities ride the overlay; the full regen stays coalesced.
         """
-        if command is None or isinstance(command, actions.AddDimensionCommand) \
-                or getattr(command, "needs_regen", False):
-            # unknown scope / dimension block graphics: only a regen is right;
+        if command is None or getattr(command, "needs_regen", False):
+            # unknown scope: only a regen is right;
             # hide what the undo just destroyed so it vanishes NOW (the regen
             # runs in the background and lands later)
             self._invalidate_geometry()
@@ -1037,6 +1043,8 @@ class ToolController(QObject):
             touched.append(command.insert)
         if getattr(command, "entity", None) is not None:
             touched.append(command.entity)
+        if getattr(command, "dim", None) is not None:
+            touched.append(command.dim)   # AddDimensionCommand, one entity
         for _orig, parts in (getattr(command, "pieces", None) or []):
             touched.extend(parts)
         # hide stale base copies: entities the undo/redo just destroyed
