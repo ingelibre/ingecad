@@ -444,9 +444,21 @@ no hay que re-discutir:
 - **Comandos localizados (`LINEA`) van al final, y con el inglés siempre
   aceptado** vía prefijo `_`, como la AutoCAD localizada. El invariante sagrado:
   toda la tabla de alias inglesa funciona con cualquier idioma activo.
-- Medido el 2026-08-22: **274 cadenas `tr()` sin traducir al español** (es.json
-  se quedó en v0.2) y **143 comparaciones de opción escritas a mano**, que son
-  las que hoy impiden cualquier keyword localizado.
+- ✅ **I1 hecha el 2026-08-22**: las **274 cadenas** sin traducir están
+  traducidas (es.json 974 → 1216 claves, cobertura **1110/1110**) y
+  `tests/test_i18n_coverage.py` falla sólo para el idioma mantenido (`es`);
+  los idiomas de la comunidad se informan, nunca bloquean. Vigila además los
+  `{marcadores}` en todos los idiomas, porque `tr()` formatea la traducción.
+  ⚠️ **Dos trampas de medición**: (1) 106 cadenas **nunca aparecen dentro de un
+  `tr(...)`** — viven en tablas de datos y se traducen por variable
+  (`Mode("END", 1, "Endpoint")` → `tr(mode.label)`); un test de claves muertas
+  ingenuo pedía borrarlas y habría des-traducido los marcadores de referencia a
+  objetos. (2) mi primer humo en español decía «0 etiquetas, 0 sin traducir» y
+  parecía verde: no encontraba los menús (`main_window` tiene su propio
+  `_menu_bar`). **Un conteo de cero nunca es un aprobado**; el recorrido
+  arreglado ve 132.
+- Quedan **143 comparaciones de opción escritas a mano**, que son las que hoy
+  impiden cualquier keyword localizado (fase I3).
 
 Fases I0-I4 con su DoD en `docs/i18n.md`. **I0 (arreglar las 28 + el test que
 las vigila) es lo único urgente**: hasta que la regla se haga cumplir, cada
