@@ -419,6 +419,34 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🧭 IDIOMAS — la regla, y el plan (2026-08-22) → `docs/i18n.md`
+
+**El primer contribuidor externo llegó por acá.** Michal Josef Špaček (Red Hat,
+Chequia — el mismo de LibreDWG) mandó la traducción al checo y dos issues; el
+plan completo y la regla para contribuidores viven en **`docs/i18n.md`**. Lo que
+no hay que re-discutir:
+
+- **Todo lo que se lee se traduce; todo lo que se tipea es inglés.** La línea de
+  comandos es inglesa en cualquier idioma de la interfaz, porque la tesis del
+  producto es la memoria muscular. Los menús y los prompts sí se traducen.
+- **La convención de los prompts con opciones: traducir la palabra y dejar la
+  letra inglesa entre paréntesis** — `[Copiar(C)/Suprimir(D)]`. La cumplen 59 de
+  87 cadenas; las 28 que no (LAYOUT, todo OFFSET, AREA…) son el bug del issue #4.
+  Una traducción sin la letra ofrece palabras que el parser rechaza.
+- **Un idioma debe ser una carpeta, no un parche.** Hoy el menú de idioma tiene
+  la lista fija (`views/main_window.py:796`), por eso el PR del checo tuvo que
+  tocar Python. Meta: `i18n/<lang>/{meta,ui,commands}.json` y cero código.
+- **Comandos localizados (`LINEA`) van al final, y con el inglés siempre
+  aceptado** vía prefijo `_`, como la AutoCAD localizada. El invariante sagrado:
+  toda la tabla de alias inglesa funciona con cualquier idioma activo.
+- Medido el 2026-08-22: **274 cadenas `tr()` sin traducir al español** (es.json
+  se quedó en v0.2) y **143 comparaciones de opción escritas a mano**, que son
+  las que hoy impiden cualquier keyword localizado.
+
+Fases I0-I4 con su DoD en `docs/i18n.md`. **I0 (arreglar las 28 + el test que
+las vigila) es lo único urgente**: hasta que la regla se haga cumplir, cada
+traducción nueva puede reintroducir el mismo bug.
+
 ## 🧭 PRÓXIMA SESIÓN (acordado 2026-08-13, tras la v0.4.0) — tres frentes, en este orden
 
 **1. Edición de bloques (`BEDIT`).** Es el hueco más caro que queda: hoy están `B`
