@@ -8,9 +8,9 @@ whole point of this module -- the menu used to carry a hard-coded list, so the
 first outside translation had to edit ``views/main_window.py`` to appear.
 
     i18n/
-      en/  meta.json                <- the source language, no catalog
-      es/  meta.json  ui.json
-      cs/  meta.json  ui.json
+      en/  meta.json                       <- the source language, no catalog
+      es/  meta.json  ui.json  commands.json
+      cs/  meta.json  ui.json              <- commands.json is optional
 
 ``meta.json`` carries what the code used to hard-code::
 
@@ -41,6 +41,7 @@ class LanguagePack:
     maintained: bool = False
     maintainer: str = ""
     legacy: bool = False          # came from the flat i18n/<code>.json layout
+    commands: Path | None = None  # optional localized command names
 
     def load(self) -> dict[str, str]:
         """The ``{english: translation}`` map, or empty if unreadable.
@@ -61,6 +62,24 @@ class LanguagePack:
         return {str(k): str(v) for k, v in data.items()}
 
 
+    def load_commands(self) -> dict[str, dict]:
+        """``{"LINE": {"name": "LINEA", "aliases": [...]}}``, or empty.
+
+        Keys starting with ``_`` are notes for whoever edits the file, not
+        commands, and are dropped here.
+        """
+        if self.commands is None:
+            return {}
+        try:
+            data = json.loads(self.commands.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): v for k, v in data.items()
+                if not str(k).startswith("_") and isinstance(v, dict)}
+
+
 def _folder_pack(folder: Path) -> LanguagePack | None:
     meta_path = folder / "meta.json"
     try:
@@ -71,12 +90,14 @@ def _folder_pack(folder: Path) -> LanguagePack | None:
         return None
     code = str(meta.get("code") or folder.name)
     catalog = folder / "ui.json"
+    commands = folder / "commands.json"
     return LanguagePack(
         code=code,
         name=str(meta.get("name") or code),
         catalog=catalog if catalog.is_file() else None,
         maintained=bool(meta.get("maintained")),
         maintainer=str(meta.get("maintainer") or ""),
+        commands=commands if commands.is_file() else None,
     )
 
 

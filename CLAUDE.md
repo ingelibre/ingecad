@@ -446,9 +446,19 @@ no hay que re-discutir:
   **ni los tests**. El layout plano `i18n/<code>.json` sigue cargando (la
   traducción al checo en curso no se rompe). Verificado de punta a punta:
   soltar `i18n/qu/` pone *Runa Simi* en el menú de la ventana real.
-- **Comandos localizados (`LINEA`) van al final, y con el inglés siempre
-  aceptado** vía prefijo `_`, como la AutoCAD localizada. El invariante sagrado:
-  toda la tabla de alias inglesa funciona con cualquier idioma activo.
+- ✅ **I4 hecha el 2026-08-22 — comandos localizados.** `i18n/es/commands.json`
+  trae **58 nombres** (LINEA, BORRA, DESPLAZA, RECORTA, ACOLINEAL…) y
+  `resolve_name` resuelve en este orden, **con el inglés primero en cada paso**:
+  `_` fuerza inglés → alias/nombre inglés → nombre localizado → autocompletado
+  (inglés antes que localizado). **El invariante sagrado se sostiene con un
+  test que recorre toda `DEFAULT_ALIASES` bajo cada idioma instalado**, y el
+  cargador rechaza un pack que nombre un comando inexistente, que pise un token
+  inglés o que dé un token a dos comandos — verificado metiendo la colisión a
+  propósito. Por eso el pack español **no declara alias**: los de una letra son
+  la memoria muscular y ya están todos tomados. ⚠️ Los nombres españoles son mi
+  mejor lectura de la AutoCAD en español, no una lista verificada; son
+  aditivos, así que uno equivocado no cuesta nada y corregirlo es cambiar una
+  cadena.
 - ✅ **I1 hecha el 2026-08-22**: las **274 cadenas** sin traducir están
   traducidas (es.json 974 → 1216 claves, cobertura **1110/1110**) y
   `tests/test_i18n_coverage.py` falla sólo para el idioma mantenido (`es`);

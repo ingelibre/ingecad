@@ -94,5 +94,25 @@ The **old flat layout** (`i18n/<code>.json`) still loads, so a translation
 written before the folders keeps working; it just shows its code instead of
 its name in the menu until it is converted.
 
+### Command names in your language (optional)
+
+A localized AutoCAD takes `LINEA` and `BORRA`, and so can IngeCAD — add
+`commands.json` to your folder:
+
+```json
+{ "LINE": {"name": "LINEA"}, "ERASE": {"name": "BORRA"} }
+```
+
+**English never stops working**: `L`, `LINE` and `_LINE` all draw a line
+whatever the interface language, and `_` is AutoCAD's global prefix for
+exactly that reason. So a pack may only *add* names. Naming a command that
+does not exist, claiming a token English already answers to, or giving one
+token to two commands is refused — `tests/test_i18n_commands.py` walks the
+whole alias table under every installed language to prove it.
+
+Aliases (`"aliases": ["BO"]`) are supported and rarely worth it: the English
+one-letter aliases are the muscle memory the product is built on, so almost
+every short one is already taken and would be refused.
+
 The full picture, including where the language machinery is going, is in
 [`docs/i18n.md`](docs/i18n.md).

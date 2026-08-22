@@ -27,12 +27,15 @@ from pathlib import Path
 
 from core.paths import app_root
 
+from . import commands as _commands
 from .packs import LanguagePack, discover
 
 __all__ = ["tr", "set_language", "current_language", "available_languages",
-           "language_packs", "language_name", "LanguagePack", "i18n_dir"]
+           "language_packs", "language_name", "command_names", "LanguagePack",
+           "i18n_dir"]
 
 _catalog: dict[str, str] = {}
+_command_names: dict[str, str] = {}
 _lang = "en"
 
 
@@ -67,14 +70,24 @@ def set_language(lang: str) -> None:
     English, an unknown code or a broken file all load an empty catalog, so
     ``tr`` returns the source string unchanged.
     """
-    global _catalog, _lang
+    global _catalog, _command_names, _lang
     _lang = lang or "en"
     pack = language_packs().get(_lang)
     _catalog = pack.load() if pack is not None else {}
+    _command_names = _commands.table(pack) if pack is not None else {}
 
 
 def current_language() -> str:
     return _lang
+
+
+def command_names() -> dict[str, str]:
+    """``{typed token: English command}`` for the active language.
+
+    Empty for English, and empty for any language that ships no
+    ``commands.json`` -- which is most of them, and perfectly fine.
+    """
+    return _command_names
 
 
 def tr(text: str, /, **kwargs) -> str:

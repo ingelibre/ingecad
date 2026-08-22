@@ -20,6 +20,7 @@ from typing import Callable, Optional
 import math
 
 from core import aliases as aliases_mod
+from core import i18n
 from core.commands import Command
 from core.i18n import tr
 
@@ -59,9 +60,15 @@ class Dispatcher:
         self._commands[name.upper()] = _Entry(handler=None, phase=phase)
 
     def known_names(self) -> list[str]:
-        """Commands + aliases, for prompt autocompletion."""
+        """Commands + aliases, for prompt autocompletion.
+
+        Includes the active language's own names, so a Spanish user sees
+        LINEA complete as they type -- without ever losing LINE or L.
+        """
         names = set(self._commands)
         names.update(a for a, cmd in self.aliases.items() if cmd in self._commands)
+        names.update(token for token, cmd in i18n.command_names().items()
+                     if cmd in self._commands)
         return sorted(names)
 
     # -- prompt state ---------------------------------------------------------
@@ -96,26 +103,56 @@ class Dispatcher:
         self._run(self.resolve_name(tokens[0]), tokens[1:])
 
     def resolve_name(self, token: str) -> str:
-        """Alias, exact command, or the command a prefix completes to.
+        """Alias, exact command, localized name, or a prefix completion.
 
         AutoCAD's AutoComplete finishes the name as you type, so ``OFF`` runs
         OFFSET and ``REC`` runs RECTANG without spelling either out. Order
-        matters: an ALIAS always wins, or ``L`` would stop meaning LINE the
-        day a LAYER-ish command sorted ahead of it. Only then does a prefix
-        complete, and among several matches the first alphabetically — the
-        one AutoCAD appends, and the one the prompt has been showing inline
-        while the user typed.
+        matters, and English comes first at every step:
+
+        1. a leading ``_`` is AutoCAD's global form — English only, so a
+           script or a LISP-style macro runs whatever the interface language;
+        2. the English alias table, then an exact English command name. An
+           ALIAS always wins, or ``L`` would stop meaning LINE the day a
+           LAYER-ish command sorted ahead of it;
+        3. the active language's own names (``LINEA``), which may only *add*
+           to English, never shadow it — ``core/i18n/commands.py`` rejects a
+           pack that tries;
+        4. prefix completion, English first and among several matches the
+           first alphabetically: the one AutoCAD appends, and the one the
+           prompt has been showing inline while the user typed.
         """
-        name = aliases_mod.resolve(token, self.aliases)
+        text = token.strip()
+        if text.startswith("_"):
+            return self._english_name(text.lstrip("_"))
+        name = self._english_name(text, complete=False)
         if name in self._commands:
             return name
+        localized = i18n.command_names().get(text.upper())
+        if localized in self._commands:
+            return localized
+        completed = self._complete(text)
+        return completed if completed else name
+
+    def _english_name(self, token: str, complete: bool = True) -> str:
+        """Alias or command name, English only — what ``_`` forces."""
+        name = aliases_mod.resolve(token, self.aliases)
+        if name in self._commands or not complete:
+            return name
+        return self._complete(token, english_only=True) or name
+
+    def _complete(self, token: str, english_only: bool = False) -> str:
+        """The command a prefix completes to, English before localized."""
         prefix = token.strip().upper()
-        if prefix:
-            matches = sorted(n for n in self._commands
-                             if n.startswith(prefix))
-            if matches:
-                return matches[0]
-        return name
+        if not prefix:
+            return ""
+        matches = sorted(n for n in self._commands if n.startswith(prefix))
+        if matches:
+            return matches[0]
+        if english_only:
+            return ""
+        localized = sorted(name for name in i18n.command_names()
+                           if name.startswith(prefix))
+        return i18n.command_names()[localized[0]] if localized else ""
 
     def _run(self, name: str, args: list[str]) -> None:
         entry = self._commands.get(name)
