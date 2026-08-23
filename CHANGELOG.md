@@ -52,6 +52,35 @@ tests they never had.
   pick rebuilt the whole index from scratch. One predicate now answers for
   both, so they cannot drift apart again.
 
+### Added — Options ▸ Display ▸ Display resolution
+Marco, after the responsiveness work: the lines look a little worse than
+they did, is there a graphics-quality setting? Measured first: rendering the
+same view twice from the **same** build differs by more pixels (1.72%) than
+old-vs-new does (1.09%), so nothing had regressed — that spread is process
+noise. But the complaint underneath was real and long-standing:
+- **Nothing was ever antialiased.** Measured on a real sheet, blended edge
+  pixels were 0.1% of the ink; every slanted line and every letter was a
+  staircase. **Line smoothing** is now on by default at 4× — edge pixels go
+  to 31%, and the frame from 1.6 ms to 2.3 ms. Off / 4× / 8× in the dialog.
+  This is multisampling in the widget's own framebuffer, which is where the
+  project's Wayland gotcha says it belongs — verified under a native Wayland
+  session, not just XCB.
+- **A 40 cm circle was drawn with eight segments** — a visible octagon when
+  you zoom in, which is word for word what AutoCAD's own VIEWRES page warns
+  about. **`VIEWRES`** now exists, as a command and as "Arc and circle
+  smoothness" in the dialog, with AutoCAD's scale and its default of 1000.
+  Raising it to 8000 makes the circle round; measured on two real plans that
+  costs +0.6% vertices and no measurable regen time, because a civil drawing
+  is overwhelmingly straight lines.
+
+### Fixed — every display setting was being read from the wrong place
+`_configure_surface_format()` has to run before `QApplication` exists, and it
+reads `QSettings` — but the application and organization names were set
+*after* it, so it read an empty config under "Unknown Organization" and
+ignored whatever was there. **The vsync toggle had therefore never done
+anything since it shipped.** The names are static setters for exactly this
+case and now come first.
+
 ### Added — leaders finally have grips
 - **A LEADER now shows a square on every vertex**, as AutoCAD does, so its
   direction can be changed by dragging instead of only being selected.

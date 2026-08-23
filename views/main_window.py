@@ -421,6 +421,50 @@ class MainWindow(QMainWindow):
             return
         ObjectGroupingDialog(self).exec()
 
+    def refresh_curve_tolerance(self) -> None:
+        """VIEWRES changed: re-derive the tolerance and regenerate.
+
+        The base scene, the overlay and every viewport pass all tessellate
+        at the same distance, so they all have to be rebuilt together --
+        otherwise a curve drawn after the change would not match the ones
+        already on screen.
+        """
+        from render.backend import _flatten_distance
+
+        if self.document is None:
+            return
+        self.tools._flatten = _flatten_distance(self.document.modelspace())
+        self.tools._ghost_cache = None
+        self.invalidate_vp_model_cache()
+        self.regen_in_memory()
+
+    def _cmd_viewres(self, *args) -> None:
+        """VIEWRES (p. 2049): arc and circle smoothness, then a regen."""
+        from render import backend
+
+        current = backend.viewres()
+        text = str(args[0]).strip() if args and str(args[0]).strip() else ""
+        if not text:
+            self.command_line.echo(
+                tr("VIEWRES = {value}", value=current) + "  "
+                + tr("Enter circle zoom percent ({min}-{max}):",
+                     min=backend.VIEWRES_MIN, max=backend.VIEWRES_MAX))
+            return
+        try:
+            value = int(text)
+        except ValueError:
+            self.command_line.echo(tr("Requires an integer value."))
+            return
+        if not backend.VIEWRES_MIN <= value <= backend.VIEWRES_MAX:
+            self.command_line.echo(
+                tr("Value must be between {min} and {max}.",
+                   min=backend.VIEWRES_MIN, max=backend.VIEWRES_MAX))
+            return
+        QSettings().setValue(backend.SETTING_VIEWRES, value)
+        self.refresh_curve_tolerance()
+        self.command_line.echo(tr("VIEWRES = {value}", value=value) + "  "
+                               + tr("Regenerating model."))
+
     def _cmd_pickstyle(self, *args) -> None:
         """PICKSTYLE (p. 2452): 0 turns group selection off, 1 on.
 
@@ -1997,6 +2041,7 @@ class MainWindow(QMainWindow):
         d.register("FIND", self._cmd_find)
         d.register("GROUP", self._cmd_group)
         d.register("PICKSTYLE", self._cmd_pickstyle)
+        d.register("VIEWRES", self._cmd_viewres)
         d.register("BEDIT", self._cmd_bedit)
         d.register("-BEDIT", self._cmd_bedit)
         d.register("BSAVE", self._cmd_bsave)

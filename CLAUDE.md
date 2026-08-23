@@ -1039,6 +1039,30 @@ pasados 100 objetos los grips **desaparecen del todo**, no se adelgazan.
 Nuestro tope de 200 entidades era justo el caso caro. Queda regulable en
 Options ▸ Selection.
 
+**Calidad de gráficos — y la medición que evitó perseguir un fantasma.** Marco
+sintió que las líneas habían perdido calidad tras las optimizaciones. **El
+control lo desmintió: el mismo build renderizado dos veces difiere 1,72 % de
+píxeles, MÁS que viejo-contra-nuevo (1,09 %)** — o sea, ruido entre procesos
+(resolución de fuentes), no una regresión. Pero el reclamo de fondo era cierto
+y viejo: **nunca hubo antialiasing** (0,1 % de la tinta eran píxeles de borde
+mezclado) y **un círculo de 40 cm se dibujaba con 8 segmentos**.
+
+Ahora hay **Opciones ▸ Display ▸ Resolución de visualización**: suavizado de
+líneas (0/4×/8×, **4× por defecto**; 0,1 % → 31 % de bordes mezclados, 1,6 →
+2,3 ms por cuadro) y **`VIEWRES`** como comando y como control, con la escala
+y el default (1000) de AutoCAD. ⚠️ El MSAA va en el **FBO propio de
+QOpenGLWidget**, no en la superficie de ventana — que es lo que el gotcha de
+IngeTrazo prohíbe; verificado bajo **sesión Wayland nativa**, no sólo xcb.
+Subir VIEWRES ×8 cuesta +0,6 % de vértices y nada de tiempo medible: los
+planos civiles son casi todo rectas.
+
+⚠️ **Y de paso, un hueco silencioso de siempre: `_configure_surface_format()`
+lee QSettings ANTES de que se nombre la aplicación**, así que leía un config
+vacío en «Unknown Organization» — **el interruptor de vsync nunca hizo nada
+desde que salió**. Los setters de nombre son estáticos justo para este caso y
+ahora van primero. Lo destapó ver aparecer `~/.config/Unknown Organization/`
+mientras medía.
+
 **Las directrices no tenían grips** (Marco: «esa línea con el texto PEDESTAL
 VER DETALLE... en IngeCAD sólo se selecciona»). LEADER y MULTILEADER ahora
 llevan un cuadradito por vértice. ⚠️ **Y eso destapó algo peor: barrer TODOS
