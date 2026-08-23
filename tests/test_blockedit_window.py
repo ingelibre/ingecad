@@ -134,3 +134,40 @@ def test_bedit_from_a_layout_tab_lands_in_the_editor(qapp) -> None:
     assert win._active_layout == "Model"
     assert win.document.edit_block == "SILLA"
     win._end_block_session(save=False)
+
+
+def test_opening_another_file_drops_the_session(qapp, tmp_path) -> None:
+    """Reported by Marco: open casa bueno while editing a block, and the NEW
+    document's layout tabs answer "Close the Block Editor first" -- a session
+    of a document that no longer exists kept guarding the window."""
+    import ezdxf as _ez
+
+    win = _make(qapp)
+    win.dispatcher.submit("BEDIT SILLA")
+    assert win._block_session is not None
+
+    other = tmp_path / "otro.dxf"
+    doc2 = _ez.new(setup=True)
+    doc2.modelspace().add_line((0, 0), (1, 1))
+    doc2.layouts.new("Sheet")
+    doc2.saveas(other)
+    win.document.dirty = False           # skip the save prompt
+    win.open_path(other)
+    t0 = time.monotonic()
+    while win._block_session is not None and time.monotonic() - t0 < 20:
+        qapp.processEvents()
+
+    assert win._block_session is None
+    _wait_regen(qapp, win)
+    win._refresh_layout_tabs()
+    win.switch_layout("Sheet")           # must NOT be refused
+    assert win._active_layout == "Sheet"
+
+
+def test_new_document_drops_the_session(qapp) -> None:
+    win = _make(qapp)
+    win.dispatcher.submit("BEDIT SILLA")
+    win.document.dirty = False
+    win.new_document()
+    assert win._block_session is None
+    assert win.document.edit_block is None

@@ -1225,11 +1225,24 @@ class MainWindow(QMainWindow):
         """
         self.open_path(path, as_template=True)
 
+    def _drop_block_session(self) -> None:
+        """The document a Block Editor session belongs to is being replaced.
+
+        No save/discard question here: maybe_save_changes already asked about
+        the whole drawing, and the definition was edited in place, so a saved
+        drawing carries the editor's changes. What must not survive is the
+        session object itself -- it kept the "Close the Block Editor first"
+        guard alive over a NEW document that had no editor open, locking its
+        layout tabs (found opening casa bueno over an editing session).
+        """
+        self._block_session = None
+
     def new_document(self, template: str | None = None) -> None:
         from core import templates as templates_mod
 
         if not self.maybe_save_changes():
             return
+        self._drop_block_session()
         self.document = templates_mod.new_document(
             template or self.startup_template())
         self._active_layout = "Model"
@@ -3085,6 +3098,7 @@ class MainWindow(QMainWindow):
             recent_mod.add(document.path)
             self._refresh_recent_menu()
         self._open_as_template = False
+        self._drop_block_session()
         self.document = document
         self._deactivate_viewport()
         # the open may have fallen back to a paper layout (empty modelspace)
