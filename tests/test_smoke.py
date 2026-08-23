@@ -493,6 +493,11 @@ def test_ctrl_z_and_ctrl_y_really_undo_and_redo(qapp):
     win = MainWindow()
     win.new_document()
     win.show()
+    # Xvfb has no window manager, so nobody activates the window for us and
+    # a keystroke sent to an inactive window goes nowhere -- the test failed
+    # there while passing under offscreen and under a real desktop. Insist.
+    win.activateWindow()
+    QTest.qWaitForWindowActive(win, 5000)
     qapp.processEvents()
     try:
         count = lambda: len(list(win.document.modelspace()))
