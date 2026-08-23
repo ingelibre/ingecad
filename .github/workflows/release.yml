@@ -102,6 +102,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # v0.4.1 tripped here: upload requires the release to EXIST, and
+          # earlier releases had been created by hand first. Create it from
+          # the tag when missing (draft notes; the human prose is edited on
+          # the release page afterwards), then upload.
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "IngeCAD ${GITHUB_REF_NAME#v}" \
+              --notes "See CHANGELOG.md for this release's details."
           gh release upload "${GITHUB_REF_NAME}" \
             dist/IngeCAD-*-x86_64.AppImage \
             dist/IngeCAD-*-linux-x86_64.tar.gz --clobber
