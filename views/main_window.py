@@ -1236,6 +1236,8 @@ class MainWindow(QMainWindow):
         layout tabs (found opening casa bueno over an editing session).
         """
         self._block_session = None
+        if getattr(self, "_blockedit_toolbar", None) is not None:
+            self._blockedit_toolbar.setVisible(False)
 
     def new_document(self, template: str | None = None) -> None:
         from core import templates as templates_mod
@@ -1309,6 +1311,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, self._modify_toolbar)
         self._build_standard_toolbar()
         self._build_props_toolbar()
+        self._build_blockedit_toolbar()
 
     def _build_standard_toolbar(self) -> None:
         """The classic Standard toolbar, in AutoCAD's own order (the 2011
@@ -2629,6 +2632,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(
             f"IngeCAD — {self.document.name} — "
             + tr("Block Editor: {name}", name=name))
+        self._blockedit_label.setText(tr("Block: {name}", name=name))
+        self._blockedit_toolbar.setVisible(True)
         self.command_line.echo(
             tr("Editing block \"{name}\". BSAVE saves the definition, "
                "BCLOSE closes the editor.", name=name))
@@ -2670,6 +2675,7 @@ class MainWindow(QMainWindow):
 
     def _end_block_session(self, save: bool) -> None:
         session, self._block_session = self._block_session, None
+        self._blockedit_toolbar.setVisible(False)
         name = session.name
         session.close(save)
         self.tools.cancel()
@@ -2706,6 +2712,35 @@ class MainWindow(QMainWindow):
         if command is not None:
             self.tools.after_history_change(command)
             self._sync_layout_tabs()
+
+    def _build_blockedit_toolbar(self) -> None:
+        """The classic Block Editor toolbar, shown only during a session.
+
+        The reference is explicit for the pre-ribbon interface: when the
+        editor opens, "the Block Editor toolbar is displayed" (p. 223). It
+        exists so nobody has to already know that BSAVE saves and BCLOSE
+        leaves -- which is exactly how the gap surfaced: Marco edited his
+        first block and had no visible way out.
+        """
+        from PySide6.QtWidgets import QLabel, QToolBar
+
+        bar = QToolBar(tr("Block Editor"), self)
+        bar.setObjectName("blockedit_toolbar")
+        bar.setMovable(True)
+        self._blockedit_label = QLabel("", bar)
+        self._blockedit_label.setStyleSheet(
+            "padding: 0 8px; font-weight: bold;")
+        bar.addWidget(self._blockedit_label)
+        save = QAction(tr("Save Block (BSAVE)"), self)
+        save.triggered.connect(lambda: self._invoke_command("BSAVE"))
+        bar.addAction(save)
+        close = QAction(tr("Close Block Editor (BCLOSE)"), self)
+        close.triggered.connect(lambda: self._invoke_command("BCLOSE"))
+        bar.addAction(close)
+        bar.setVisible(False)
+        self.addToolBarBreak(Qt.TopToolBarArea)
+        self.addToolBar(Qt.TopToolBarArea, bar)
+        self._blockedit_toolbar = bar
 
     def _build_status_bar(self) -> None:
         from PySide6.QtWidgets import QHBoxLayout, QToolButton

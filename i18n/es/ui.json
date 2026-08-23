@@ -1232,5 +1232,8 @@
   "Nothing to undo inside the Block Editor.": "Nada que deshacer dentro del editor de bloques.",
   "Blocks: {names}": "Bloques: {names}",
   "A block name is required.": "Se necesita un nombre de bloque.",
-  "Anonymous blocks cannot be edited: {name}": "Los bloques anónimos no se pueden editar: {name}"
+  "Anonymous blocks cannot be edited: {name}": "Los bloques anónimos no se pueden editar: {name}",
+  "Save Block (BSAVE)": "Guardar bloque (BSAVE)",
+  "Close Block Editor (BCLOSE)": "Cerrar el editor de bloques (BCLOSE)",
+  "Block: {name}": "Bloque: {name}"
 }

@@ -171,3 +171,20 @@ def test_new_document_drops_the_session(qapp) -> None:
     win.new_document()
     assert win._block_session is None
     assert win.document.edit_block is None
+
+
+def test_the_block_editor_toolbar_appears_and_goes(qapp) -> None:
+    """The classic toolbar the reference promises (p. 223): without it the
+    first real user edited a block and had no visible way to save or leave."""
+    win = _make(qapp)
+    assert not win._blockedit_toolbar.isVisible() or not win.isVisible()
+    win.show()
+    assert not win._blockedit_toolbar.isVisible()
+    win.dispatcher.submit("BEDIT SILLA")
+    assert win._blockedit_toolbar.isVisible()
+    assert "SILLA" in win._blockedit_label.text()
+    labels = [a.text() for a in win._blockedit_toolbar.actions()]
+    assert any("BSAVE" in t for t in labels)
+    assert any("BCLOSE" in t for t in labels)
+    win._end_block_session(save=True)
+    assert not win._blockedit_toolbar.isVisible()
