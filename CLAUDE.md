@@ -480,12 +480,35 @@ suficiente: un anillo cóncavo sigue necesitando el rayo, y hay test de eso.
 | SEDAPAR | 10 502 ms | 7 391 | 6 443 | **5 415 ms — 1,94×** |
 | COFOPRI | 2 391 ms | 2 063 | 1 823 | **1 584 ms — 1,51×** |
 
-⚠️ **COBERTURAS no era hatches — mi hipótesis falló otra vez.** Perfilado: es
-una **lámina con 10 ventanas gráficas**, y el modelo se redibuja **una vez por
-ventana** (`draw_viewport` ×10 = 8,97 s de 9,47). Los rellenos ahí son el 3,5 %
-y el texto el 4,7 %. **Ese es el próximo frente grande**: cachear la teselación
-del modelo y reusarla por ventana, que es lo que ya se hace para navegar en vivo
-pero no para la regeneración.
+⚠️ **COBERTURAS no era hatches — mi hipótesis falló otra vez.** Es una **lámina
+con 10 ventanas gráficas** y el modelo se redibuja **una vez por ventana**.
+Medido pasada a pasada: **las 10 cuestan lo mismo (~400 ms), o sea que ninguna
+caché se calienta**, y suman el 90 % de la lámina.
+
+**Cuarta optimización — no dibujar lo que la ventana no muestra.** El dato que
+lo decidió: cada ventana muestra entre **0,5 % y 18 %** del modelo, así que
+**el 94 % del trabajo era sobre entidades que ninguna ventana enseña**,
+procesadas enteras y recortadas después. Ahora cada pasada salta las entidades
+cuya caja no toca el rectángulo que esa ventana muestra. **Exacto por
+construcción**: lo que cae fuera del rectángulo es lo que el recortador iba a
+tirar. Toda duda se resuelve **a favor de dibujar** — el rectángulo lleva 5 % de
+margen (los grosores se dibujan en mm de papel), las cajas son las conservadoras
+`fast=True`, una entidad inmedible nunca se salta, y una ventana girada recibe
+el rectángulo **circunscrito**. Y si una ventana ya muestra el dibujo entero
+—una lámina de una sola ventana— **no se mide nada**, porque ahí medir sería
+pura pérdida.
+
+| lámina | ventanas | antes | después | |
+|---|---|---|---|---|
+| COBERTURAS | 10 | 4 742 ms | **1 891 ms** | 2,5× |
+| Planimetría (19 020 ents) | 2 | 2 117 ms | **1 102 ms** | 1,9× |
+| Cloración | 2 | 1 552 ms | **1 010 ms** | 1,5× |
+| Reservorio | 6 | 3 854 ms | **2 664 ms** | 1,4× |
+
+**Verificado como corresponde para algo que podría borrar dibujo:** vértices
+idénticos lote por lote (568 050 / 1 061 964 / 643 452 / 1) y la lámina
+renderizada **0 píxeles distintos de 3 177 096**, con control de que la imagen
+no está en blanco (3 129 296 con tinta).
 
 **Lo que queda del mapa en modelspace:** construcción de `Path` (~12 %) y
 aplanado de curvas (~9 %), ambos dentro de ezdxf.
