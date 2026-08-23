@@ -466,9 +466,29 @@ dentro de un mismo binario sí son estables (2 143 191 tres veces seguidas). La
 prueba exacta del parche es la comparación directa contra `format_point`, no el
 conteo.
 
-**Lo que queda del mapa:** construcción de `Path` (~12 %), rellenos/hatch de
-nuestro backend (~12 %), aplanado de curvas (~9 %). COBERTURAS no mejora con
-ninguna de las dos: su coste está en otra parte, probablemente hatches.
+**Tercera optimización — la clasificación de anillos de relleno.**
+`draw_filled_paths` decide qué anillo es hueco y cuál figura por anidamiento
+par/impar, y eso es **O(anillos²) rayos lanzados**: 387 543 llamadas a
+`_point_in_ring` en SEDAPAR. Ahora se calcula **una caja envolvente por anillo,
+una sola vez**, y paga dos veces: el ordenamiento reconstruía dos listas de
+coordenadas *en cada comparación*, y la caja **rechaza casi todos los pares
+antes de lanzar un rayo**. Es exacto —la caja es condición necesaria, nunca
+suficiente: un anillo cóncavo sigue necesitando el rayo, y hay test de eso.
+
+| plano | original | +extents | +LWPOLYLINE | **+cajas** |
+|---|---|---|---|---|
+| SEDAPAR | 10 502 ms | 7 391 | 6 443 | **5 415 ms — 1,94×** |
+| COFOPRI | 2 391 ms | 2 063 | 1 823 | **1 584 ms — 1,51×** |
+
+⚠️ **COBERTURAS no era hatches — mi hipótesis falló otra vez.** Perfilado: es
+una **lámina con 10 ventanas gráficas**, y el modelo se redibuja **una vez por
+ventana** (`draw_viewport` ×10 = 8,97 s de 9,47). Los rellenos ahí son el 3,5 %
+y el texto el 4,7 %. **Ese es el próximo frente grande**: cachear la teselación
+del modelo y reusarla por ventana, que es lo que ya se hace para navegar en vivo
+pero no para la regeneración.
+
+**Lo que queda del mapa en modelspace:** construcción de `Path` (~12 %) y
+aplanado de curvas (~9 %), ambos dentro de ezdxf.
 
 ## 🗓 Sesión 2026-08-22 (ter) — ciclado de selección, y un plano que no tenía cotas
 

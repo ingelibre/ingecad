@@ -178,12 +178,27 @@ class VertexBackend(Backend):
                     rings.append(ring)
         if not rings:
             return
-        rings.sort(key=_ring_extent, reverse=True)
+        # One bounding box per ring, computed once. It pays twice: the sort
+        # below used to rebuild two coordinate lists per comparison, and the
+        # containment test that follows is O(rings^2) -- 387 543 ray casts on
+        # a real plan. A ring cannot contain a point outside its box, so the
+        # box rejects almost all of those pairs before any ray is cast. Exact:
+        # box containment is a necessary condition, never a sufficient one --
+        # a concave ring still needs the ray, and there is a test for that.
+        boxes = [_ring_box(ring) for ring in rings]
+        order = sorted(range(len(rings)), key=lambda i: _box_extent(boxes[i]),
+                       reverse=True)
+        rings = [rings[i] for i in order]
+        boxes = [boxes[i] for i in order]
         groups: list[tuple[list, list]] = []   # (exterior, holes)
         group_of: dict[int, int] = {}          # ring index -> group index
         for i, ring in enumerate(rings):
-            containers = [j for j in range(i)
-                          if _point_in_ring(ring[0], rings[j])]
+            px, py = ring[0].x, ring[0].y
+            containers = [
+                j for j in range(i)
+                if boxes[j][0] <= px <= boxes[j][2]
+                and boxes[j][1] <= py <= boxes[j][3]
+                and _point_in_ring(ring[0], rings[j])]
             if len(containers) % 2 == 0:
                 group_of[i] = len(groups)
                 groups.append((ring, []))
@@ -276,10 +291,19 @@ def _point_in_ring(point, ring) -> bool:
     return inside
 
 
-def _ring_extent(ring: list[Vec2]) -> float:
+def _ring_box(ring: list[Vec2]) -> tuple[float, float, float, float]:
+    """(min_x, min_y, max_x, max_y) of a flattened ring, in one pass."""
     xs = [v.x for v in ring]
     ys = [v.y for v in ring]
-    return (max(xs) - min(xs)) * (max(ys) - min(ys))
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _box_extent(box) -> float:
+    return (box[2] - box[0]) * (box[3] - box[1])
+
+
+def _ring_extent(ring: list[Vec2]) -> float:
+    return _box_extent(_ring_box(ring))
 
 
 def pick_layout(document: Document):
