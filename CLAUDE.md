@@ -1039,6 +1039,18 @@ pasados 100 objetos los grips **desaparecen del todo**, no se adelgazan.
 Nuestro tope de 200 entidades era justo el caso caro. Queda regulable en
 Options ▸ Selection.
 
+**Las directrices no tenían grips** (Marco: «esa línea con el texto PEDESTAL
+VER DETALLE... en IngeCAD sólo se selecciona»). LEADER y MULTILEADER ahora
+llevan un cuadradito por vértice. ⚠️ **Y eso destapó algo peor: barrer TODOS
+los tipos con grips mostró que LEADER, SPLINE y HATCH no se deshacían** —
+`_restore_entity` copia atributos DXF y esos tres guardan su geometría fuera
+de los atributos (un hatch movido se quedaba movido tras Ctrl+Z). LWPOLYLINE
+y MTEXT ya tenían su línea ahí por lo mismo; ahora hay un test que recorre
+los 11 tipos, con **control incluido** (si el grip no cambió nada, el test
+falla en vez de pasar en vacío). Trampa del día, la de siempre: mi primera
+huella de HATCH era `str(paths)` —direcciones de memoria— y decía «no cambió
+nada»; con una huella real dijo «no restaura».
+
 **Grupos: auditados contra el manual, con 23 tests donde no había ninguno.**
 Tres huecos reales, y **dos los encontró manejar el diálogo, no leerlo**:
 `Seleccionable` vivía en un `set` de Python y se perdía al guardar (va en el

@@ -52,6 +52,25 @@ tests they never had.
   pick rebuilt the whole index from scratch. One predicate now answers for
   both, so they cannot drift apart again.
 
+### Added — leaders finally have grips
+- **A LEADER now shows a square on every vertex**, as AutoCAD does, so its
+  direction can be changed by dragging instead of only being selected.
+  Marco found the gap on a real sheet: "esa línea con el texto PEDESTAL VER
+  DETALLE... en IngeCAD sólo se selecciona". **MULTILEADER** got the same
+  treatment — it appears in 5 of 60 of his drawings, so the gap was waiting
+  there too. The annotation deliberately stays put when the leader moves:
+  the association runs text → leader, not the other way round.
+
+### Fixed — three grip edits that survived their own undo
+Giving leaders grips exposed something worse, so instead of fixing the one
+type every grip-editable type was swept at once: move a grip, fingerprint
+the geometry, undo, demand it comes back. Three failed, silently:
+- **LEADER**, **SPLINE** and **HATCH** kept the new shape through Ctrl+Z.
+  Undo restores DXF *attributes*, and none of those three keep their
+  geometry in one — a moved hatch simply stayed moved. LWPOLYLINE and MTEXT
+  already had their own lines there for exactly this reason; now the rule is
+  a test that walks every type, so the next one to gain grips gets caught.
+
 ### Fixed — object groups (GROUP, p. 861)
 - **Selectable now reaches the file.** The flag lived in a Python set on the
   document, so every "not selectable" group came back selectable after a

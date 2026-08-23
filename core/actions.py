@@ -1741,15 +1741,51 @@ def _restore_entity(entity, snapshot) -> None:
         if key == "handle":
             continue
         entity.dxf.set(key, value)
-    if entity.dxftype() == "LWPOLYLINE":
+    # Geometry that is NOT a DXF attribute has to be restored by hand, or
+    # the undo silently keeps the new shape. Each of these was a real bug:
+    # the first two found by using them, the last three by sweeping every
+    # grip-editable type at once and comparing a real fingerprint before
+    # and after -- worth redoing whenever a type gains grips.
+    kind = entity.dxftype()
+    if kind == "LWPOLYLINE":
         entity.set_points(snapshot.get_points("xyseb"), format="xyseb")
-    elif entity.dxftype() == "MTEXT":
+    elif kind == "MTEXT":
         # The content lives in the entity's text stream, not in a DXF
         # attribute — without this, undoing an MTEXT edit restored the
         # position and silently kept the new words. The column layout is
         # object state too, not a DXF attribute.
         entity.text = snapshot.text
         entity._columns = snapshot._columns
+    elif kind == "LEADER":
+        try:
+            entity.set_vertices([tuple(v) for v in snapshot.vertices])
+        except Exception:
+            pass
+    elif kind == "SPLINE":
+        try:
+            entity.fit_points = list(snapshot.fit_points)
+            entity.control_points = list(snapshot.control_points)
+            entity.knots = list(snapshot.knots)
+            entity.weights = list(snapshot.weights)
+        except Exception:
+            pass
+    elif kind in ("MULTILEADER", "MLEADER"):
+        try:
+            import copy as _copy
+
+            entity.context = _copy.deepcopy(snapshot.context)
+        except Exception:
+            pass
+    elif kind == "HATCH":
+        # The boundary paths ARE the hatch's geometry; a moved hatch stayed
+        # moved through its own undo. Deep-copied so a later edit cannot
+        # reach back into the snapshot.
+        try:
+            import copy as _copy
+
+            entity.paths = _copy.deepcopy(snapshot.paths)
+        except Exception:
+            pass
 
 
 def apply_in_place(history, entities, mutate) -> None:

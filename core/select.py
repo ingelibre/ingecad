@@ -903,6 +903,20 @@ def _text_anchor(entity):
     return entity.dxf.insert
 
 
+def _mleader_vertices(entity):
+    """(leader, line, vertex) indices of a MULTILEADER's leader lines, in one
+    fixed order -- ``entity_grips`` and ``apply_grip_edit`` must walk it
+    identically, because the grip index IS the position in that walk."""
+    try:
+        leaders = entity.context.leaders
+    except Exception:
+        return
+    for li, leader in enumerate(leaders):
+        for ni, line in enumerate(getattr(leader, "lines", ()) or ()):
+            for vi in range(len(getattr(line, "vertices", ()) or ())):
+                yield li, ni, vi
+
+
 def entity_grips(entity) -> list[tuple[float, float, str]]:
     """Grip points of an entity: (x, y, role).
 
@@ -1008,6 +1022,25 @@ def entity_grips(entity) -> list[tuple[float, float, str]]:
         for vec in (major, minor):
             grips.append((c.x + vec.x, c.y + vec.y, "quadrant"))
             grips.append((c.x - vec.x, c.y - vec.y, "quadrant"))
+    elif t == "LEADER":
+        # AutoCAD puts a grip on every vertex of the leader line -- the
+        # arrowhead, each bend and the end the annotation hangs off -- and
+        # dragging one re-aims that segment. Without them a leader could be
+        # selected and nothing more, which is how Marco found it: "no
+        # aparecen esos cuadraditos". The annotation deliberately stays put:
+        # the association runs text -> leader, so AutoCAD moves the leader
+        # end when the TEXT moves, not the other way round.
+        try:
+            for v in entity.vertices:
+                grips.append((v[0], v[1], "vertex"))
+        except Exception:
+            pass
+    elif t in ("MULTILEADER", "MLEADER"):
+        # Same idea as LEADER, one level deeper: the vertices live in the
+        # object's context, per leader and per line.
+        for li, ni, vi in _mleader_vertices(entity):
+            v = entity.context.leaders[li].lines[ni].vertices[vi]
+            grips.append((v.x, v.y, "vertex"))
     elif t == "IMAGE":
         # AutoCAD: four corner grips; dragging one scales the image.
         try:
@@ -1052,6 +1085,28 @@ def apply_grip_edit(entity, grip_index: int, role: str, new_point):
         u, v = entity.dxf.u_pixel, entity.dxf.v_pixel
         entity.dxf.u_pixel = (u.x * factor, u.y * factor, u.z * factor)
         entity.dxf.v_pixel = (v.x * factor, v.y * factor, v.z * factor)
+        return True
+    if t in ("MULTILEADER", "MLEADER"):
+        from ezdxf.math import Vec3
+
+        for i, (li, ni, vi) in enumerate(_mleader_vertices(entity)):
+            if i != grip_index:
+                continue
+            line = entity.context.leaders[li].lines[ni]
+            z = line.vertices[vi].z
+            line.vertices[vi] = Vec3(nx, ny, z)
+            return True
+        return False
+    if t == "LEADER":
+        try:
+            vertices = [list(v) for v in entity.vertices]
+        except Exception:
+            return False
+        if not 0 <= grip_index < len(vertices):
+            return False
+        z = vertices[grip_index][2] if len(vertices[grip_index]) > 2 else 0.0
+        vertices[grip_index] = [nx, ny, z]
+        entity.set_vertices([tuple(v) for v in vertices])
         return True
     if t == "TEXT":
         p = _text_anchor(entity)
