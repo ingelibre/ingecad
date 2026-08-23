@@ -42,6 +42,15 @@ tests they never had.
   scheduled.
 - **Drawing a dimension on a big plan: 163 ms → 25 ms**, from the same
   entity-database walk as above.
+- **MATCHPROP: 2.76 s → 37 ms per click, from the second click on.**
+  MATCHPROP keeps painting destinations until you press Enter, so the click
+  *after* the first is the ordinary case — and it was the slow one. Two
+  conditions that had to agree did not: the display code patched the pick
+  index and the snap engine for any command carrying its list of targets,
+  while the invalidation above it only knew a list of classes. It threw both
+  caches away, the patch that followed was a no-op by design, and the next
+  pick rebuilt the whole index from scratch. One predicate now answers for
+  both, so they cannot drift apart again.
 
 ### Fixed — object groups (GROUP, p. 861)
 - **Selectable now reaches the file.** The flag lived in a Python set on the

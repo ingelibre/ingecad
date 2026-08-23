@@ -1017,6 +1017,22 @@ Las causas, en orden de lo que costaban:
    la capa nueva no aparecía. Lo cazó un test que ya existía.
 5. **El imán de cotas** (`_align_dim_line`) hacía `query("DIMENSION")` sobre
    todo el modelspace **en cada movimiento del mouse**.
+6. **MATCHPROP invalidaba el índice de picado y el motor de snap**, y el
+   parcheo posterior es un no-op documentado sobre un índice sucio → el
+   **clic siguiente** pagaba la reconstrucción entera: **2 760 ms medidos**.
+   Y como MATCHPROP sigue pintando destinos hasta Enter, ese clic siguiente
+   es el caso normal. ⚠️ **La causa es una divergencia entre dos condiciones
+   que debían ser la misma**: la rama de display aceptaba `.targets`, la de
+   invalidación sólo una lista de clases. Ahora hay un solo predicado
+   (`_patchable`) para las dos.
+
+⚠️ **Y la trampa de método, por partida triple en esta sesión:** Marco
+reportó el MATCHPROP lento y mis DOS primeras reproducciones dieron 36 ms y
+591 ms. Faltaba lo que sólo aparece **repitiendo la acción**: el primer
+destino es rápido, el segundo cuesta 2,8 s. Barrer la población ayuda
+(medí las 70 cotas como origen), pero antes hay que **preguntarse qué hace el
+usuario DESPUÉS del primer paso** — un comando que sigue pidiendo objetos se
+usa más de una vez por definición.
 
 **GRIPOBJLIMIT (p. 2339) resultó ser conducta de AutoCAD que no seguíamos:**
 pasados 100 objetos los grips **desaparecen del todo**, no se adelgazan.

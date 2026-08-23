@@ -975,6 +975,24 @@ class ToolController(QObject):
                      actions.DimGripCommand, actions.DimTextTranslateCommand,
                      actions.DimTextEditCommand)
 
+    @classmethod
+    def _patchable(cls, command) -> bool:
+        """Is every entity this command touched knowable from the command?
+
+        If so the pick index and the snap engine are patched below instead
+        of being thrown away. This ONE predicate now answers for both
+        places, because the bug it fixes was the two disagreeing: MATCHPROP
+        reaches the display branch through ``.targets`` and got its caches
+        patched -- but the invalidation above did not know about
+        ``.targets``, so it had already marked them dirty, and a patch on a
+        dirty index is a documented no-op. The next pick then paid a full
+        rebuild: **2.76 s measured on a 10 084-entity plan**, on every
+        destination click after the first, since MATCHPROP keeps painting
+        until Enter. Marco reported it as "tarda como 3 segundos".
+        """
+        return (isinstance(command, cls._KNOWN_MODIFY)
+                or getattr(command, "targets", None) is not None)
+
     def _execute(self, command) -> None:
         # the drawing changed under the candidates: never cycle stale ones
         self.reset_pick_cycle()
@@ -993,7 +1011,7 @@ class ToolController(QObject):
                 self.snap_engine.add_entities(added)
             if self.index is not None:
                 self._index_register_added(command, added)
-        elif isinstance(command, self._KNOWN_MODIFY):
+        elif self._patchable(command):
             pass  # both caches are patched in the display branch below,
                   # where the touched entity sets are known
         else:
@@ -1071,13 +1089,11 @@ class ToolController(QObject):
             # hide the OLD geometry instantly (surgical, no regen) and show
             # the results NOW through the overlay; the full regen is deferred
             old_handles = []
-            if isinstance(command, (actions.EraseCommand,
-                                    actions.TransformCommand,
-                                    actions.SetPropertyCommand,
-                                    actions.DimGripCommand,
-                                    actions.DimTextTranslateCommand,
-                                    actions.DimTextEditCommand)) \
-                    or getattr(command, "targets", None) is not None:
+            if (self._patchable(command)
+                    and not isinstance(command, (
+                        actions.ReplaceEntitiesCommand,
+                        actions.CreateBlockCommand,
+                        actions.ExplodeCommand))):
                 # property edits too (MATCHPROP included): hide the stale-look
                 # base copy and show the restyled entity via the overlay
                 old_handles = [e.dxf.handle for e in command.entities]

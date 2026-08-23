@@ -181,3 +181,56 @@ def test_the_layer_control_is_not_rebuilt_for_a_selection_change(win):
         assert win._layer_combo.findText("EJES") >= 0
     finally:
         win._layer_combo.clear = original
+
+
+# -- 6. an edit whose scope is known must never dirty the pick index -----------
+def test_matchprop_leaves_the_pick_index_usable(win):
+    """The one Marco reported twice, finally caught.
+
+    MATCHPROP keeps painting until Enter, so the click AFTER the first one
+    is the ordinary case. It used to cost 2.76 s on a 10 084-entity plan,
+    because two conditions that had to agree did not: the display branch
+    patched the caches for anything carrying ``.targets``, while the
+    invalidation above only knew a list of classes -- and patching a dirty
+    index is a documented no-op, so the caches were thrown away and the
+    next pick rebuilt everything from scratch.
+    """
+    from core import modify
+
+    msp = win.document.modelspace()
+    a = msp.add_line((0, 0), (10, 0), dxfattribs={"color": 1})
+    b = msp.add_line((0, 5), (10, 5), dxfattribs={"color": 3})
+    c = msp.add_line((0, 9), (10, 9), dxfattribs={"color": 5})
+    win.tools._invalidate_geometry()
+    win.tools.index.pick((5, 0), 1.0)          # force both caches to build
+    win.tools.snap_engine.find((5.0, 0.0), 1.0)
+    assert win.tools.index._dirty is False and win.tools.snap_engine._dirty is False
+
+    win.tools._execute(modify.match_properties(a, [b]))
+    assert win.tools.index._dirty is False, \
+        "MATCHPROP threw the index away; the next pick pays a full rebuild"
+    assert win.tools.snap_engine._dirty is False
+    assert b.dxf.color == 1
+
+    win.tools._execute(modify.match_properties(a, [c]))   # keeps painting
+    assert win.tools.index._dirty is False
+    assert c.dxf.color == 1
+
+
+@pytest.mark.parametrize("build", [
+    lambda m, e: actions.move_entities([e[0]], 1.0, 1.0),
+    lambda m, e: actions.EraseCommand(e[:1]),
+    lambda m, e: actions.SetPropertyCommand(e[:1], "color", 4),
+])
+def test_ordinary_edits_leave_the_pick_index_usable(win, build):
+    """The same invariant for the everyday commands -- one predicate now
+    answers for both the invalidation and the patch, so they cannot drift
+    apart again."""
+    msp = win.document.modelspace()
+    ents = [msp.add_line((0, i), (10, i)) for i in range(3)]
+    win.tools._invalidate_geometry()
+    win.tools.index.pick((5, 0), 1.0)
+    assert win.tools.index._dirty is False
+
+    win.tools._execute(build(msp, ents))
+    assert win.tools.index._dirty is False
