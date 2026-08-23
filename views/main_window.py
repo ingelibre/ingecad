@@ -818,6 +818,8 @@ class MainWindow(QMainWindow):
              lambda: self.command_line.input.setFocus())
 
         help_menu = menu_bar.addMenu(tr("Help"))
+        item(help_menu, tr("Report a Problem..."), self._report_problem)
+        help_menu.addSeparator()
         item(help_menu, tr("About IngeCAD"), self._show_about)
 
         # PySide6 gotcha: QMenus returned by addMenu(title) are Python-owned
@@ -832,6 +834,19 @@ class MainWindow(QMainWindow):
             for sub in menu.actions():
                 if sub.menu() is not None:
                     self._menus.append(sub.menu())
+
+    def _report_problem(self) -> None:
+        """Open the issue chooser: three guided forms, Spanish welcome.
+
+        The forms ask exactly what a report needs (the drawing, what wrote
+        it, the version) -- a user finding this menu entry is worth more
+        than any of it, so it lives one click under Help.
+        """
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(
+            QUrl("https://github.com/ingelibre/ingecad/issues/new/choose"))
 
     def _show_about(self) -> None:
         from PySide6.QtWidgets import QMessageBox

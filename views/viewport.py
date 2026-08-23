@@ -465,6 +465,14 @@ class Viewport(QOpenGLWidget):
 
         data = _axes_vertices()
         self._axes_vao, self._axes_vbo, self._axes_count = self._make_vao(data)
+        # GL objects live in Python attributes, so without this their C++
+        # destructors run whenever the GC gets to them -- typically at window
+        # destruction or interpreter exit, with no current context. That was
+        # a double free ("821 passed ... Aborted (core dumped)" on CI: every
+        # test green, then a crash destroying the leftover windows). Qt's
+        # documented pattern: release everything while the context is still
+        # alive, from its own aboutToBeDestroyed.
+        self.context().aboutToBeDestroyed.connect(self._release_gl)
         # A scene set before the context existed uploads on the first frame.
         if self._scene is not None:
             self._scene_dirty = True
@@ -519,6 +527,39 @@ class Viewport(QOpenGLWidget):
         vao.release()
         vbo.release()
         return vao, vbo, len(data)
+
+    def _release_gl(self) -> None:
+        """Destroy every GL object while the context can still say goodbye."""
+        self.makeCurrent()
+        try:
+            holders = [self._scene_bufs, self._paper_bufs,
+                       self._overlay_bufs, self._ghost_bufs]
+            for bufs in holders:
+                for vao, vbo, *_ in bufs.values():
+                    vbo.destroy()
+                    vao.destroy()
+                bufs.clear()
+            for tex, vao, vbo, _group, _handle in self._image_bufs:
+                tex.destroy()
+                vbo.destroy()
+                vao.destroy()
+            self._image_bufs.clear()
+            for group in self._stamps:
+                for vao, vbo, *_ in (group.get("bufs") or {}).values():
+                    vbo.destroy()
+                    vao.destroy()
+                group["bufs"] = None
+            for bufs in self._retired_stamp_bufs:
+                for vao, vbo, *_ in bufs.values():
+                    vbo.destroy()
+                    vao.destroy()
+            self._retired_stamp_bufs.clear()
+            if getattr(self, "_axes_vbo", None) is not None:
+                self._axes_vbo.destroy()
+                self._axes_vao.destroy()
+                self._axes_vbo = self._axes_vao = None
+        finally:
+            self.doneCurrent()
 
     def _upload_scene(self) -> None:
         """(Re)build the scene buffers. Requires a current GL context."""

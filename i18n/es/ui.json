@@ -1235,5 +1235,6 @@
   "Anonymous blocks cannot be edited: {name}": "Los bloques anónimos no se pueden editar: {name}",
   "Save Block (BSAVE)": "Guardar bloque (BSAVE)",
   "Close Block Editor (BCLOSE)": "Cerrar el editor de bloques (BCLOSE)",
-  "Block: {name}": "Bloque: {name}"
+  "Block: {name}": "Bloque: {name}",
+  "Report a Problem...": "Reportar un problema..."
 }
