@@ -510,8 +510,28 @@ idénticos lote por lote (568 050 / 1 061 964 / 643 452 / 1) y la lámina
 renderizada **0 píxeles distintos de 3 177 096**, con control de que la imagen
 no está en blanco (3 129 296 con tinta).
 
-**Lo que queda del mapa en modelspace:** construcción de `Path` (~12 %) y
-aplanado de curvas (~9 %), ambos dentro de ezdxf.
+**Y un intento que NO pagó, anotado para que nadie lo repita.** Tras las cuatro
+optimizaciones el nuevo #1 del perfil era el generador de aplanado de ezdxf
+(`npshapes.flattening`, **2 937 237 llamadas**). Idea: cuando un camino no tiene
+curvas, sus puntos aplanados **son** sus propios vértices, así que se puede
+saltar el generador y armar los segmentos con numpy. Implementado y verificado
+exacto (incluido que `MOVE_TO` se cede como un punto más, que es lo que hace
+ezdxf; y ojo: `MOVE_TO` vale 4, **por encima** de los códigos de curva, así que
+un `>= CURVE3` lo descartaría por error). **Resultado: neutro.** COFOPRI
+1 599-1 632 ms con atajo contra 1 604-1 775 sin él; SEDAPAR 5 537-5 607 contra
+5 599-6 037. Revertido: un camino alternativo en el código de render —lo más
+crítico para la fidelidad— sin ganancia medible es un negativo neto.
+
+**Por qué no pagó, medido:** de los 2,9 M de puntos, `draw_path` mueve 1,03 M en
+**4 362** llamadas (94 % sin curvas) y `draw_filled_paths` mueve 1,85 M en
+**46 530 anillos**, de los que **sólo el 23 % está libre de curvas**. O sea: el
+volumen está en los rellenos, y ahí el aplanado es trabajo real de Bézier, no
+sobrecarga que se pueda saltar.
+
+**Lo que queda del mapa en modelspace**, todo repartido y de retorno pobre:
+aplanado de curvas ~17 % (Bézier de verdad), nuestro `_fill` ~13 % (el bucle
+sobre triángulos que devuelve earcut), earcut ~8 %, construcción de `Path`
+~12 %.
 
 ## 🗓 Sesión 2026-08-22 (ter) — ciclado de selección, y un plano que no tenía cotas
 
