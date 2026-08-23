@@ -1,5 +1,74 @@
 # Changelog
 
+## v0.4.1 — 2026-08-23
+
+The Block Editor, dimensions that appear the instant you place them, the
+whole interface speaking Spanish again — commands included — and the first
+outside contributor's two reports both answered with machinery.
+
+### Added — the Block Editor (BEDIT / BSAVE / BCLOSE)
+- **`BEDIT`** (alias `BE`) opens a block definition in its own environment,
+  matched against the reference (pp. 215–273): only the block on screen,
+  base point at the origin, a distinct background so you always know which
+  room you are in, and the classic **Block Editor toolbar** with Save and
+  Close spelled out. All three documented ways in: a name with the command
+  (`BEDIT ?` lists), a selected insert — including the right-click menu's
+  "Block Editor" — or the dialog, where a **new name creates a new block**.
+- **Every insert updates on save**, because references point at the
+  definition by name. Discard is an exact rollback to the last save point,
+  through the same undo machinery as everything else; `BSAVE` moves that
+  point, so save-then-discard keeps what was saved. `U` cannot cross the
+  session's start, layout tabs wait until `BCLOSE`, and the INSERT picker
+  hides any block that would nest the edited one into itself.
+- **Selection cycling**: click the same spot again and the next overlapping
+  object answers — the dimension under the text somebody typed over it.
+  A cycled click swaps the selection ("the other one", not "both"), and
+  Shift never cycles. What one click selects is unchanged by construction.
+- **Commands in Spanish**, the way a Spanish AutoCAD spells them: `LINEA`,
+  `CIRCULO`, `BORRA`, `DESPLAZA`, `RECORTA`, `ACOLINEAL` — 58 names, and
+  English never stops working: `L`, `LINE` and `_LINE` all draw with any
+  language active, as does AutoCAD's `_` global prefix. Localized prompt
+  keywords too: with Spanish active, `Suprimir`, `D` and `_D` all delete a
+  layout, read straight out of the translation's `[Suprimir(D)]`.
+- **A language is now a folder** (`i18n/<code>/meta.json + ui.json`): adding
+  one needs no Python and appears in the menu by existing. The old flat
+  files still load. Czech is on its way from the first outside contributor.
+- **Help ▸ Report a Problem...** opens the guided issue forms — the drawing
+  attached is what makes a report fixable, and the forms say so. Spanish
+  welcome.
+
+### Fixed
+- **A new dimension appeared after seconds** on a real plan (2.3–2.9 s on a
+  5 406-entity survey, 10–16 s on a 10 847-entity one): the display rebuilt
+  the whole drawing to show one entity, on the strength of a comment that
+  had stopped being true. Now 40–300 ms — and `MATCHPROP` onto a dimension,
+  which carried the same stale comment and read as "it did not select it",
+  shows instantly too.
+- **The Spanish interface offered words it then refused** (`[Suprimir]`
+  accepted only `D`) — 17 prompts fixed, and a test now walks every
+  language file so no translation can lose its English keys again.
+- **274 strings reached a Spanish user in English**: everything v0.3/v0.4
+  added went untranslated. Spanish is complete again (1 106 strings), and
+  coverage is enforced for the maintained language, only reported for
+  community ones.
+
+### Faster
+- Regenerating a drawing: **1.9×** on the heaviest real plan (10.5 s →
+  5.4 s) — the tolerance walk, a dictionary per polyline vertex, and
+  387 543 point-in-ring tests that a bounding box now answers.
+- Layout tabs: **up to 2.5×** (4.7 s → 1.9 s on a ten-viewport sheet) —
+  each viewport now skips the 82–99 % of the model it does not show,
+  conservatively enough that the rendered sheet is pixel-identical.
+
+### Infrastructure
+- LibreDWG vendor at **0.14.8580 + the 17 upstream patches** from our PRs.
+- CI runs the suite under a real X server (Xvfb): same code paths as a
+  desktop, GL included — which is how an entire class of headless-only
+  crashes left the project.
+- Issue forms, PR template, code of conduct, branch protection, and five
+  starter issues for anyone who wants to contribute.
+
+
 ## v0.4.0 — 2026-08-13
 
 The right-click menu, seven commands that were missing behind it, a
