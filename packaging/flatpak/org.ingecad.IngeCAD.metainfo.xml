@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.ingecad.IngeCAD</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>IngeCAD</name>
+  <summary>View and edit DWG/DXF drawings</summary>
+  <summary xml:lang="es">Ver y editar planos DWG/DXF</summary>
+  <developer id="org.ingecad">
+    <name>Marco Sumari Tellez</name>
+  </developer>
+  <description>
+    <p>
+      Free 2D CAD for Linux in the spirit of classic AutoCAD: the same
+      keyboard commands (L, TR, M, Z...), the classic pre-ribbon interface,
+      and faithful opening of the DWG files colleagues send — everything the
+      drawing carries that IngeCAD does not understand is preserved intact
+      when saving.
+    </p>
+    <p xml:lang="es">
+      CAD 2D libre para Linux al estilo del AutoCAD clásico: los mismos
+      comandos de teclado (L, TR, M, Z…), la interfaz clásica sin ribbon, y
+      apertura fiel de los DWG que mandan los colegas — todo lo que el plano
+      lleva y que IngeCAD no entiende se conserva intacto al guardar.
+    </p>
+    <p>
+      Draw and edit with AutoCAD's muscle memory, blocks with a full Block
+      Editor, layers, hatches, dimensions, layouts and printing to scale.
+      Reads and writes DWG through LibreDWG, bundled.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.ingecad.IngeCAD.desktop</launchable>
+  <url type="homepage">https://ingecad.org</url>
+  <url type="bugtracker">https://github.com/ingelibre/ingecad/issues</url>
+  <url type="vcs-browser">https://github.com/ingelibre/ingecad</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.4.1" date="2026-08-23">
+      <description>
+        <p>The Block Editor, instant dimensions, and the interface complete
+        in Spanish — commands included.</p>
+      </description>
+    </release>
+  </releases>
+</component>

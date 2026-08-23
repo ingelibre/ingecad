@@ -32,3 +32,5 @@ capturas/
 /web/
 docs/reference/
 crash_report.txt
+packaging/flatpak/.staging/
+packaging/flatpak/.flatpak-builder/

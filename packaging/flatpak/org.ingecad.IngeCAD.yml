@@ -1,0 +1,105 @@
+# IngeCAD's Flatpak, for self-distribution (own OSTree repo + bundles), NOT
+# Flathub — Flathub forbids network during build, and the app module below
+# lets pip download wheels. The shape follows IngePresupuestos' proven
+# manifest (installer/flatpak/ in that repo), krb5 lesson included.
+app-id: org.ingecad.IngeCAD
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: ingecad
+
+finish-args:
+  # GUI — native Wayland when present, X11 as fallback. Never force xcb:
+  # the sandbox gets no DISPLAY under Wayland.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri                 # the OpenGL canvas IS the application
+  # The user's drawings live anywhere; a CAD that cannot open the plan a
+  # colleague sent to ~/Descargas is not a CAD. No network: IngeCAD needs
+  # none, and the sandbox should say so.
+  - --filesystem=home
+
+modules:
+  # PySide6's Qt links QtNetwork/QtPdf against GSSAPI; the Freedesktop
+  # runtime carries no libgssapi_krb5.so.2. Without this, importing QtPdf
+  # (the PDF-underlay feature) dies at load time. Verbatim from the
+  # IngePresupuestos manifest, C23 workaround included.
+  - name: krb5
+    subdir: src
+    build-options:
+      cflags: -std=gnu17 -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion -Wno-incompatible-pointer-types
+    config-opts:
+      - --disable-static
+      - --without-ldap
+      - --without-tcl
+      - --without-libedit
+      - --without-readline
+      - --disable-rpath
+    cleanup:
+      - /bin
+      - /sbin
+      - /share
+      - /include
+      - /etc
+      - '*.la'
+    sources:
+      - type: archive
+        url: https://kerberos.org/dist/krb5/1.21/krb5-1.21.3.tar.gz
+        sha256: b7a4cd5ead67fb08b980b21abd150ff7217e85ea320c9ed0c6dadd304840ad35
+        mirror-urls:
+          - https://web.mit.edu/kerberos/dist/krb5/1.21/krb5-1.21.3.tar.gz
+
+  - name: ingecad
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network        # pip downloads the wheels (self-dist only)
+    build-commands:
+      # 1. Python dependencies into /app's prefix. pytest is a test tool.
+      - grep -vE '^\s*pytest\b' requirements.txt > reqs.txt
+      - pip3 install --prefix=${FLATPAK_DEST} --no-warn-script-location -r reqs.txt
+      # 2. The application, as source — GPL code hides from nobody.
+      - mkdir -p ${FLATPAK_DEST}/ingecad
+      - cp -a main.py core views render formats tools resources i18n LICENSE ${FLATPAK_DEST}/ingecad/
+      - find ${FLATPAK_DEST}/ingecad -name '__pycache__' -type d -exec rm -rf {} +
+      # 3. Launcher + desktop integration
+      - install -Dm755 packaging/flatpak/flatpak-launcher.sh ${FLATPAK_DEST}/bin/ingecad
+      - install -Dm644 packaging/flatpak/${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - install -Dm644 resources/icons/ingecad_256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
+      - install -Dm644 packaging/flatpak/${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
+    sources:
+      - type: dir
+        path: ../../
+        skip:
+          - venv
+          - build
+          - dist
+          - .git
+          - web
+          - vendor
+          - capturas
+          - packaging/flatpak/.staging
+          - packaging/flatpak/.flatpak-builder
+
+  # The DWG converters, compiled from the pristine release plus the same
+  # patch stack the AppImage carries (tools/libredwg-patches). Static, so
+  # two self-contained binaries and no .so to ship. Installed inside the
+  # app tree because core.paths.app_root() answers /app/ingecad and
+  # formats.dwg_bridge looks for vendor/libredwg/bin under it.
+  - name: libredwg
+    buildsystem: simple
+    build-commands:
+      # prefix INSIDE the build tree: every build-command runs in its own
+      # sandbox invocation, so /tmp does not survive between them.
+      - ./configure --disable-shared --disable-bindings --disable-python --prefix=$(pwd)/_prefix > /dev/null
+      - make -j $FLATPAK_BUILDER_N_JOBS > /dev/null
+      - make install-strip > /dev/null
+      - install -Dm755 _prefix/bin/dwg2dxf ${FLATPAK_DEST}/ingecad/vendor/libredwg/bin/dwg2dxf
+      - install -Dm755 _prefix/bin/dxf2dwg ${FLATPAK_DEST}/ingecad/vendor/libredwg/bin/dxf2dwg
+    sources:
+      - type: archive
+        url: https://github.com/LibreDWG/libredwg/releases/download/0.14.8580/libredwg-0.14.8580.tar.xz
+        sha256: 2b6e866e58b421c9baa2c64bafb9b1325480a9e102935e149d19f96a7193cd9d
+      - type: patch
+        path: ../../tools/libredwg-patches/current/ingecad-vendor-0.14.8580.patch
