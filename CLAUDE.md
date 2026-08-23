@@ -419,6 +419,38 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-22 (quater) — dónde se van los segundos de una regeneración
+
+Marco preguntó por qué IngeCAD usa CPU y casi nada de GPU. **Ya usa la GPU**
+(renderer `AMD Radeon 780M (radeonsi)`, OpenGL 4.6 — si fuera software diría
+`llvmpipe`), y no hay otra: la 780M integrada es la única del equipo. El reparto
+medido en SEDAPAR: **7,5 millones de vértices residentes en GPU** contra **11,6 s
+de CPU** por regeneración. La GPU está dormida porque su parte son milisegundos;
+lo caro es *preparar* los vértices, y eso ninguna GPU lo hace.
+
+**El perfil (cProfile sobre `build_scene`) desmintió mi hipótesis**: el texto era
+el 1,3 %, no el grueso. Lo que apareció, sólo en la vista acumulada, fue
+`_flatten_distance` → `bbox.extents` = **5,4 s de 17**: nuestro código recorriendo
+las 10 847 entidades **sólo para elegir la tolerancia de aplanado de curvas**.
+La cabecera del DXF trae el mismo rectángulo gratis: medido en 4 planos reales da
+**la misma tolerancia (razón 1,000-1,002) en 0,01 ms contra 40-950 ms**. Ahora se
+usa la cabecera, con guardas (ausente, infinita, degenerada, o el centinela ±1e20
+de un dibujo nunca regenerado → se paga la caminata).
+
+⚠️ **Y la lección: el perfilador exageró.** Decía 31 %; la ganancia real es
+**SEDAPAR 10,5 → 7,4 s (30 %), COFOPRI 14 %, COBERTURAS 0 %**. cProfile infla el
+código Python puro, y además la caminata **calentaba cachés (`lru_cache` de
+conversión a Path) que el dibujo reusaba**, así que quitarla no descuenta su
+tiempo completo. Dos planos cambian su recuento de vértices en <0,1 % porque la
+tolerancia difiere en el tercer decimal.
+
+**El mapa para seguir**, del mismo perfil: `LWPOLYLINE → puntos` (ezdxf
+`format_point`, 2 millones de llamadas, ~20 %), construcción de `Path` (~12 %),
+rellenos/hatch de nuestro backend (~12 %), aplanado de curvas (~9 %). El camino
+LWPOLYLINE es el próximo candidato: ezdxf reconstruye tuplas punto a punto con
+`locals()` en el bucle caliente, y la geometría ya está empaquetada en
+`lwpoints`.
+
 ## 🗓 Sesión 2026-08-22 (ter) — ciclado de selección, y un plano que no tenía cotas
 
 **Marco: «no hay como seleccionar esa cota».** El diagnóstico salió de SUS dos
