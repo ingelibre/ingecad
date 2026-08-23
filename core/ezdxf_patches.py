@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 
+from ezdxf.entities.lwpolyline import (DEFAULT_FORMAT, FORMAT_CODES,
+                                       LWPolyline, format_point)
 from ezdxf.entities.polygon import DXFPolygon
 from ezdxf.tools import pattern as _pattern_tools
 
@@ -23,6 +25,7 @@ def apply() -> None:
     _patch_polygon_transform()
     _patch_mtext_mask_rendering()
     _patch_bold_italic_font_matching()
+    _patch_lwpolyline_get_points()
 
 
 def _patch_polygon_transform() -> None:
@@ -129,3 +132,52 @@ def _patch_bold_italic_font_matching() -> None:
 
     find_best_match._ingecad_patch = True
     _fonts.find_best_match = find_best_match
+
+
+#: One accessor per format code, so any format keeps ``format_point``'s exact
+#: semantics: components come out in the order the string lists them, unknown
+#: characters are skipped, and ``v`` is the (x, y) pair as one tuple.
+_POINT_PART = {
+    "x": lambda p: p[0],
+    "y": lambda p: p[1],
+    "s": lambda p: p[2],
+    "e": lambda p: p[3],
+    "b": lambda p: p[4],
+    "v": lambda p: (p[0], p[1]),
+}
+
+
+def _patch_lwpolyline_get_points() -> None:
+    """``LWPolyline.get_points`` builds a dict per point, via ``locals()``.
+
+    Not a correctness bug -- a cost. ``format_point`` calls ``locals()`` to
+    look components up by name, so reading one polyline's vertices allocates
+    one dictionary per vertex. Profiling a regen of a 10 847-entity plan put
+    that path at ~20% of the whole rebuild: 2 million calls, because the
+    drawing frontend asks every LWPOLYLINE for its points as "xyb" on the way
+    to a Path.
+
+    The replacement resolves the format ONCE per call and then indexes the
+    packed values, which measured 7.6x faster (144 ms -> 19 ms for 200 000
+    points) and returns the same tuples. Drop this patch if ezdxf stops
+    rebuilding a namespace per vertex.
+    """
+    if getattr(LWPolyline.get_points, "_ingecad_patch", False):
+        return
+
+    def get_points(self, format: str = DEFAULT_FORMAT):
+        codes = [c for c in format.lower() if c in FORMAT_CODES]
+        if codes == ["x", "y", "b"]:
+            # what ezdxf.path asks for, and the reason this patch exists
+            return [(p[0], p[1], p[4]) for p in self.lwpoints]
+        if codes == ["x", "y", "s", "e", "b"]:
+            return [tuple(p) for p in self.lwpoints]
+        try:
+            parts = [_POINT_PART[c] for c in codes]
+        except KeyError:      # a code we do not know: let ezdxf answer
+            return [format_point(p, format=format) for p in self.lwpoints]
+        return [tuple(part(p) for part in parts) for p in self.lwpoints]
+
+    get_points.__doc__ = LWPolyline.get_points.__doc__
+    get_points._ingecad_patch = True
+    LWPolyline.get_points = get_points

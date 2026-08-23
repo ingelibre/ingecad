@@ -444,12 +444,31 @@ conversión a Path) que el dibujo reusaba**, así que quitarla no descuenta su
 tiempo completo. Dos planos cambian su recuento de vértices en <0,1 % porque la
 tolerancia difiere en el tercer decimal.
 
-**El mapa para seguir**, del mismo perfil: `LWPOLYLINE → puntos` (ezdxf
-`format_point`, 2 millones de llamadas, ~20 %), construcción de `Path` (~12 %),
-rellenos/hatch de nuestro backend (~12 %), aplanado de curvas (~9 %). El camino
-LWPOLYLINE es el próximo candidato: ezdxf reconstruye tuplas punto a punto con
-`locals()` en el bucle caliente, y la geometría ya está empaquetada en
-`lwpoints`.
+**El camino LWPOLYLINE, hecho después:** ezdxf construye **un diccionario por
+vértice** (`locals()` dentro de `format_point`) y el frontend pide `"xyb"` a
+cada polilínea camino de un `Path` — 2 millones de llamadas. El parche
+(`core/ezdxf_patches.py`) resuelve el formato **una vez por llamada** en vez de
+una por punto: **7,6× más rápido** en microbanco (144 → 19 ms por 200 000
+puntos) y **exacto** — verificado contra `format_word` en 15 formatos, incluidos
+los raros (`"vb"`, `"bxy"`, `""`, `"XYB"`), 0 diferencias.
+
+**Acumulado de las dos optimizaciones:**
+
+| plano | original | + extents | + LWPOLYLINE |
+|---|---|---|---|
+| SEDAPAR (10 847) | 10 502 ms | 7 391 ms | **6 443 ms** (1,63×) |
+| COFOPRI (5 406) | 2 391 ms | 2 063 ms | **1 823 ms** (1,31×) |
+| COBERTURAS (4 228) | 4 917 ms | 4 910 ms | **4 865 ms** (1,01×) |
+
+⚠️ **Y una nota de medición:** los recuentos de vértices **fluctúan ±2 entre
+procesos** (resolución de fuentes), así que no sirven como prueba byte-exacta;
+dentro de un mismo binario sí son estables (2 143 191 tres veces seguidas). La
+prueba exacta del parche es la comparación directa contra `format_point`, no el
+conteo.
+
+**Lo que queda del mapa:** construcción de `Path` (~12 %), rellenos/hatch de
+nuestro backend (~12 %), aplanado de curvas (~9 %). COBERTURAS no mejora con
+ninguna de las dos: su coste está en otra parte, probablemente hatches.
 
 ## 🗓 Sesión 2026-08-22 (ter) — ciclado de selección, y un plano que no tenía cotas
 
