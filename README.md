@@ -31,7 +31,7 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature AutoCAD clone.
 
-## Status — v0.4
+## Status — v0.4.1
 
 What works today:
 
@@ -93,6 +93,22 @@ What works today:
   and Draw Order.
 - **A settings window** (`OPTIONS`) under AutoCAD's tab names, including
   right-click customization.
+- **The Block Editor** (`BEDIT`, alias `BE`): open a definition in its own
+  environment — only the block, base point at the origin, the classic
+  Block Editor toolbar — edit it with every ordinary command, and on
+  `BCLOSE` ▸ Save **every insert on the plan updates**. Save/discard
+  semantics, undo floor and recursion guard as the reference specifies.
+- **Selection cycling**: click the same spot again and the next overlapping
+  object answers — the dimension under the text somebody typed over it.
+- **Spanish, complete — commands included**: the whole interface, prompts
+  whose option keys always work (`Suprimir`, `D` and `_D` all delete a
+  layout), and commands the way a Spanish AutoCAD spells them (`LINEA`,
+  `BORRA`, `RECORTA`…) with English never stopping to work underneath.
+  **A language is a folder** under `i18n/` — adding one needs no Python.
+- **Fast on real drawings**: dimensions appear the instant you place them
+  (was seconds on big plans), regeneration ~2× on the heaviest surveys,
+  layout tabs up to 2.5× with per-viewport culling.
+- **Report a Problem** under Help: guided issue forms, Spanish welcome.
 
 Planned next (v0.5): survey-point import with elevations, coordinate
 tables, elevation profiles — as the first discipline plug-in. See
@@ -100,7 +116,15 @@ tables, elevation profiles — as the first discipline plug-in. See
 
 ## Install (Linux, x86_64)
 
-Download the AppImage from the
+**Flatpak (recommended)** — one click, updates arrive on their own:
+[downloads.ingecad.org/flatpak/ingecad.flatpakref](https://downloads.ingecad.org/flatpak/ingecad.flatpakref)
+opens in your software center; or from a terminal:
+
+```sh
+flatpak install --from https://downloads.ingecad.org/flatpak/ingecad.flatpakref
+```
+
+**AppImage** — download from the
 [latest release](https://github.com/ingelibre/ingecad/releases/latest), make it
 executable, run it. Nothing else to install — Python, Qt and the DWG converters
 are inside:

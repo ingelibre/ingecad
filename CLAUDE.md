@@ -419,6 +419,51 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-23 — v0.4.1 publicada, y el Flatpak con repo firmado propio
+
+**v0.4.1 liberada** (Block Editor + cotas instantáneas + i18n completo + perf;
+numerada 0.4.1 a propósito: la promesa pública *v0.5 = topografía* manda sobre
+la ortodoxia). El workflow de release ahora **crea la release desde el tag** si
+no existe — el upload de la 0.4.1 falló con «release not found» porque las
+anteriores se creaban a mano.
+
+**El CI dejó de crashear tras pasar en verde.** La plataforma `offscreen`
+degrada QOpenGLWidget y toda la inestabilidad orbitaba eso (double free al
+salir, segfault en processEvents). Dos arreglos «bonitos» se midieron peores:
+segar ventanas por test volvió el crash determinista; unir hilos por test dejó
+a los timers de regen disparar reconstrucciones (7 min → no terminaba en 18).
+Lo que quedó: **CI bajo Xvfb+xcb** (los mismos caminos que el escritorio, GL
+incluido) + `os._exit` en `pytest_unconfigure` (en sessionfinish se comía el
+resumen: el reportero lo imprime en la cola de un hookwrapper). La app real
+sale limpia — verificado de punta a punta en offscreen y xcb.
+
+**Flatpak, decidido POR el usuario objetivo** (el ingeniero civil sin
+terminal): NO Flathub por ahora; **repo OSTree firmado propio** en R2 detrás
+de `downloads.ingecad.org/flatpak/`, calcado del de IngePresupuestos. Un clic
+en `…/ingecad.flatpakref` instala desde el centro de software y las
+actualizaciones llegan solas. Piezas: `packaging/flatpak/` (manifest
+freedesktop 25.08 + krb5 —QtPdf muere sin GSSAPI— + LibreDWG compilado del
+release + parches), clave ed25519 sin contraseña (respaldo en
+`~/Documentos/claves-gpg-ingecad/`, secret `FLATPAK_GPG_KEY` puesto),
+bucket + dominio creados vía wrangler OAuth local, seed inicial de 8 279
+objetos subido con wrangler en paralelo, y `publish-flatpak.yml` para el CI.
+⚠️ **PENDIENTE de Marco: crear las claves S3 de R2** (dashboard → R2 → Manage
+API tokens; sirven las mismas de IngePresupuestos) y ponerlas como secrets
+`R2_ACCOUNT_ID`/`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` — hasta entonces el
+workflow de publicación no corre y las futuras versiones se publican como esta
+(local). Verificado como usuario: uninstall + `flatpak install --from URL` +
+`--check` + plano real abierto en el sandbox.
+
+**El bundle adelgazó 771→345 MB instalado, 194→72 MB descarga**: PySide6 trae
+QtWebEngine (195 MB) y familia que IngeCAD no importa; el manifest recorta por
+**blocklist** (una lib desconocida se queda — un upgrade de Qt no puede dejar
+la app en blanco) y se verificó importando los 7 módulos usados dentro del
+sandbox y abriendo un plano. ⚠️ Trampas del día: `/tmp` no sobrevive entre
+build-commands (cada uno es una invocación); un `git add -A` casi mete los
+8 254 archivos de `.staging/` al repo (lo delató el push colgado; ya está en
+.gitignore); y `pkill` con un patrón que está en tu propia línea de comandos
+te mata a vos (dos veces esta sesión).
+
 ## 🗓 Sesión 2026-08-22 (quinto) — BEDIT: el editor de bloques
 
 **El frente #1 de la próxima sesión, hecho.** BEDIT/BSAVE/BCLOSE (+ alias `BE`),

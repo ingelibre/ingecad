@@ -68,6 +68,33 @@ modules:
       - install -Dm644 packaging/flatpak/${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
       - install -Dm644 resources/icons/ingecad_256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
       - install -Dm644 packaging/flatpak/${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
+      # 5. Trim PySide6 to the seven Qt modules IngeCAD imports (QtCore,
+      #    QtGui, QtWidgets, QtOpenGL(+Widgets), QtPdf, QtPrintSupport).
+      #    The full wheel installs 771 MB, 195 of them a WebEngine no line
+      #    of this program touches. Blocklist, not allowlist: an unknown
+      #    library stays, so a Qt upgrade can add deps without blanking the
+      #    app. Verified afterwards by importing every module we use inside
+      #    the sandbox and opening a real plan.
+      - |
+        set -e
+        PYVER=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+        PS=${FLATPAK_DEST}/lib/python${PYVER}/site-packages/PySide6
+        cd "$PS"
+        rm -rf Qt/qml Qt/resources Qt/libexec Qt/metatypes examples typesystems glue include
+        rm -f  assistant designer linguist lupdate lrelease qmlformat qmllint qmlls qsb balsam* svgtoqml
+        for stem in WebEngine Pdf Quick Qml 3D Quick3D Multimedia SpatialAudio                     Location Positioning Sensors SerialPort SerialBus Bluetooth                     Nfc WebSockets WebChannel WebView RemoteObjects Scxml                     TextToSpeech Charts DataVisualization Graphs Sql Help                     UiTools Designer NetworkAuth HttpServer VirtualKeyboard                     LabsAnimation LabsFolderListModel LabsPlatform LabsQmlModels                     LabsSettings LabsSharedImage LabsWavefrontMesh Test; do
+          case "$stem" in Pdf) continue;; esac   # QtPdf stays: PDF underlay
+          rm -f  Qt${stem}*.abi3.so Qt${stem}*.pyi
+          rm -f  Qt/lib/libQt6${stem}*.so*
+        done
+        # Quick/Qml family again by lib name (Quick3D matches Quick prefix)
+        rm -f Qt/lib/libQt6Quick*.so* Qt/lib/libQt6Qml*.so*
+        # PdfQuick needs Quick: gone. Plain Pdf + PdfWidgets stay.
+        rm -f Qt/lib/libQt6PdfQuick*.so* QtPdfQuick*
+        # ffmpeg came along for Multimedia
+        rm -f Qt/lib/libav*.so* Qt/lib/libsw*.so*
+        rm -rf Qt/plugins/multimedia Qt/plugins/webview Qt/plugins/qmltooling                Qt/plugins/scenegraph Qt/plugins/designer Qt/plugins/assetimporters                Qt/plugins/sceneparsers Qt/plugins/renderers Qt/plugins/geometryloaders                Qt/plugins/sqldrivers Qt/plugins/position Qt/plugins/sensors                Qt/plugins/canbus Qt/plugins/virtualkeyboard Qt/plugins/texttospeech
+        du -sh "$PS"
     sources:
       - type: dir
         path: ../../

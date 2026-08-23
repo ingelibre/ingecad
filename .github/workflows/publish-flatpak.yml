@@ -1,0 +1,117 @@
+# Build the Flatpak and publish the GPG-signed OSTree repo to R2, behind
+# https://downloads.ingecad.org/flatpak/
+#
+# Users install with one click on:
+#   https://downloads.ingecad.org/flatpak/ingecad.flatpakref
+# and updates then arrive through `flatpak update` / GNOME Software.
+#
+# Mirrors IngePresupuestos' publish-flatpak.yml (the proven one). The repo
+# was first seeded from Marco's machine on 2026-08-23 via wrangler; this
+# workflow takes over from the first tag after the R2_* secrets exist.
+#
+# Secrets:
+#   FLATPAK_GPG_KEY — armored PRIVATE key, no passphrase (set 2026-08-23;
+#                     backup in ~/Documentos/claves-gpg-ingecad/).
+#   R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY
+#                   — R2 S3 credentials. PENDING: create in the Cloudflare
+#                     dashboard (R2 → Manage API tokens) — the same ones
+#                     IngePresupuestos uses also work, it is one account.
+
+name: publish-flatpak
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to publish (vX.Y.Z)
+        required: true
+        type: string
+
+concurrency:
+  group: publish-flatpak     # the OSTree summary is rewritten whole
+  cancel-in-progress: false
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Check secrets
+        env:
+          HAS_GPG: ${{ secrets.FLATPAK_GPG_KEY != '' }}
+          HAS_R2: ${{ secrets.R2_ACCESS_KEY_ID != '' }}
+        run: |
+          if [ "$HAS_GPG" != "true" ] || [ "$HAS_R2" != "true" ]; then
+            echo "::error::Missing secrets: FLATPAK_GPG_KEY and/or R2_*."
+            exit 1
+          fi
+
+      - name: Install flatpak tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak flatpak-builder ostree
+          flatpak remote-add --if-not-exists --user flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Import the signing key
+        env:
+          GPG_KEY: ${{ secrets.FLATPAK_GPG_KEY }}
+        run: |
+          echo "$GPG_KEY" | gpg --batch --import
+          FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+          echo "GPG_FPR=$FPR" >> "$GITHUB_ENV"
+
+      - name: Build and sign
+        run: |
+          set -e
+          flatpak-builder --user --disable-rofiles-fuse --force-clean \
+            --install-deps-from=flathub \
+            --repo="$GITHUB_WORKSPACE/flatpak-repo" \
+            --gpg-sign="$GPG_FPR" \
+            packaging/flatpak/.staging/build \
+            packaging/flatpak/org.ingecad.IngeCAD.yml
+          flatpak build-update-repo \
+            --generate-static-deltas --prune --prune-depth=3 \
+            --gpg-sign="$GPG_FPR" \
+            "$GITHUB_WORKSPACE/flatpak-repo"
+
+      - name: Generate the flatpakref
+        run: |
+          set -e
+          KEY=$(gpg --export "$GPG_FPR" | base64 -w0)
+          cat > "$GITHUB_WORKSPACE/ingecad.flatpakref" <<REF
+          [Flatpak Ref]
+          Title=IngeCAD
+          Name=org.ingecad.IngeCAD
+          Branch=master
+          Url=https://downloads.ingecad.org/flatpak/repo/
+          Homepage=https://ingecad.org
+          Comment=View and edit DWG/DXF drawings
+          Icon=https://ingecad.org/images/logo-512.png
+          IsRuntime=false
+          GPGKey=$KEY
+          RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
+          REF
+
+      - name: Publish to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          set -e
+          EP="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          B="s3://ingecad-downloads/flatpak"
+          # repo first, ref LAST: a half-uploaded repo is never announced
+          aws s3 sync "$GITHUB_WORKSPACE/flatpak-repo" "$B/repo/" \
+            --endpoint-url "$EP" --delete --no-progress
+          aws s3 cp "$GITHUB_WORKSPACE/ingecad.flatpakref" "$B/ingecad.flatpakref" \
+            --endpoint-url "$EP" \
+            --content-type "application/vnd.flatpak.ref" \
+            --cache-control "no-cache, max-age=0"
+          echo "✓ published at downloads.ingecad.org/flatpak/"
