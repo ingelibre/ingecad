@@ -419,6 +419,51 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-22 (quinto) — BEDIT: el editor de bloques
+
+**El frente #1 de la próxima sesión, hecho.** BEDIT/BSAVE/BCLOSE (+ alias `BE`),
+con las tres vías de acceso que documenta el manual (pp. 222-224): nombre por
+comando (`BEDIT SILLA`, y `?` lista), inserción seleccionada + BEDIT (o el menú
+contextual «Block Editor»), y el diálogo con lista + nombre editable — un nombre
+nuevo **crea** la definición, como el diálogo de AutoCAD. BricsCAD confirmó el
+par Guardar/Descartar de BCLOSE (su ayuda en línea; la local no trae BEDIT).
+
+**La apuesta del rumbo se cumplió tal cual: el editor es un cambio de espacio
+actual, no una copia.** `Document.edit_block` + `Document.modelspace()`
+devolviendo el layout del bloque durante la sesión: dibujar, TRIM, cotas, snap,
+picado y undo operan sobre la definición **por los caminos de siempre** — la
+auditoría de los 38 usos de `.modelspace()` mostró que los ambiguos o corren
+fuera de sesión o deben seguir al espacio. El render es una rama en
+`build_scene` (fondo cálido distintivo como AutoCAD/BricsCAD, extents del
+bloque, punto base = origen marcado gratis por los ejes).
+
+**Los semánticos finos, que son donde vive la fidelidad:**
+- **Descartar = History.undo hasta el punto de guardado** — exacto por
+  construcción, y el redo se limpia (un Ctrl+Y post-cierre repetiría ediciones
+  de definición sin editor a la vista). BSAVE **mueve el punto de rollback**:
+  guardar y luego descartar conserva lo guardado (p. 215: «since it was last
+  saved»).
+- **U no cruza el piso de la sesión** (AutoCAD también lo refuta); las pestañas
+  de lámina quedan bloqueadas (AutoCAD directamente las oculta); BEDIT desde
+  una lámina aterriza en Model primero.
+- **El picker de INSERT esconde lo que recursaría** (directo y transitivo) —
+  `blockedit.would_recurse` — porque ezdxf escribiría feliz la recursión
+  infinita que AutoCAD refuta.
+- Un bloque nuevo descartado **no deja definición vacía**; los anónimos `*D`
+  no se pueden abrir; los `A$C…` de AutoCAD sí (AutoCAD también los lista).
+
+**Verificado sobre el COFOPRI real**: BEDIT de un bloque de 192 entidades abre
+en 351 ms mostrando SOLO el bloque (1 % de trazos contra 4,2 % del plano al
+volver; fondos medios (46,41,34) cálido / (39,41,45) frío = cambio de sala).
+⚠️ El primer conteo de tinta dio idéntico en ambas capturas — umbral absoluto
+sobre fondo oscuro cuenta el fondo; medir **relativo a la mediana del fondo**.
+822 tests.
+
+**Queda para después (anotado, no abierto):** REFEDIT (concepto xref), bloques
+dinámicos (descartados por rumbo), doble clic sobre inserción para abrir el
+editor, y el residuo de pegar un INSERT recursivo vía portapapeles (el guard
+vive en el picker; PasteCommand no lo consulta).
+
 ## 🗓 Sesión 2026-08-22 (quater) — dónde se van los segundos de una regeneración
 
 Marco preguntó por qué IngeCAD usa CPU y casi nada de GPU. **Ya usa la GPU**
@@ -696,7 +741,8 @@ traducción nueva puede reintroducir el mismo bug.
 
 ## 🧭 PRÓXIMA SESIÓN (acordado 2026-08-13, tras la v0.4.0) — tres frentes, en este orden
 
-**1. Edición de bloques (`BEDIT`).** Es el hueco más caro que queda: hoy están `B`
+**1. ✅ Edición de bloques (`BEDIT`) — HECHA el 2026-08-22** (ver la sesión
+«quinto» arriba). Es el hueco más caro que queda: hoy están `B`
 (crear), `I` (insertar) y `X` (explotar), pero **no hay forma de cambiar una
 definición** — habría que explotar, editar, re-crear y reinsertar a mano cada
 copia. Investigado ya (manual pp. 222-224 y 1607):

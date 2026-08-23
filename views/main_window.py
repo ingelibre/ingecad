@@ -360,6 +360,9 @@ class MainWindow(QMainWindow):
                             lambda: self._invoke_command("IMAGEADJUST"))
             image.addAction(tr("Transparency"),
                             lambda: self._invoke_command("TRANSPARENCY"))
+        elif kind == "INSERT":
+            menu.addAction(tr("Block Editor"),
+                           lambda: self._invoke_command("BEDIT"))
         elif kind == "DIMENSION":
             menu.addAction(tr("Dimension Style..."),
                            lambda: self.dispatcher.submit("DIMSTYLE"))
@@ -780,6 +783,8 @@ class MainWindow(QMainWindow):
                              lambda: self._draworder("front"))
         order_menu.addAction(tr("Send to Back"),
                              lambda: self._draworder("back"))
+        item(tools_menu, tr("Block Editor..."),
+             lambda: self._invoke_command("BEDIT"))
         item(tools_menu, tr("Quick Select..."), self._cmd_qselect)
         item(tools_menu, tr("QuickCalc"), self._cmd_quickcalc)
         item(tools_menu, tr("Group..."), self._cmd_group)
@@ -1904,6 +1909,10 @@ class MainWindow(QMainWindow):
         d.register("QSELECT", self._cmd_qselect)
         d.register("FIND", self._cmd_find)
         d.register("GROUP", self._cmd_group)
+        d.register("BEDIT", self._cmd_bedit)
+        d.register("-BEDIT", self._cmd_bedit)
+        d.register("BSAVE", self._cmd_bsave)
+        d.register("BCLOSE", self._cmd_bclose)
         d.register("QUICKCALC", self._cmd_quickcalc)
         d.register("ADDSELECTED", lambda *a: self._invoke_command("ADDSELECTED"))
         d.register("U", self._cmd_undo)
@@ -2546,7 +2555,130 @@ class MainWindow(QMainWindow):
             tr("Layers isolated by LAYISO have been restored."))
         self.regen_in_memory()
 
+    # -- Block Editor (BEDIT / BSAVE / BCLOSE, reference pp. 215-273) ----------
+    def _cmd_bedit(self, *args) -> None:
+        """Open a block definition in the Block Editor.
+
+        The three access methods the reference documents: a name typed with
+        the command (the -BEDIT path), a selected block reference (the
+        shortcut-menu path), or the pick-a-block dialog. A new name creates
+        a new definition, exactly like the Edit Block Definition dialog.
+        """
+        from core import blockedit
+
+        if self.document is None:
+            return
+        if self._block_session is not None:
+            self.command_line.echo(
+                tr("Already editing block \"{name}\" — BSAVE saves it, "
+                   "BCLOSE leaves the editor.", name=self._block_session.name))
+            return
+        name = " ".join(str(a) for a in args).strip() if args else ""
+        if name == "?":
+            names = blockedit.editable_blocks(self.document)
+            self.command_line.echo(
+                tr("Blocks: {names}", names=", ".join(names))
+                if names else tr("No blocks defined."))
+            return
+        if not name:
+            # noun-verb: one selected reference edits its own definition
+            picked = [e for h in self.tools.selection
+                      if (e := self.tools.index.entity(h)) is not None
+                      and e.is_alive and e.dxftype() == "INSERT"]
+            if len(picked) == 1:
+                name = picked[0].dxf.name
+        if not name:
+            from PySide6.QtWidgets import QInputDialog
+
+            names = blockedit.editable_blocks(self.document)
+            name, ok = QInputDialog.getItem(
+                self, tr("Block Editor"),
+                tr("Block to create or edit:"), names, 0, True)
+            if not ok or not name.strip():
+                return
+            name = name.strip()
+        if self._active_layout != "Model":
+            # AutoCAD opens the editor from a layout too; our editor renders
+            # through the Model path, so land there first.
+            self.switch_layout("Model")
+        try:
+            self._block_session = blockedit.BlockEditSession.begin(
+                self.document, self.history, name)
+        except ValueError as exc:
+            self.command_line.echo(str(exc))
+            return
+        self.tools.cancel()
+        self.tools.selection = set()
+        self.viewport.push_view()
+        self.tools._invalidate_geometry()
+        self.invalidate_vp_model_cache()
+        self.regen_in_memory(zoom_after=True)
+        self.setWindowTitle(
+            f"IngeCAD — {self.document.name} — "
+            + tr("Block Editor: {name}", name=name))
+        self.command_line.echo(
+            tr("Editing block \"{name}\". BSAVE saves the definition, "
+               "BCLOSE closes the editor.", name=name))
+
+    def _cmd_bsave(self, *args) -> None:
+        session = self._block_session
+        if session is None:
+            self.command_line.echo(
+                tr("BSAVE only works inside the Block Editor."))
+            return
+        session.save()
+        self.command_line.echo(
+            tr("Block \"{name}\" saved.", name=session.name))
+
+    def _cmd_bclose(self, *args) -> None:
+        session = self._block_session
+        if session is None:
+            self.command_line.echo(
+                tr("BCLOSE only works inside the Block Editor."))
+            return
+        save = True
+        if session.dirty:
+            # The reference: "you are prompted to save or discard the
+            # changes" (BCLOSE, p. 215). Same three-way dialog here.
+            from PySide6.QtWidgets import QMessageBox
+
+            box = QMessageBox(self)
+            box.setWindowTitle(tr("Block Editor"))
+            box.setText(tr("Save the changes to block \"{name}\"?",
+                           name=session.name))
+            box.setStandardButtons(QMessageBox.Save | QMessageBox.Discard
+                                   | QMessageBox.Cancel)
+            box.setDefaultButton(QMessageBox.Save)
+            answer = box.exec()
+            if answer == QMessageBox.Cancel:
+                return
+            save = answer == QMessageBox.Save
+        self._end_block_session(save)
+
+    def _end_block_session(self, save: bool) -> None:
+        session, self._block_session = self._block_session, None
+        name = session.name
+        session.close(save)
+        self.tools.cancel()
+        self.tools.selection = set()
+        self.tools._invalidate_geometry()
+        self.invalidate_vp_model_cache()
+        self.regen_in_memory()
+        if not self.viewport.zoom_previous():
+            self.viewport.zoom_extents()
+        self.setWindowTitle(f"IngeCAD — {self.document.name}")
+        self.command_line.echo(
+            tr("Block \"{name}\" saved — every insert shows the change.",
+               name=name)
+            if save else
+            tr("Changes to block \"{name}\" discarded.", name=name))
+
     def _cmd_undo(self, *args) -> None:
+        session = self._block_session
+        if session is not None and session.undo_blocked():
+            self.command_line.echo(
+                tr("Nothing to undo inside the Block Editor."))
+            return
         command = self.history.undo()
         self.command_line.echo(
             tr("Undo: {name}", name=command.name) if command else tr("Nothing to undo"))
@@ -2567,6 +2699,7 @@ class MainWindow(QMainWindow):
 
         # Model / layout tabs, bottom-left on the coordinates row (BricsCAD).
         self._active_layout = "Model"
+        self._block_session = None     # the open Block Editor, if any
         self._layout_tab_host = QWidget(self)
         self._layout_tab_bar = QHBoxLayout(self._layout_tab_host)
         self._layout_tab_bar.setContentsMargins(0, 0, 6, 0)
@@ -2635,6 +2768,13 @@ class MainWindow(QMainWindow):
 
     def switch_layout(self, name: str) -> None:
         """Model/Layout tabs: re-render the chosen space (AutoCAD tabs)."""
+        if self._block_session is not None:
+            # AutoCAD hides the tabs entirely while the Block Editor is
+            # open; refusing the switch is the same rule, said out loud.
+            self.command_line.echo(
+                tr("Close the Block Editor first (BCLOSE)."))
+            self._refresh_layout_tabs()
+            return
         if (self.document is None or name == self._active_layout
                 or name not in self._layout_names()):
             self._refresh_layout_tabs()   # re-sync checked states

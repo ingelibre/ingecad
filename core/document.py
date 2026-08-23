@@ -59,6 +59,11 @@ class Document:
         # dirty=True). Lets a background regen detect that the document
         # changed under it and that its result is stale.
         self.revision = 0
+        #: Name of the block open in the Block Editor, or None. While set,
+        #: :meth:`modelspace` answers with that block's layout, so every
+        #: draw/edit/snap/pick path operates on the definition without
+        #: knowing the editor exists. Owned by core.blockedit.
+        self.edit_block: Optional[str] = None
         _repair_material_dict(doc)
 
     @property
@@ -111,6 +116,12 @@ class Document:
         return self.path.name if self.path else "Untitled"
 
     def modelspace(self):
+        """The space edits happen in: the modelspace, or the block being
+        edited in the Block Editor. Callers that must always mean the real
+        modelspace (save paths, layout machinery) run outside an edit
+        session or go through ``self.doc`` directly."""
+        if self.edit_block is not None and self.edit_block in self.doc.blocks:
+            return self.doc.blocks.get(self.edit_block)
         return self.doc.modelspace()
 
     def save_as(self, path: Path) -> str:

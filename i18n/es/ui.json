@@ -1215,5 +1215,22 @@
   "Data rows:": "Filas de datos:",
   "Row height:": "Altura de fila:",
   "Text height:": "Altura del texto:",
-  "Cycling: {n} of {total} ({kind}) — click again for the next.": "Ciclando: {n} de {total} ({kind}) — vuelva a hacer clic para el siguiente."
+  "Cycling: {n} of {total} ({kind}) — click again for the next.": "Ciclando: {n} de {total} ({kind}) — vuelva a hacer clic para el siguiente.",
+  "Block Editor...": "Editor de bloques...",
+  "Block Editor": "Editor de bloques",
+  "Block to create or edit:": "Bloque que crear o editar:",
+  "Block Editor: {name}": "Editor de bloques: {name}",
+  "Editing block \"{name}\". BSAVE saves the definition, BCLOSE closes the editor.": "Editando el bloque \"{name}\". BSAVE guarda la definición, BCLOSE cierra el editor.",
+  "Already editing block \"{name}\" — BSAVE saves it, BCLOSE leaves the editor.": "Ya está editando el bloque \"{name}\" — BSAVE lo guarda, BCLOSE sale del editor.",
+  "BSAVE only works inside the Block Editor.": "BSAVE sólo funciona dentro del editor de bloques.",
+  "BCLOSE only works inside the Block Editor.": "BCLOSE sólo funciona dentro del editor de bloques.",
+  "Block \"{name}\" saved.": "Bloque \"{name}\" guardado.",
+  "Save the changes to block \"{name}\"?": "¿Guardar los cambios en el bloque \"{name}\"?",
+  "Block \"{name}\" saved — every insert shows the change.": "Bloque \"{name}\" guardado — todas las inserciones muestran el cambio.",
+  "Changes to block \"{name}\" discarded.": "Cambios en el bloque \"{name}\" descartados.",
+  "Close the Block Editor first (BCLOSE).": "Cierre primero el editor de bloques (BCLOSE).",
+  "Nothing to undo inside the Block Editor.": "Nada que deshacer dentro del editor de bloques.",
+  "Blocks: {names}": "Bloques: {names}",
+  "A block name is required.": "Se necesita un nombre de bloque.",
+  "Anonymous blocks cannot be edited: {name}": "Los bloques anónimos no se pueden editar: {name}"
 }

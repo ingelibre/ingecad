@@ -54,6 +54,11 @@ HATCHING_TIMEOUT = 5.0
 # paper background). Slightly lighter than the model-space dark so the two
 # spaces read differently at a glance.
 PAPER_SURROUND = (0.235, 0.255, 0.275, 1.0)
+#: Canvas of the Block Editor. Both AutoCAD and BricsCAD switch to a
+#: distinct background there (BricsCAD even has BKGCOLORDBEDIT for it), so
+#: the user always knows which "room" they are in. A warm dark tone against
+#: the cool dark of the model keeps the contrast without hurting colors.
+BLOCK_EDITOR_BACKGROUND = (0.176, 0.157, 0.129, 1.0)
 
 
 # Entity types whose fills are text glyphs; they dominate label-heavy plans
@@ -698,6 +703,8 @@ def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     any other name renders that paperspace layout, and None lets
     :func:`pick_layout` choose (file open: saved tab / empty-model fallback).
     """
+    if getattr(document, "edit_block", None) and layout_name in (None, "Model"):
+        return _build_block_scene(document)
     if layout_name == "Model":
         layout, layout_name = document.modelspace(), None
     elif layout_name and layout_name in document.doc.layouts:
@@ -732,4 +739,38 @@ def build_scene(document: Document, layout_name: str | None = None) -> Scene:
             scene.paper = paper_frame(layout)
         except Exception:
             scene.paper = None   # a broken page setup must not blank the tab
+    return scene
+
+
+def _build_block_scene(document: Document) -> Scene:
+    """The Block Editor's canvas: the definition alone, base point at origin.
+
+    ``document.modelspace()`` already answers with the block's layout during
+    a session, so this differs from a model regen in only three honest ways:
+    the flattening tolerance comes from the block's own extents (the header
+    describes the drawing, not the block), the declared extents are not used
+    for the same reason, and the background says "you are in the editor".
+    The axes icon the viewport always draws marks the base point for free,
+    because a definition's base point IS its origin.
+    """
+    from core.draworder import order_groups
+    from core.isolate import hidden_handles
+
+    block = document.modelspace()
+    extents = _layout_extents(block)
+    if extents.has_data:
+        dx = extents.extmax.x - extents.extmin.x
+        dy = extents.extmax.y - extents.extmin.y
+        flatten = max(math.hypot(dx, dy) * FLATTEN_REL, MIN_FLATTEN)
+    else:
+        flatten = 0.01                     # a brand-new, still-empty block
+    backend = VertexBackend(flatten, order_groups(block))
+    context = TolerantRenderContext(document.doc)
+    frontend = TolerantFrontend(context, backend, frontend_config(flatten))
+    frontend.hidden_handles = frozenset(hidden_handles(document))
+    frontend.draw_entities(block)
+    scene = pack(backend.buckets, None, images=backend.images)
+    scene.skipped = list(frontend.skipped)
+    scene.flatten = flatten
+    scene.background = BLOCK_EDITOR_BACKGROUND
     return scene

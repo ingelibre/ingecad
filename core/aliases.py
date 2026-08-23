@@ -38,6 +38,7 @@ DEFAULT_ALIASES: dict[str, str] = {
     "MI": "MIRROR",
     "SC": "SCALE",
     "B": "BLOCK",
+    "BE": "BEDIT",
     "I": "INSERT",
     "H": "HATCH",
     "-H": "-HATCH",

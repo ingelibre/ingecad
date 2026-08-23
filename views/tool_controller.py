@@ -723,12 +723,24 @@ class ToolController(QObject):
             list(self.window.document.modelspace()), point)
 
     def block_names(self) -> list:
-        """User block definitions (not *Model_Space/*Paper_Space/anonymous)."""
-        if self.window.document is None:
+        """User block definitions (not *Model_Space/*Paper_Space/anonymous).
+
+        Inside the Block Editor, a block that contains the edited one --
+        directly or through nesting -- is left out: inserting it would make
+        the definition contain itself, which AutoCAD refuses with "Block
+        references itself" and ezdxf would happily write as an infinite
+        recursion.
+        """
+        from core.blockedit import would_recurse
+
+        document = self.window.document
+        if document is None:
             return []
+        editing = document.edit_block
         return sorted(
-            b.name for b in self.window.document.doc.blocks
-            if not b.name.startswith("*"))
+            b.name for b in document.doc.blocks
+            if not b.name.startswith("*")
+            and not would_recurse(document, b.name, editing))
 
     def _finish(self) -> None:
         self.tool = None
