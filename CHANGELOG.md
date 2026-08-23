@@ -1,5 +1,70 @@
 # Changelog
 
+## v0.4.2 — unreleased
+
+Three stalls Marco felt while working on real plans, all of them measured to
+a cause, plus the object groups audited against the reference and given the
+tests they never had.
+
+### Fixed — the drawing keeps up with the hand
+- **Dragging a selection window no longer sticks.** The scene itself was
+  never the problem: it costs a constant 2.7 ms a frame. What cost 18 ms was
+  the overlay drawn on top of it — a Qt pen and brush set *per grip*, and
+  thousands of highlight segments walked one at a time in Python, most of
+  them off-screen. Both are now transformed in one pass, clipped to the
+  window and drawn in a single call. A frame with 3000 objects selected:
+  **20.6 ms → 6.7 ms**.
+- **Grips follow AutoCAD's GRIPOBJLIMIT** (p. 2339): past 100 selected
+  objects they are suppressed *entirely*, as the reference says, instead of
+  being thinned to the first 200 entities — which on a cadastre meant 2448
+  squares repainted every frame for a display nobody can use at that size.
+  The limit is yours to move in **Options ▸ Selection** (0 = always show).
+- **Releasing a big selection window: 95 ms → 31 ms.** Of the old 95, some
+  91 were the properties panel and the properties toolbar recomputing over
+  the whole selection — rebuilding four combo boxes, with an icon rendered
+  per row, and walking the entire entity database to compute a flag the
+  layer control does not even show. The lists now rebuild only when the
+  drawing's tables actually change, and "do these objects share a value?"
+  stops at the first difference instead of collecting them all.
+- **Moving a dimension by its grip: 3.4 s to grab, 3.1 s to drop → 34 ms and
+  100 ms.** Dropping a dimension grip demanded a full regen, which
+  re-tessellates the whole drawing; but the overlay has been able to draw a
+  dimension since v0.1.3, so the surgical path — hide the stale copy, draw
+  the new one — is enough, exactly as it already was for MATCHPROP. And the
+  magnet that snaps a dimension line onto a neighbouring one was querying
+  every DIMENSION in the drawing on **every mouse move**.
+- **"A veces se queda pegado"**, the one that came and went: every single
+  edit queued a rebuild of the entire drawing 2.5 s later. It runs in a
+  worker, but a pure-Python worker holds the GIL, so it landed as a
+  multi-second freeze right when the user reached for the next grip. That
+  merge exists only to bound the overlay's growth, so it now follows the
+  same rule the drawing path always had: below the threshold, nothing is
+  scheduled.
+- **Drawing a dimension on a big plan: 163 ms → 25 ms**, from the same
+  entity-database walk as above.
+
+### Fixed — object groups (GROUP, p. 861)
+- **Selectable now reaches the file.** The flag lived in a Python set on the
+  document, so every "not selectable" group came back selectable after a
+  save and reload. It belongs in the GROUP object (code 71), which is where
+  AutoCAD keeps it and where a colleague's CAD will look for it.
+- **The dialog stopped losing your place.** Every action ended by rebuilding
+  the list, which left no row selected — so the *next* Add, Remove or
+  Selectable click silently did nothing at all.
+
+### Added — the rest of the Object Grouping dialog
+- **Add and Remove** members (the reference's "Change Group", pp. 863–864),
+  with exact undo. Removing every member keeps the group defined, and the
+  objects stay in the drawing, both as documented.
+- **Description** (64 characters, p. 863) and **Find Name**, which lists the
+  groups an object belongs to.
+- **`PICKSTYLE`** as a command and a switch in the dialog — the escape hatch
+  the group machinery was missing: without it, once an object was grouped it
+  could never be selected on its own again.
+- **43 tests** covering groups and the responsiveness fixes, where there
+  were none. Two of the three group bugs above were found by driving the
+  dialog rather than reading it.
+
 ## v0.4.1 — 2026-08-23
 
 The Block Editor, dimensions that appear the instant you place them, the

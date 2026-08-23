@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QMatrix4x4,
@@ -209,6 +209,7 @@ class Viewport(QOpenGLWidget):
         # Saved alpha bytes of hidden entities, so undo can un-hide them.
         self._hidden_rgba: dict = {}
         self._sel_press = None  # pending left press in selection mode
+        self._hl_lines_cache = None  # (segs, view state, [QLineF])
         self._grip_hover = None  # grip under the cursor, if any
         self._pan_mode = False   # interactive PAN command (open-hand cursor)
         # Status-bar drafting aids: GRID (F7) draws the reference grid under
@@ -1170,18 +1171,47 @@ class Viewport(QOpenGLWidget):
             return
         s = self.GRIP_SIZE / 2.0
         hovered = self._grip_hover
-        for x, y, role, h, i in grips:
+        # Off-screen grips cost as much to draw as visible ones and show
+        # nothing: a polyline of 800 vertices seen through a window that
+        # holds twenty of them used to paint all 800 every frame.
+        w, h_px = float(self.width()), float(self.height())
+        squares, others = [], []
+        hot = None
+        for x, y, role, handle, i in grips:
             sx, sy = self.view.world_to_screen(x, y)
-            is_hot = hovered is not None and hovered[3] == h and hovered[4] == i
-            p.setPen(QPen(self.GRIP_HOVER if is_hot else self.GRIP_COLOR, 1))
-            p.setBrush(self.GRIP_HOVER if is_hot else self.GRIP_COLOR)
+            if sx < -s or sy < -s or sx > w + s or sy > h_px + s:
+                continue
+            if hovered is not None and hovered[3] == handle and hovered[4] == i:
+                hot = (sx, sy, role)
+                continue
+            if role in ("mid", "center"):
+                others.append((sx, sy, role))
+            else:
+                squares.append(QRectF(sx - s, sy - s, 2 * s, 2 * s))
+        # One pen and one brush for the whole batch: the old code set both
+        # per grip, which is 2 Qt state changes per square and was the
+        # single most expensive thing in the frame.
+        p.setPen(QPen(self.GRIP_COLOR, 1))
+        p.setBrush(self.GRIP_COLOR)
+        if squares:
+            p.drawRects(squares)                       # square: vertices/ends
+        for sx, sy, role in others:
             if role == "mid":                          # triangle: add/stretch
                 p.drawPolygon([QPointF(sx, sy - s), QPointF(sx - s, sy + s),
                                QPointF(sx + s, sy + s)])
-            elif role == "center":
-                p.drawEllipse(QPointF(sx, sy), s, s)   # round: move whole
             else:
-                p.drawRect(sx - s, sy - s, 2 * s, 2 * s)  # square: vertices/ends
+                p.drawEllipse(QPointF(sx, sy), s, s)   # round: move whole
+        if hot is not None:
+            sx, sy, role = hot
+            p.setPen(QPen(self.GRIP_HOVER, 1))
+            p.setBrush(self.GRIP_HOVER)
+            if role == "mid":
+                p.drawPolygon([QPointF(sx, sy - s), QPointF(sx - s, sy + s),
+                               QPointF(sx + s, sy + s)])
+            elif role == "center":
+                p.drawEllipse(QPointF(sx, sy), s, s)
+            else:
+                p.drawRect(sx - s, sy - s, 2 * s, 2 * s)
         p.setBrush(Qt.NoBrush)
 
     def _draw_live_text(self, p: QPainter) -> None:
@@ -1208,6 +1238,34 @@ class Viewport(QOpenGLWidget):
         p.drawLine(QPointF(caret_x + 1, -px * 0.75), QPointF(caret_x + 1, px * 0.15))
         p.restore()
 
+    def _visible_lines(self, segs, cap: int) -> list:
+        """World segments -> QLineF, transformed in one numpy pass and
+        clipped to the widget. Returns at most ``cap`` visible lines."""
+        if not len(segs):
+            return []
+        v = self.view
+        # While the view is still -- dragging a selection window, hovering a
+        # grip, typing at the prompt -- the same lines are rebuilt every
+        # frame. Keyed by the array IDENTITY (holding the reference keeps it
+        # alive, so a rebuilt selection can never alias a freed one).
+        state = (v.cx, v.cy, v.scale, v.width, v.height, cap)
+        cached = self._hl_lines_cache
+        if cached is not None and cached[0] is segs and cached[1] == state:
+            return cached[2]
+        a = np.asarray(segs, dtype=float)
+        sx = (a[:, 0] - v.cx) * v.scale + v.width / 2.0
+        sy = v.height / 2.0 - (a[:, 1] - v.cy) * v.scale
+        ex = (a[:, 2] - v.cx) * v.scale + v.width / 2.0
+        ey = v.height / 2.0 - (a[:, 3] - v.cy) * v.scale
+        w, h = float(self.width()), float(self.height())
+        keep = ~((np.maximum(sx, ex) < 0) | (np.minimum(sx, ex) > w)
+                 | (np.maximum(sy, ey) < 0) | (np.minimum(sy, ey) > h))
+        idx = np.flatnonzero(keep)[:cap]
+        lines = [QLineF(x1, y1, x2, y2) for x1, y1, x2, y2
+                 in zip(sx[idx], sy[idx], ex[idx], ey[idx])] if len(idx) else []
+        self._hl_lines_cache = (segs, state, lines)
+        return lines
+
     def _draw_selection(self, p: QPainter) -> None:
         delegate = self.tool_delegate
         segs, circles, boxes = delegate.highlight_geometry()
@@ -1215,15 +1273,22 @@ class Viewport(QOpenGLWidget):
             # Solid, like BricsCAD's selected look: the dashed overlay read
             # as clutter on a real plan ("ensucia el dibujo").
             p.setPen(QPen(self.HIGHLIGHT_COLOR, 2))
-            for s in segs[:4000]:
-                x1, y1 = self.view.world_to_screen(s[0], s[1])
-                x2, y2 = self.view.world_to_screen(s[2], s[3])
-                p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+            # Whole-array world->screen and a screen-rect cull: highlighting
+            # a cadastre used to walk 4000 segments in Python EVERY frame,
+            # most of them off-screen. The cap now bounds what is actually
+            # visible, so zooming in shows a complete highlight instead of
+            # the first 4000 segments of the selection.
+            lines = self._visible_lines(segs, 4000)
+            if lines:
+                p.drawLines(lines)
             import math as _math
 
             for c in circles[:1000]:
                 x, y = self.view.world_to_screen(c[0], c[1])
                 r = c[2] * self.view.scale
+                if x + r < 0 or y + r < 0 or x - r > self.width() \
+                        or y - r > self.height():
+                    continue
                 if len(c) >= 6 and c[3] != 0.0:
                     # highlight the ARC's real sweep, not its full circle
                     a0 = _math.degrees(c[4])
@@ -1232,10 +1297,15 @@ class Viewport(QOpenGLWidget):
                               int(a0 * 16), int(span * 16))
                 else:
                     p.drawEllipse(QPointF(x, y), r, r)
+            rects = []
             for b in boxes[:1000]:
                 x1, y1 = self.view.world_to_screen(b[0], b[3])
                 x2, y2 = self.view.world_to_screen(b[2], b[1])
-                p.drawRect(x1, y1, x2 - x1, y2 - y1)
+                if x2 < 0 or y2 < 0 or x1 > self.width() or y1 > self.height():
+                    continue
+                rects.append(QRectF(x1, y1, x2 - x1, y2 - y1))
+            if rects:
+                p.drawRects(rects)
         rect_info = delegate.selection_rect()
         if rect_info is not None:
             (x0, y0, x1, y1), crossing = rect_info

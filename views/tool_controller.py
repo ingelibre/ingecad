@@ -40,6 +40,23 @@ MERGE_THRESHOLD = 50
 # as a "stamp" instead of re-tessellating into the overlay (a 3000-entity
 # paste re-tessellated ~3.5 s on the UI thread; the stamp costs nothing).
 STAMP_MIN = 25
+# AutoCAD's GRIPOBJLIMIT (Command Reference p.2339): grips are suppressed
+# when the selection holds MORE than this many objects. 0 = never suppress.
+GRIPOBJLIMIT_DEFAULT = 100
+SETTING_GRIPOBJLIMIT = "selection/gripobjlimit"
+
+
+def gripobjlimit() -> int:
+    """The live GRIPOBJLIMIT (Options > Selection). Saved in the registry,
+    as the reference says it is."""
+    from PySide6.QtCore import QSettings
+
+    try:
+        value = int(QSettings().value(SETTING_GRIPOBJLIMIT,
+                                      GRIPOBJLIMIT_DEFAULT))
+    except (TypeError, ValueError):
+        return GRIPOBJLIMIT_DEFAULT
+    return value if 0 <= value <= 32767 else GRIPOBJLIMIT_DEFAULT
 
 
 class _CacheWarmer(QThread):
@@ -95,6 +112,35 @@ ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES,
 _VP_GRIP = "__viewport__"
 
 
+def _dim_line_candidates(document):
+    """(handle, angle mod 180, x, y) of every linear/aligned dimension.
+
+    The magnet below runs on EVERY mouse move of a dimension-line grip, and
+    it used to ``query("DIMENSION")`` the whole modelspace each time -- a
+    full walk of the drawing per frame, which is exactly why dragging a
+    dimension dragged on a big plan. Nothing but an edit can change the
+    answer, and every edit bumps the revision.
+    """
+    cached = getattr(document, "_dim_align_cache", None)
+    if cached is not None and cached[0] == document.revision:
+        return cached[1]
+    out = []
+    for dim in document.modelspace().query("DIMENSION"):
+        if (dim.dxf.get("dimtype", 0) & 7) not in (0, 1):
+            continue
+        defpoint = dim.dxf.get("defpoint", None)
+        if defpoint is None:
+            continue
+        out.append((dim.dxf.get("handle", None),
+                    float(dim.dxf.get("angle", 0.0)) % 180.0,
+                    defpoint.x, defpoint.y))
+    try:
+        document._dim_align_cache = (document.revision, out)
+    except Exception:
+        pass
+    return out
+
+
 def _align_dim_line(document, entity, wx, wy, threshold):
     """Chained-dimension magnet for the LINE grips: near another parallel
     dimension's line, the drag snaps to its offset (the BricsCAD aid
@@ -107,15 +153,11 @@ def _align_dim_line(document, entity, wx, wy, threshold):
         return wx, wy, None
     axis = 1 if angle == 0.0 else 0
     best = None
-    for dim in document.modelspace().query("DIMENSION"):
-        if dim is entity or (dim.dxf.dimtype & 7) not in (0, 1):
+    handle = entity.dxf.get("handle", None)
+    for other, other_angle, x, y in _dim_line_candidates(document):
+        if other is handle or abs(other_angle - angle) > 0.01:
             continue
-        if abs((dim.dxf.get("angle", 0.0) % 180.0) - angle) > 0.01:
-            continue
-        defpoint = dim.dxf.get("defpoint", None)
-        if defpoint is None:
-            continue
-        coord = (defpoint.x, defpoint.y)[axis]
+        coord = (x, y)[axis]
         distance = abs((wx, wy)[axis] - coord)
         if distance <= threshold and (best is None or distance < best[0]):
             best = (distance, coord)
@@ -213,6 +255,7 @@ class ToolController(QObject):
         # Per-frame caches keyed on (index.version, selection).
         self._highlight_cache = None
         self._grips_cache = None
+        self._sel_entities_cache = None
         self._warmers: set = set()        # background cache builders
         # Selection state (idle noun set, or the set a tool is acquiring).
         self.index: Optional[GeometryIndex] = None
@@ -469,11 +512,22 @@ class ToolController(QObject):
         return segs, circles
 
     def _selection_entities(self) -> list:
+        """Selected handles resolved to live entities. Cached per (index
+        version, selection): the properties panel, the properties toolbar
+        and the layer control each ask for it on every selection change,
+        and on a 5000-object window that was three full walks."""
+        if self.index is None:
+            return []
+        key = (self.index.version, frozenset(self.selection))
+        cached = self._sel_entities_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
         out = []
         for h in self.selection:
-            e = self.index.entity(h) if self.index else None
+            e = self.index.entity(h)
             if e is not None and e.is_alive:
                 out.append(e)
+        self._sel_entities_cache = (key, out)
         return out
 
     def clear_selection(self) -> None:
@@ -917,7 +971,9 @@ class ToolController(QObject):
 
     _KNOWN_MODIFY = (actions.EraseCommand, actions.TransformCommand,
                      actions.SetPropertyCommand, actions.ReplaceEntitiesCommand,
-                     actions.CreateBlockCommand, actions.ExplodeCommand)
+                     actions.CreateBlockCommand, actions.ExplodeCommand,
+                     actions.DimGripCommand, actions.DimTextTranslateCommand,
+                     actions.DimTextEditCommand)
 
     def _execute(self, command) -> None:
         # the drawing changed under the candidates: never cycle stale ones
@@ -1017,7 +1073,10 @@ class ToolController(QObject):
             old_handles = []
             if isinstance(command, (actions.EraseCommand,
                                     actions.TransformCommand,
-                                    actions.SetPropertyCommand)) \
+                                    actions.SetPropertyCommand,
+                                    actions.DimGripCommand,
+                                    actions.DimTextTranslateCommand,
+                                    actions.DimTextEditCommand)) \
                     or getattr(command, "targets", None) is not None:
                 # property edits too (MATCHPROP included): hide the stale-look
                 # base copy and show the restyled entity via the overlay
@@ -1072,10 +1131,17 @@ class ToolController(QObject):
                     self.snap_engine.remove_handles(old_handles)
                     self.snap_engine.add_entities(alive)
             self._refresh_overlay()
-            # the result is already on screen (hide + overlay); reconcile on
-            # the IDLE timer — the old 400 ms regen landed exactly when the
-            # user made the NEXT trim/move and its GIL churn read as lag
-            self._merge_timer.start()
+            # The result is already on screen (hide + overlay). The merge
+            # exists only to bound the overlay's growth, so it follows the
+            # same rule as the additive path: below the threshold, NOTHING
+            # is scheduled. It used to fire after every single edit, and a
+            # full re-tessellation of a real plan takes ~3 s -- nominally in
+            # a worker, but a pure-Python one holds the GIL, so the UI froze
+            # 2.5 s after the edit, right as the user grabbed the next grip.
+            # That was the "a veces se queda pegado" Marco reported.
+            if (len(self._draw_commands()) + len(self._pending_render)
+                    > MERGE_THRESHOLD):
+                self._merge_timer.start()
 
     def _run_deferred_regen(self) -> None:
         self.window.regen_in_memory()
@@ -1576,13 +1642,22 @@ class ToolController(QObject):
                     for i, (x, y, role) in enumerate(layout_ops.viewport_grips(vp))]
         if self.tool is not None or not self.selection or self.index is None:
             return []
+        limit = gripobjlimit()
+        if 0 < limit < len(self.selection):
+            # AutoCAD's GRIPOBJLIMIT (p.2339, default 100): past that many
+            # objects grips are suppressed ENTIRELY -- not thinned. Ours
+            # used to keep the first 200 entities, which on a cadastre is
+            # thousands of squares repainted every single frame (measured:
+            # 8.8 ms of a 20 ms frame) for a display nobody can use at that
+            # size. 0 means "always show", as the variable documents.
+            return []
         # per-frame AND per-hover (grip_at): cache per (version, selection)
         key = (self.index.version, frozenset(self.selection))
         cached = self._grips_cache
         if cached is not None and cached[0] == key:
             return cached[1]
         out = []
-        for h in sorted(self.selection)[:200]:  # cap: grips get noisy past that
+        for h in sorted(self.selection):
             e = self.index.entity(h)
             if e is None or not e.is_alive:
                 continue

@@ -54,13 +54,35 @@ def layers_in_use(document) -> set[str]:
     definition (AutoCAD's delete guard counts those as referenced too)."""
     from ezdxf.entities import DXFGraphic
 
+    # A full entitydb walk (~20 ms on a real plan) that the properties
+    # toolbar used to repeat on every selection change. Nothing but an EDIT
+    # can change the answer, and every edit bumps the revision.
+    cached = getattr(document, "_layers_in_use_cache", None)
+    if cached is not None and cached[0] == document.revision:
+        return cached[1]
     used: set[str] = set()
     for e in document.doc.entitydb.values():
         if e.is_alive and isinstance(e, DXFGraphic):
             name = e.dxf.get("layer", None)
             if name:
                 used.add(name)
+    try:
+        document._layers_in_use_cache = (document.revision, used)
+    except Exception:
+        pass
     return used
+
+
+def layer_names_and_colors(document) -> list[tuple[str, int]]:
+    """(name, ACI) of every layer, in ``layer_list`` order, WITHOUT the
+    in-use scan. The properties toolbar rebuilds its layer control on every
+    edit and only draws the name and the colour chip; asking for the full
+    snapshot made each edit walk the whole entity database (~130 ms on a
+    10 000-entity plan) to compute a flag nothing on that control shows."""
+    names = [(layer.dxf.name, abs(layer.dxf.color))
+             for layer in document.doc.layers]
+    names.sort(key=lambda pair: (pair[0] != "0", pair[0].lower()))
+    return names
 
 
 def layer_list(document) -> list[LayerInfo]:

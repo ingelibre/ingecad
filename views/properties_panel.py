@@ -202,13 +202,23 @@ class PropertiesPanel(QWidget):
             self.tree.setItemWidget(item, 1, w)
 
     def _common(self, entities, getter):
+        """The shared value, or _VARIES. Stops at the FIRST difference:
+        building the whole set over a 5000-object selection cost ~20 ms per
+        panel refresh, and every one of those refreshes happened while the
+        user was still selecting."""
         if getter is None:
             return None
+        first = _UNSET = object()
         try:
-            vals = {getter(e) for e in entities}
+            for e in entities:
+                v = getter(e)
+                if first is _UNSET:
+                    first = v
+                elif v != first:
+                    return _VARIES
         except Exception:
             return _VARIES
-        return vals.pop() if len(vals) == 1 else _VARIES
+        return None if first is _UNSET else first
 
     # -- edits ----------------------------------------------------------------
     def _edit(self, row: Row, value) -> None:

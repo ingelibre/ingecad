@@ -54,20 +54,54 @@ def groups_of(document, entity) -> list[str]:
 
 
 def is_selectable(document, name: str) -> bool:
-    """Selectable groups pull their whole membership into a selection."""
-    unselectable = getattr(document, "_unselectable_groups", None) or set()
-    return normalize(name) not in unselectable
+    """Selectable groups pull their whole membership into a selection.
+
+    The flag lives in the GROUP object itself (DXF group code 71), which is
+    where AutoCAD keeps it -- so it survives a save and a colleague opening
+    the file. It used to live in a set on the Document, which meant every
+    "not selectable" group came back selectable after a reload.
+    """
+    group = _group(document, name)
+    if group is None:
+        return True
+    try:
+        return bool(int(group.dxf.get("selectable", 1)))
+    except Exception:
+        return True
 
 
 def set_selectable(document, name: str, value: bool) -> None:
-    unselectable = getattr(document, "_unselectable_groups", None)
-    if unselectable is None:
-        unselectable = set()
-        document._unselectable_groups = unselectable
-    if value:
-        unselectable.discard(normalize(name))
-    else:
-        unselectable.add(normalize(name))
+    group = _group(document, name)
+    if group is None:
+        return
+    group.dxf.selectable = 1 if value else 0
+    document.dirty = True
+
+
+def set_description(document, name: str, text: str) -> None:
+    """The dialog's Description field: up to 64 characters (p. 863)."""
+    group = _group(document, name)
+    if group is None:
+        return
+    group.dxf.description = (text or "")[:64]
+    document.dirty = True
+
+
+def description(document, name: str) -> str:
+    group = _group(document, name)
+    return "" if group is None else str(group.dxf.get("description", "") or "")
+
+
+def members(document, name: str) -> list:
+    group = _group(document, name)
+    return [] if group is None else [e for e in group if e.is_alive]
+
+
+def _group(document, name: str):
+    try:
+        return document.doc.groups.get(normalize(name))
+    except Exception:
+        return None
 
 
 def pickstyle(document) -> int:
@@ -147,3 +181,48 @@ class DeleteGroupCommand(Command):
         if self._description:
             group.dxf.description = self._description
         document.dirty = True
+
+
+class ChangeGroupMembersCommand(Command):
+    """The reference's Change Group half: Add and Remove (p. 863-864).
+
+    Without it a group is write-once -- to add one object you had to
+    ungroup and rebuild the whole set by hand.
+    """
+
+    def __init__(self, group_name: str, entities, add: bool) -> None:
+        self.name = tr("group") if add else tr("ungroup")
+        self.group_name = normalize(group_name)
+        self.entities = list(entities)
+        self.add = bool(add)
+        self._before: list | None = None
+
+    def _apply(self, document, wanted) -> None:
+        group = _group(document, self.group_name)
+        if group is None:
+            return
+        group.set_data([e for e in wanted if e.is_alive])
+        document.dirty = True
+
+    def do(self, document) -> None:
+        group = _group(document, self.group_name)
+        if group is None:
+            return
+        current = [e for e in group if e.is_alive]
+        if self._before is None:
+            self._before = list(current)
+        if self.add:
+            # "returned to their previous position in the numerical order"
+            # only matters for Re-Order, which the civil 2D scope skips:
+            # appending in pick order is the documented default.
+            have = {e.dxf.handle for e in current}
+            wanted = current + [e for e in self.entities
+                                if e.dxf.handle not in have]
+        else:
+            drop = {e.dxf.handle for e in self.entities}
+            wanted = [e for e in current if e.dxf.handle not in drop]
+        self._apply(document, wanted)
+
+    def undo(self, document) -> None:
+        if self._before is not None:
+            self._apply(document, self._before)

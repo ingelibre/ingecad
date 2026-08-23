@@ -421,6 +421,36 @@ class MainWindow(QMainWindow):
             return
         ObjectGroupingDialog(self).exec()
 
+    def _cmd_pickstyle(self, *args) -> None:
+        """PICKSTYLE (p. 2452): 0 turns group selection off, 1 on.
+
+        Without a way to reach it, a grouped object could never be selected
+        on its own again -- the group swallowed every pick.
+        """
+        from core import groups as group_ops
+
+        if self.document is None:
+            return
+        current = group_ops.pickstyle(self.document)
+        value = None
+        if args and str(args[0]).strip() != "":
+            try:
+                value = int(str(args[0]).strip())
+            except ValueError:
+                value = None
+            if value is not None and value not in (0, 1, 2, 3):
+                value = None
+            if value is None:
+                self.command_line.echo(tr("Requires an integer value."))
+                return
+        if value is None:
+            value = 0 if current else 1     # bare PICKSTYLE toggles
+        group_ops.set_pickstyle(self.document, value)
+        self.command_line.echo(
+            tr("PICKSTYLE = {value}", value=value) + "  "
+            + (tr("Group selection on.") if value else
+               tr("Group selection off.")))
+
     def _cmd_quickcalc(self, *args) -> None:
         """QUICKCALC (p. 1589)."""
         from views.quickcalc_dialog import QuickCalcDialog
@@ -1632,26 +1662,44 @@ class MainWindow(QMainWindow):
         from views.layers_panel import fill_color_combo, swatch_icon
 
         self._props_loading = True
-        self._layer_combo.clear()
-        self._color_combo.clear()
+        # This runs on EVERY selection change, but the four lists only change
+        # when the DRAWING's tables do -- rebuilding them (an icon rendered
+        # per row) cost ~39 ms of the stall the user felt on releasing a big
+        # selection window. The key is the list CONTENT, not the revision: a
+        # layer can be added without any command bumping it, and keying on
+        # the revision left such a layer missing from the control.
+        key = (None if self.document is None else
+               (id(self.document),
+                tuple(layer_ops.layer_names_and_colors(self.document)),
+                tuple(layer_ops.available_linetypes(self.document))))
+        if key != getattr(self, "_props_combo_key", object()):
+            self._layer_combo.clear()
+            self._color_combo.clear()
+            if self.document is not None:
+                for name, color in layer_ops.layer_names_and_colors(self.document):
+                    # small colour chip beside each layer name (BricsCAD look)
+                    self._layer_combo.addItem(swatch_icon(color), name)
+            fill_color_combo(self._color_combo)
+            self._fill_linetype_combo()
+            self._fill_lineweight_combo()
+            self._props_combo_key = key
         if self.document is not None:
-            for info in layer_ops.layer_list(self.document):
-                # small colour chip beside each layer name (BricsCAD look)
-                self._layer_combo.addItem(swatch_icon(info.color), info.name)
             # AutoCAD's Layer control: with a selection it shows the
             # selected object's layer (blank when mixed); with nothing
             # selected, the current layer.
             selection = self.tools._selection_entities() if self.tools else []
-            if selection:
-                names = {e.dxf.get("layer", "0") for e in selection}
-                shown = names.pop() if len(names) == 1 else None
-            else:
+            shown = None
+            for e in selection:
+                name = e.dxf.get("layer", "0")
+                if shown is None:
+                    shown = name
+                elif name != shown:
+                    shown = None
+                    break
+            if not selection:
                 shown = layer_ops.current_layer_name(self.document)
             idx = self._layer_combo.findText(shown) if shown else -1
             self._layer_combo.setCurrentIndex(idx)
-        fill_color_combo(self._color_combo)
-        self._fill_linetype_combo()
-        self._fill_lineweight_combo()
         self._show_current_properties()
         self._props_loading = False
 
@@ -1696,9 +1744,17 @@ class MainWindow(QMainWindow):
             if combo is None:
                 continue
             if selection:
-                values = {e.dxf.get(prop, layer_ops.CURRENT_DEFAULTS[prop])
-                          for e in selection}
-                value = values.pop() if len(values) == 1 else None
+                default = layer_ops.CURRENT_DEFAULTS[prop]
+                value = _MIXED = object()
+                for e in selection:
+                    v = e.dxf.get(prop, default)
+                    if value is _MIXED:
+                        value = v
+                    elif v != value:
+                        value = None      # mixed: AutoCAD blanks the control
+                        break
+                if value is _MIXED:
+                    value = None
             else:
                 value = layer_ops.current_property(self.document, prop)
             index = combo.findData(value) if value is not None else -1
@@ -1940,6 +1996,7 @@ class MainWindow(QMainWindow):
         d.register("QSELECT", self._cmd_qselect)
         d.register("FIND", self._cmd_find)
         d.register("GROUP", self._cmd_group)
+        d.register("PICKSTYLE", self._cmd_pickstyle)
         d.register("BEDIT", self._cmd_bedit)
         d.register("-BEDIT", self._cmd_bedit)
         d.register("BSAVE", self._cmd_bsave)

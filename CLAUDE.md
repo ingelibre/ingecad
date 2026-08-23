@@ -974,6 +974,64 @@ conviene no re-descubrir:
 - **El sitio solo afirma lo que la app hace hoy**, y la sección «Status» del `README.md` es la
   fuente de verdad del copy. Hay un FAQ que dice explícitamente que la topografía es v0.2.
 
+## 🗓 Sesión 2026-08-23 — v0.4.2: los tirones que Marco sintió, medidos
+
+**Los tres síntomas eran tres causas distintas, y ninguna era el motor
+gráfico.** La escena GL cuesta 2,7 ms por cuadro pase lo que pase; todo lo
+demás vivía encima, en QPainter y en el trabajo por edición.
+
+⚠️ **La lección de método, otra vez la misma en forma nueva: reproducir el
+caso del usuario, no uno parecido.** Mis tres primeras mediciones dieron 0,0 ms,
+407 ms y 3–5 ms — todas correctas y todas del caso equivocado. `on_hover` da
+0 porque sin comando activo no hay snap; MATCHPROP entre dos cotas del archivo
+son 63 ms, pero el caso de Marco es sobre una cota **recién dibujada**; y el
+grip lento no es cualquiera sino el que **aleja la línea de cota**, en un plano
+de 10 000 entidades. Sólo al armar la secuencia exacta —dibujar, matchprop,
+arrastrar cada grip por rol— aparecieron los 3,4 s.
+
+**Y la segunda: un cuadro que no se pinta no mide nada.** Bajo `offscreen`
+`paintGL` no corre, y con `repaint()` Qt fusiona las peticiones: 4 pinturas en
+100 movimientos. Hay que **forzar** el cuadro (`grabFramebuffer`) para medirlo.
+Tercera, de plomería: `print` sin `flush` + `grep` en la tubería = si el
+proceso muere por timeout **no se ve ni una línea**; escribir a archivo.
+
+Las causas, en orden de lo que costaban:
+
+1. **`needs_regen` en las tres órdenes de cota** (grip, texto, DIMTEDIT) →
+   retesela el dibujo entero al soltar. La superposición sabe dibujar una cota
+   desde la v0.1.3, así que el camino quirúrgico —ocultar la copia vieja,
+   dibujar la nueva— alcanza, igual que ya se había hecho para MATCHPROP.
+2. **La fusión diferida se agendaba en CADA edición.** Corre en un hilo, pero
+   un hilo Python retiene el GIL: eran ~3 s de congelamiento 2,5 s después de
+   editar, justo cuando la mano iba al siguiente grip. Ese «se queda pegado»
+   intermitente. Ahora sigue la regla que el camino de dibujo ya tenía: por
+   debajo del umbral no se agenda nada.
+3. **El overlay de QPainter**: una pluma y un pincel **por grip** (2448 grips
+   = 4896 cambios de estado por cuadro) y los segmentos de resaltado
+   recorridos de a uno en Python. Vectorizado, recortado a la ventana y en una
+   sola llamada.
+4. **`layers_in_use` caminaba la base de entidades entera en cada edición**
+   para un flag que el control de capas ni muestra. El combo se reconstruye
+   ahora sólo si cambia el CONTENIDO de las tablas — ⚠️ y **no** por revisión:
+   agregar una capa por la tabla no toca `document.revision`, y con esa clave
+   la capa nueva no aparecía. Lo cazó un test que ya existía.
+5. **El imán de cotas** (`_align_dim_line`) hacía `query("DIMENSION")` sobre
+   todo el modelspace **en cada movimiento del mouse**.
+
+**GRIPOBJLIMIT (p. 2339) resultó ser conducta de AutoCAD que no seguíamos:**
+pasados 100 objetos los grips **desaparecen del todo**, no se adelgazan.
+Nuestro tope de 200 entidades era justo el caso caro. Queda regulable en
+Options ▸ Selection.
+
+**Grupos: auditados contra el manual, con 23 tests donde no había ninguno.**
+Tres huecos reales, y **dos los encontró manejar el diálogo, no leerlo**:
+`Seleccionable` vivía en un `set` de Python y se perdía al guardar (va en el
+código 71 del GROUP, que es donde AutoCAD lo pone), cada refresco perdía la
+fila seleccionada —así que la SEGUNDA acción sobre un grupo no hacía nada— y
+faltaban Añadir/Quitar, Descripción, Buscar nombre y un modo de llegar a
+`PICKSTYLE`, sin el cual un objeto agrupado no se puede volver a seleccionar
+solo nunca más.
+
 ## 🗓 Sesión 2026-08-13 (ter) — v0.4.0: el menú contextual y sus siete comandos
 
 **Método que vale más que el resultado: el menú del clic derecho se construyó

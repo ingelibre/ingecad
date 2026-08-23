@@ -373,7 +373,7 @@ def test_options_dialog_persists_what_it_offers(qapp, clean_settings):
         win.new_document("mm")
         dlg = OptionsDialog(win)
         assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == [
-            "Files", "Display", "Drafting", "User Preferences"]
+            "Files", "Display", "Drafting", "User Preferences", "Selection"]
 
         # the Files tab offers the three template units and shows the
         # current one; applying it is left alone (see above)
@@ -385,10 +385,16 @@ def test_options_dialog_persists_what_it_offers(qapp, clean_settings):
             dlg.right_click.findData(RIGHT_CLICK_ENTER))
         # the Drafting tab is the very widget the Drafting Settings dialog uses
         assert hasattr(dlg.osnap_panel, "modes")
+        # Selection: GRIPOBJLIMIT (p.2339), the object count past which grips
+        # stop being drawn
+        dlg.gripobjlimit.setValue(250)
         dlg.apply()
 
         assert win.viewport.lwt_on == wanted_lwt
         assert right_click_mode() == RIGHT_CLICK_ENTER
+        from views.tool_controller import gripobjlimit
+
+        assert gripobjlimit() == 250
 
         # a fresh window comes up with the display setting restored
         other = MainWindow()

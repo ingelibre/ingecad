@@ -1184,7 +1184,18 @@ class DimTextTranslateCommand(Command):
     """The text grip: exact-fidelity text move, no block swap."""
 
     name = "GRIP"
-    needs_regen = True
+    # Not a regen: the dimension re-renders its anonymous *D block here, and
+    # the overlay draws that through the same frontend the base scene uses
+    # (v0.1.3 attributed block content to the outermost handle, which is what
+    # makes hiding the stale copy work). Forcing a full regen meant a THREE
+    # SECOND freeze per grip drop on a real plan -- Marco's "lentitud cuando
+    # muevo una cota" -- for a display the surgical path already gives.
+    needs_regen = False
+
+    @property
+    def entities(self) -> list:
+        """The display paths hide the stale copy of these and re-draw them."""
+        return [self.dim]
 
     def __init__(self, dim, target) -> None:
         self.dim = dim
@@ -1243,7 +1254,18 @@ class DimGripCommand(Command):
     """
 
     name = "GRIP"
-    needs_regen = True
+    # Not a regen: the dimension re-renders its anonymous *D block here, and
+    # the overlay draws that through the same frontend the base scene uses
+    # (v0.1.3 attributed block content to the outermost handle, which is what
+    # makes hiding the stale copy work). Forcing a full regen meant a THREE
+    # SECOND freeze per grip drop on a real plan -- Marco's "lentitud cuando
+    # muevo una cota" -- for a display the surgical path already gives.
+    needs_regen = False
+
+    @property
+    def entities(self) -> list:
+        """The display paths hide the stale copy of these and re-draw them."""
+        return [self.dim]
 
     def __init__(self, dim, attr: str, point) -> None:
         self.dim = dim
@@ -1322,7 +1344,18 @@ class DimTextEditCommand(Command):
     and re-renders, so the document never keeps stale *D blocks."""
 
     name = "DIMTEDIT"
-    needs_regen = True
+    # Not a regen: the dimension re-renders its anonymous *D block here, and
+    # the overlay draws that through the same frontend the base scene uses
+    # (v0.1.3 attributed block content to the outermost handle, which is what
+    # makes hiding the stale copy work). Forcing a full regen meant a THREE
+    # SECOND freeze per grip drop on a real plan -- Marco's "lentitud cuando
+    # muevo una cota" -- for a display the surgical path already gives.
+    needs_regen = False
+
+    @property
+    def entities(self) -> list:
+        """The display paths hide the stale copy of these and re-draw them."""
+        return [self.dim]
 
     def __init__(self, dim, *, location=None, halign: str | None = None,
                  home: bool = False, angle: float | None = None) -> None:

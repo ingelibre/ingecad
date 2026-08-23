@@ -13,6 +13,8 @@ rest out rather than showing empty pages:
 * **Drafting** — the running object snaps (AutoCAD's Object Snap options).
 * **User Preferences** — what the right button does in the drawing area,
   which is AutoCAD's Right-click Customization (SHORTCUTMENU, p. 2509).
+* **Selection** — the object-count past which grips stop being drawn
+  (GRIPOBJLIMIT, p. 2339).
 
 Everything here is stored through ``QSettings``, so it outlives the session;
 the drawing itself is never touched. OK applies and closes, Cancel discards,
@@ -31,6 +33,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -82,6 +85,7 @@ class OptionsDialog(QDialog):
         self.tabs.addTab(self._display_tab(), tr("Display"))
         self.tabs.addTab(self._drafting_tab(), tr("Drafting"))
         self.tabs.addTab(self._user_tab(), tr("User Preferences"))
+        self.tabs.addTab(self._selection_tab(), tr("Selection"))
         root.addWidget(self.tabs, 1)
 
         buttons = QDialogButtonBox(
@@ -187,6 +191,31 @@ class OptionsDialog(QDialog):
         outer.addStretch(1)
         return page
 
+    def _selection_tab(self) -> QWidget:
+        """AutoCAD's Selection tab, the one row IngeCAD honours (p.1348)."""
+        from views.tool_controller import gripobjlimit
+
+        page = QWidget(self)
+        outer = QVBoxLayout(page)
+        box = QGroupBox(tr("Grips"), page)
+        form = QFormLayout(box)
+        self.gripobjlimit = QSpinBox(box)
+        self.gripobjlimit.setRange(0, 32767)
+        self.gripobjlimit.setValue(gripobjlimit())
+        self.gripobjlimit.setSpecialValueText(tr("Always show grips"))
+        form.addRow(tr("Object selection limit for display of grips:"),
+                    self.gripobjlimit)
+        note = QLabel(
+            tr("Grips are hidden when the selection holds more objects than "
+               "this. Drawing thousands of them costs a frame; 0 always "
+               "shows them."), box)
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #9aa0a6;")
+        form.addRow(note)
+        outer.addWidget(box)
+        outer.addStretch(1)
+        return page
+
     # -- applying -------------------------------------------------------------
     def apply(self) -> None:
         from core import i18n, osnap as osnap_modes
@@ -210,6 +239,12 @@ class OptionsDialog(QDialog):
         self.window._save_osnap_modes()
 
         settings.setValue(SETTING_RIGHT_CLICK, self.right_click.currentData())
+
+        from views.tool_controller import SETTING_GRIPOBJLIMIT
+
+        settings.setValue(SETTING_GRIPOBJLIMIT, self.gripobjlimit.value())
+        tools._grips_cache = None       # the limit just moved: re-decide
+        self.window.viewport.update()
 
         if self.language.currentData() != i18n.current_language():
             # last: it rebuilds the menus, and the reference's own note is
