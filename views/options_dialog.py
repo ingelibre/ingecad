@@ -23,6 +23,7 @@ Apply applies and stays — the three buttons the dialog has always had.
 from __future__ import annotations
 
 from PySide6.QtCore import QSettings
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -41,6 +42,7 @@ from PySide6.QtWidgets import (
 
 from core.i18n import tr
 from render import backend
+from views import viewport as viewport_prefs
 
 #: Right-click in the drawing area with nothing selected and no command
 #: running: AutoCAD lets it be either the shortcut menu or Enter, and a great
@@ -192,8 +194,66 @@ class OptionsDialog(QDialog):
                "in; raising this smooths it, and may slow the regen down."))
         grid.addRow(tr("Arc and circle smoothness:"), self.viewres)
         outer.addWidget(box)
+
+        # AutoCAD's Display tab also owns the cursor: Crosshair Size
+        # (CURSORSIZE) and, through its Colors dialog, the crosshair colour.
+        box = QGroupBox(tr("Crosshair"), page)
+        grid = QFormLayout(box)
+        self.cursorsize = QSpinBox(box)
+        self.cursorsize.setRange(1, 100)
+        self.cursorsize.setValue(viewport_prefs.cursorsize())
+        self.cursorsize.setSuffix(" %")
+        self.cursorsize.setToolTip(
+            tr("The crosshair length as a percentage of the screen, like "
+               "AutoCAD's CURSORSIZE. 100 reaches every edge; AutoCAD's own "
+               "default is 5."))
+        grid.addRow(tr("Crosshair size:"), self.cursorsize)
+
+        row = QHBoxLayout()
+        self._crosshair_color = viewport_prefs.crosshair_color()
+        self.crosshair_swatch = QPushButton(box)
+        self.crosshair_swatch.setFixedWidth(70)
+        self.crosshair_swatch.clicked.connect(self._pick_crosshair_color)
+        row.addWidget(self.crosshair_swatch)
+        self.crosshair_auto = QPushButton(tr("Automatic"), box)
+        self.crosshair_auto.setToolTip(
+            tr("Light over the dark model, dark over a white sheet — what "
+               "the canvas did before there was a choice."))
+        self.crosshair_auto.clicked.connect(self._reset_crosshair_color)
+        row.addWidget(self.crosshair_auto)
+        row.addStretch(1)
+        holder = QWidget(box)
+        holder.setLayout(row)
+        grid.addRow(tr("Crosshair color:"), holder)
+        self._show_crosshair_swatch()
+        outer.addWidget(box)
         outer.addStretch(1)
         return page
+
+    def _show_crosshair_swatch(self) -> None:
+        color = self._crosshair_color
+        if color is None:
+            self.crosshair_swatch.setText(tr("Automatic"))
+            self.crosshair_swatch.setStyleSheet("")
+        else:
+            self.crosshair_swatch.setText("")
+            self.crosshair_swatch.setStyleSheet(
+                f"background-color: {color.name()};")
+
+    def _pick_crosshair_color(self) -> None:
+        from PySide6.QtWidgets import QColorDialog
+
+        start = self._crosshair_color
+        chosen = QColorDialog.getColor(
+            start if start is not None else QColor(215, 215, 215), self,
+            tr("Crosshair color"))
+        if chosen.isValid():
+            self._crosshair_color = chosen
+            self._show_crosshair_swatch()
+
+    def _reset_crosshair_color(self) -> None:
+        self._crosshair_color = None
+        self._show_crosshair_swatch()
 
     def _drafting_tab(self) -> QWidget:
         """The very list the Drafting Settings dialog shows — same widget,
@@ -240,6 +300,15 @@ class OptionsDialog(QDialog):
         self.gripobjlimit.setSpecialValueText(tr("Always show grips"))
         form.addRow(tr("Object selection limit for display of grips:"),
                     self.gripobjlimit)
+        self.pickbox = QSpinBox(box)
+        self.pickbox.setRange(1, 50)
+        self.pickbox.setValue(viewport_prefs.pickbox())
+        self.pickbox.setSuffix(" px")
+        self.pickbox.setToolTip(
+            tr("AutoCAD's PICKBOX: the little square at the cursor that "
+               "picks objects. It sets what you SEE and what actually "
+               "catches, together."))
+        form.addRow(tr("Pickbox size:"), self.pickbox)
         note = QLabel(
             tr("Grips are hidden when the selection holds more objects than "
                "this. Drawing thousands of them costs a frame; 0 always "
@@ -267,6 +336,13 @@ class OptionsDialog(QDialog):
         settings.setValue(SETTING_GRID, viewport.grid_on)
         settings.setValue(SETTING_VSYNC, self.vsync.isChecked())
         settings.setValue(SETTING_MSAA, self.msaa.currentData())
+        settings.setValue(viewport_prefs.SETTING_CURSORSIZE,
+                          self.cursorsize.value())
+        settings.setValue(viewport_prefs.SETTING_CROSSHAIR_COLOR,
+                          "" if self._crosshair_color is None
+                          else self._crosshair_color.name())
+        settings.setValue(viewport_prefs.SETTING_PICKBOX, self.pickbox.value())
+        viewport.refresh_cursor_prefs()
         if self.viewres.value() != backend.viewres():
             settings.setValue(backend.SETTING_VIEWRES, self.viewres.value())
             # "The model is regenerated" (VIEWRES, p.2049) -- the tolerance

@@ -32,7 +32,11 @@ from tools.modify import MODIFY_TOOL_CLASSES
 from tools.layout_tools import LAYOUT_TOOL_CLASSES
 
 SNAP_PX = 12.0   # aperture in logical pixels
-PICK_PX = 8.0    # pick box half-size in logical pixels
+#: Pick aperture, half-size in logical pixels. It tracks AutoCAD's PICKBOX
+#: (Options > Selection), so a bigger box on screen really does catch more:
+#: the two used to be independent constants that happened to read 8, and the
+#: drawn box was therefore half the size of what it picked.
+PICK_PX = 8.0
 # Overlay entities beyond this schedule an idle merge into the base scene
 # (the overlay is re-tessellated per edit, so it must not grow unbounded).
 MERGE_THRESHOLD = 50
@@ -1306,7 +1310,14 @@ class ToolController(QObject):
     # -- pointer input ---------------------------------------------------------
     def on_hover(self, wx: float, wy: float, threshold_world: float) -> None:
         self._cursor = (wx, wy)
-        self._pick_tolerance = threshold_world * (PICK_PX / SNAP_PX)
+        from views.viewport import PICKBOX_PX
+
+        # From the viewport's CACHED pickbox, not from QSettings: this runs
+        # on every mouse move, and the whole point of this release was to
+        # stop doing per-event work that does not change per event.
+        box = getattr(self.window.viewport, "_pickbox_px", PICKBOX_PX)
+        self._pick_tolerance = threshold_world * (
+            PICK_PX * (box / PICKBOX_PX) / SNAP_PX)
         self.snap_hit = None
         grip_hot = self._grip_drag is not None
         needs_snap = grip_hot or (

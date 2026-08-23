@@ -465,6 +465,44 @@ class MainWindow(QMainWindow):
         self.command_line.echo(tr("VIEWRES = {value}", value=value) + "  "
                                + tr("Regenerating model."))
 
+    def _cmd_cursorsize(self, *args) -> None:
+        """CURSORSIZE (p. 2202): crosshair length, 1-100 % of the screen."""
+        from views import viewport as vp_prefs
+
+        self._set_int_pref(args, vp_prefs.SETTING_CURSORSIZE, 1, 100,
+                           "CURSORSIZE", vp_prefs.cursorsize())
+
+    def _cmd_pickbox(self, *args) -> None:
+        """PICKBOX (p. 2452): the object selection target, in pixels."""
+        from views import viewport as vp_prefs
+
+        self._set_int_pref(args, vp_prefs.SETTING_PICKBOX, 1, 50,
+                           "PICKBOX", vp_prefs.pickbox())
+
+    def _set_int_pref(self, args, key: str, low: int, high: int,
+                      name: str, current: int) -> None:
+        """The shared body of the integer system variables: bare name shows
+        the value and the range, a number sets it."""
+        text = str(args[0]).strip() if args and str(args[0]).strip() else ""
+        if not text:
+            self.command_line.echo(
+                tr("{name} = {value}", name=name, value=current) + "  "
+                + tr("Enter new value ({min}-{max}):", min=low, max=high))
+            return
+        try:
+            value = int(text)
+        except ValueError:
+            self.command_line.echo(tr("Requires an integer value."))
+            return
+        if not low <= value <= high:
+            self.command_line.echo(
+                tr("Value must be between {min} and {max}.",
+                   min=low, max=high))
+            return
+        QSettings().setValue(key, value)
+        self.viewport.refresh_cursor_prefs()
+        self.command_line.echo(tr("{name} = {value}", name=name, value=value))
+
     def _cmd_pickstyle(self, *args) -> None:
         """PICKSTYLE (p. 2452): 0 turns group selection off, 1 on.
 
@@ -2042,6 +2080,8 @@ class MainWindow(QMainWindow):
         d.register("GROUP", self._cmd_group)
         d.register("PICKSTYLE", self._cmd_pickstyle)
         d.register("VIEWRES", self._cmd_viewres)
+        d.register("CURSORSIZE", self._cmd_cursorsize)
+        d.register("PICKBOX", self._cmd_pickbox)
         d.register("BEDIT", self._cmd_bedit)
         d.register("-BEDIT", self._cmd_bedit)
         d.register("BSAVE", self._cmd_bsave)

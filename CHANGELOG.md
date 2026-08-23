@@ -73,6 +73,23 @@ noise. But the complaint underneath was real and long-standing:
   costs +0.6% vertices and no measurable regen time, because a civil drawing
   is overwhelmingly straight lines.
 
+### Added — the cursor is yours now
+Under AutoCAD's own names, since that is where the muscle memory looks:
+- **Crosshair size** (`CURSORSIZE`, Options ▸ Display) — 1 to 100 % of the
+  screen. IngeCAD keeps drawing it full-screen by default, because that is
+  what it has always done; AutoCAD's own default of 5 is one number away.
+- **Crosshair colour** — any colour, or *Automatic*, which is the behaviour
+  there has always been: light over the dark model, dark over a white sheet.
+- **Pickbox size** (`PICKBOX`, Options ▸ Selection) — and this one is more
+  than a preference. The square you see and the aperture that actually picks
+  were two separate constants that happened to read 8; since one was a full
+  width and the other a half-size, **the box on screen was half the size of
+  what it caught**. One number drives both now, and the default changes
+  nothing.
+
+Both variables are typable at the prompt, like every other system variable:
+`CURSORSIZE 30`, `PICKBOX 12`, or bare to see the current value.
+
 ### Fixed — every display setting was being read from the wrong place
 `_configure_surface_format()` has to run before `QApplication` exists, and it
 reads `QSettings` — but the application and organization names were set

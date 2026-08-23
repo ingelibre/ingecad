@@ -1056,6 +1056,23 @@ IngeTrazo prohíbe; verificado bajo **sesión Wayland nativa**, no sólo xcb.
 Subir VIEWRES ×8 cuesta +0,6 % de vértices y nada de tiempo medible: los
 planos civiles son casi todo rectas.
 
+**El cursor, personalizable como en AutoCAD** (`CURSORSIZE` en Display,
+`PICKBOX` en Selection, color del cursor, los dos tecleables como variables
+de sistema). ⚠️ **`PICKBOX` no era sólo estética: el cuadro dibujado y la
+apertura que realmente pica eran dos constantes independientes que valían 8
+—una ancho total, la otra media— así que el cuadro medía la mitad de lo que
+atrapaba.** Ahora un número mueve los dos, y en su valor por defecto no
+cambia nada. El default de tamaño se queda en 100 (pantalla completa, lo que
+IngeCAD siempre dibujó) aunque AutoCAD traiga 5: cambiarlo encogería el
+cursor de todos sin que nadie lo pidiera.
+
+⚠️ **Trampa del arnés, dos veces seguidas en la misma captura:** el cursor no
+salía en la imagen y no era la función — (1) `leaveEvent` limpia `_cursor`,
+hay que fijarlo **justo antes** de capturar, y (2) el widget del visor mide
+362×235 aunque la ventana mida 700×500, así que mi cursor en (350, 250)
+caía **fuera del widget**. Instrumentar (espiar `_draw_crosshair`) lo dijo en
+un intento; adivinar no lo habría dicho nunca.
+
 ⚠️ **Y de paso, un hueco silencioso de siempre: `_configure_surface_format()`
 lee QSettings ANTES de que se nombre la aplicación**, así que leía un config
 vacío en «Unknown Organization» — **el interruptor de vsync nunca hizo nada

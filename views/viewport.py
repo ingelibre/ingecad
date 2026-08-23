@@ -65,6 +65,53 @@ AXIS_LEN = 1.0e6  # world units; clipped by GL, cheap to keep "infinite"
 CROSSHAIR_COLOR = QColor(215, 215, 215, 210)        # over the dark canvas
 CROSSHAIR_COLOR_LIGHT = QColor(40, 40, 40, 210)     # over paper-white layouts
 PICKBOX_PX = 8
+
+#: AutoCAD's CURSORSIZE (p. 2202): crosshair length as a percentage of the
+#: screen, 1-100, where 100 means full-screen arms. AutoCAD ships 5; IngeCAD
+#: ships 100 because that is what it has always drawn -- changing the default
+#: would shrink every existing user's cursor without being asked.
+SETTING_CURSORSIZE = "display/cursorsize"
+CURSORSIZE_DEFAULT = 100
+#: Crosshair colour. Empty means "follow the background", which is what the
+#: canvas did before there was a choice: light over dark, dark over paper.
+SETTING_CROSSHAIR_COLOR = "display/crosshair_color"
+#: AutoCAD's PICKBOX (p. 2452): the selection target, in pixels. It drives
+#: the drawn box AND the aperture that actually picks, which is the point --
+#: they used to be set independently, so the box on screen was half the size
+#: of what it caught.
+SETTING_PICKBOX = "selection/pickbox"
+
+
+def _int_pref(key: str, default: int, low: int, high: int) -> int:
+    try:
+        from PySide6.QtCore import QSettings
+
+        value = int(QSettings().value(key, default))
+    except (TypeError, ValueError, Exception):
+        return default
+    return value if low <= value <= high else default
+
+
+def cursorsize() -> int:
+    return _int_pref(SETTING_CURSORSIZE, CURSORSIZE_DEFAULT, 1, 100)
+
+
+def pickbox() -> int:
+    return _int_pref(SETTING_PICKBOX, PICKBOX_PX, 1, 50)
+
+
+def crosshair_color():
+    """The chosen colour, or None to follow the background."""
+    try:
+        from PySide6.QtCore import QSettings
+
+        name = str(QSettings().value(SETTING_CROSSHAIR_COLOR, "") or "")
+    except Exception:
+        return None
+    if not name:
+        return None
+    color = QColor(name)
+    return color if color.isValid() else None
 # Lineweight display: mm of paper -> logical pixels (96 dpi reference,
 # AutoCAD LWT look). 0.5 mm ~ 2 px, 1.0 mm ~ 4 px.
 PX_PER_MM = 96.0 / 25.4
@@ -210,6 +257,12 @@ class Viewport(QOpenGLWidget):
         self._hidden_rgba: dict = {}
         self._sel_press = None  # pending left press in selection mode
         self._hl_lines_cache = None  # (segs, view state, [QLineF])
+        # Cursor preferences, read once instead of per frame (the crosshair
+        # is drawn on every single paint).
+        self._cursorsize = CURSORSIZE_DEFAULT
+        self._crosshair_color = None
+        self._pickbox_px = PICKBOX_PX
+        self.refresh_cursor_prefs()
         self._grip_hover = None  # grip under the cursor, if any
         self._pan_mode = False   # interactive PAN command (open-hand cursor)
         # Status-bar drafting aids: GRID (F7) draws the reference grid under
@@ -1477,6 +1530,13 @@ class Viewport(QOpenGLWidget):
         except Exception:
             return "idle"
 
+    def refresh_cursor_prefs(self) -> None:
+        """Re-read CURSORSIZE, the crosshair colour and PICKBOX."""
+        self._cursorsize = cursorsize()
+        self._crosshair_color = crosshair_color()
+        self._pickbox_px = pickbox()
+        self.update()
+
     def _draw_crosshair(self, p: QPainter, pos: QPointF,
                         mode: str = "idle") -> None:
         """The cursor, in AutoCAD's three states (see cursor_mode).
@@ -1486,15 +1546,29 @@ class Viewport(QOpenGLWidget):
         being asked for. Keeping it there is the giveaway that a CAD program
         was written by someone who never watched a drafter work.
         """
-        color = CROSSHAIR_COLOR_LIGHT if self._light_background() else CROSSHAIR_COLOR
+        color = self._crosshair_color
+        if color is None:
+            color = (CROSSHAIR_COLOR_LIGHT if self._light_background()
+                     else CROSSHAIR_COLOR)
         p.setPen(QPen(color, 1))
         x, y = pos.x(), pos.y()
-        half = PICKBOX_PX / 2
+        box = self._pickbox_px
+        half = box / 2
         if mode != "pick":
-            p.drawLine(QPointF(0, y), QPointF(self.width(), y))
-            p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+            # CURSORSIZE: "the size of the crosshairs as a percentage of the
+            # screen size... when set to 100, the crosshairs are full-screen"
+            # (p.2202). The percentage is of the SHORTER side, so 100 reaches
+            # every edge and a square cursor stays square.
+            pct = self._cursorsize
+            if pct >= 100:
+                p.drawLine(QPointF(0, y), QPointF(self.width(), y))
+                p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+            else:
+                arm = min(self.width(), self.height()) * pct / 200.0
+                p.drawLine(QPointF(x - arm, y), QPointF(x + arm, y))
+                p.drawLine(QPointF(x, y - arm), QPointF(x, y + arm))
         if mode != "point":
-            p.drawRect(x - half, y - half, PICKBOX_PX, PICKBOX_PX)
+            p.drawRect(x - half, y - half, box, box)
 
     # -- input -----------------------------------------------------------------
     def mousePressEvent(self, event) -> None:
