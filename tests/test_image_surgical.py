@@ -144,3 +144,26 @@ def test_move_command_is_surgical(qapp, tmp_path):
             "the moved image is invisible until the merge")
     finally:
         win.close()
+
+
+def test_image_never_rides_the_grip_overlay(qapp, tmp_path):
+    """The overlay mounted at grab time kept the OLD frame on screen for
+    seconds after the drop (Marco saw the stale border linger). An IMAGE
+    must never be in the vector overlay: the live quad is the feedback."""
+    win = _win_with_image(qapp, tmp_path)
+    try:
+        img = next(e for e in win.document.modelspace()
+                   if e.dxftype() == "IMAGE")
+        h = img.dxf.handle
+        from core.select import entity_grips
+        g = entity_grips(img)[0]
+        win.tools.selection = {h}
+        win.tools.begin_grip_drag((g[0], g[1], g[2], h, 0))
+        assert win.tools.grip_overlay_entities() == [], (
+            "the grab mounted the image's stale frame into the overlay")
+        win.tools.finish_grip_drag(g[0] + 1.0, g[1] + 1.0)
+        scene = win.viewport._overlay_scene
+        assert scene is None or scene.is_empty, (
+            "the drop left a stale overlay on screen")
+    finally:
+        win.close()

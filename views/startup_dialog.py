@@ -49,6 +49,7 @@ class _ThumbnailWorker(QThread):
 
     def __init__(self, paths: list[Path]) -> None:
         super().__init__()
+        self.setObjectName("thumbnails")   # names the thread in Qt's aborts
         self._paths = list(paths)
         self._stop = False
 
@@ -67,6 +68,24 @@ class _ThumbnailWorker(QThread):
                 made = None           # a broken drawing must not kill startup
             if made and not self._stop:
                 self.ready.emit(str(path), str(made))
+
+
+#: Thumbnail workers whose dialog is gone but whose thread still runs the
+#: drawing it was on. Joined by drain_orphans() before the process exits.
+_ORPHANS: set = set()
+
+
+def _park_orphan(worker) -> None:
+    _ORPHANS.add(worker)
+    worker.finished.connect(lambda w=worker: _ORPHANS.discard(w))
+
+
+def drain_orphans() -> None:
+    """Join every parked thumbnail worker. Called from the app's exit path."""
+    for worker in list(_ORPHANS):
+        worker.stop()
+        worker.wait()
+        _ORPHANS.discard(worker)
 
 
 class StartupDialog(QDialog):
@@ -256,11 +275,26 @@ class StartupDialog(QDialog):
         if self._choice and self._choice[0] == "new":
             settings.setValue(SETTING_TEMPLATE, self._choice[1])
 
-    def closeEvent(self, event) -> None:
+    def done(self, result: int) -> None:  # noqa: N802 - Qt override
+        """The one funnel every way out passes through.
+
+        accept() and reject() do NOT emit a closeEvent, so picking a
+        drawing left the thumbnail worker rendering DWGs in the background
+        with its owner gone — and Qt aborts the whole process at exit when
+        a live QThread is destroyed. Marco hit exactly that: open from the
+        startup window, work, close, SIGABRT.
+
+        Joining HERE is no good either: a thumbnail of a real plan renders
+        the whole drawing, and waiting for the one in flight held accept()
+        for 11 measured seconds. The worker is told to stop (it quits
+        between drawings) and parked in the orphan registry; the exit path
+        joins it there.
+        """
         if self._worker is not None:
             self._worker.stop()
-            self._worker.wait(2000)
-        super().closeEvent(event)
+            _park_orphan(self._worker)
+            self._worker = None
+        super().done(result)
 
     def reject(self) -> None:
         self._save_settings()

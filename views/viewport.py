@@ -1107,6 +1107,10 @@ class Viewport(QOpenGLWidget):
     # Grid colors: faint minor lines, slightly brighter every 5th (major).
     GRID_MINOR = (52, 58, 66, 255)
     GRID_MAJOR = (72, 80, 92, 255)
+    #: over a light canvas (white/cream model background) the dark-canvas
+    #: grays vanish; AutoCAD's grid stays visible on white too.
+    GRID_MINOR_LIGHT = (214, 214, 214, 255)
+    GRID_MAJOR_LIGHT = (189, 189, 189, 255)
 
     def _grid_spacing(self) -> float:
         """Adaptive 1-2-5 spacing that keeps cells ~25-90 px on screen."""
@@ -1130,7 +1134,8 @@ class Viewport(QOpenGLWidget):
         s = self._grid_spacing()
         i0, i1 = int(np.floor(x0 / s)), int(np.ceil(x1 / s))
         j0, j1 = int(np.floor(y0 / s)), int(np.ceil(y1 / s))
-        key = (s, i0, i1, j0, j1)
+        light = self._light_background()
+        key = (s, i0, i1, j0, j1, light)
         if self._grid_buf is None or self._grid_buf[3] != key:
             if self._grid_buf is not None:
                 self._grid_buf[0].destroy()
@@ -1141,13 +1146,15 @@ class Viewport(QOpenGLWidget):
             # determined by `key` (stable while panning within the same cells)
             gy0, gy1 = j0 * s - oy, j1 * s - oy
             gx0, gx1 = i0 * s - ox, i1 * s - ox
+            major = self.GRID_MAJOR_LIGHT if light else self.GRID_MAJOR
+            minor = self.GRID_MINOR_LIGHT if light else self.GRID_MINOR
             verts = []
             for i in range(i0, i1 + 1):
-                color = self.GRID_MAJOR if i % 5 == 0 else self.GRID_MINOR
+                color = major if i % 5 == 0 else minor
                 verts.append((i * s - ox, gy0, color))
                 verts.append((i * s - ox, gy1, color))
             for j in range(j0, j1 + 1):
-                color = self.GRID_MAJOR if j % 5 == 0 else self.GRID_MINOR
+                color = major if j % 5 == 0 else minor
                 verts.append((gx0, j * s - oy, color))
                 verts.append((gx1, j * s - oy, color))
             data = np.zeros(len(verts), dtype=VERTEX_DTYPE)

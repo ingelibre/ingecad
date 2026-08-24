@@ -71,6 +71,7 @@ class _CacheWarmer(QThread):
 
     def __init__(self, document) -> None:
         super().__init__()
+        self.setObjectName("cache-warmer")
         self._document = document
 
     def run(self) -> None:
@@ -93,6 +94,7 @@ class _GhostWorker(QThread):
 
     def __init__(self, document, ents, flatten: float) -> None:
         super().__init__()
+        self.setObjectName("ghost")
         self._document = document
         self._ents = ents
         self._flatten = flatten
@@ -1850,6 +1852,7 @@ class ToolController(QObject):
                 # stays OUT of the vector overlay: drawing an IMAGE through
                 # the frontend decodes its file, and pending_render would
                 # redo that on every later overlay refresh until the merge.
+                self._refresh_overlay()   # drop whatever the grab mounted
                 if self._sync_image_quad(entity):
                     self._merge_timer.start()
                 else:
@@ -1902,7 +1905,14 @@ class ToolController(QObject):
         if self._grip_drag is None:
             return []
         entity = self.index.entity(self._grip_drag[0])
-        return [entity] if entity is not None and entity.is_alive else []
+        if entity is None or not entity.is_alive:
+            return []
+        if entity.dxftype() == "IMAGE":
+            # Never in the vector overlay: rendering an IMAGE decodes its
+            # file, and the overlay built at grab time kept the OLD frame
+            # on screen until the merge — the live quad is the feedback.
+            return []
+        return [entity]
 
     def highlight_geometry(self):
         """(segments, circles, boxes) of the current selection, world coords.

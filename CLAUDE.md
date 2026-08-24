@@ -419,6 +419,49 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-24 (sexto) — el fondo del modelo es del usuario (y dos cierres que mataban la app)
+
+**Pedido de Marco antes de la 0.4.5: fondo del model configurable (colegas
+que prefieren blanco o crema), «averigua cómo lo implementa AutoCAD y hazlo
+idéntico».** AutoCAD: Options ▸ Display ▸ botón **Colors…** → diálogo
+*Drawing Window Colors* (lista de contextos × elementos, combo de color con
+Select Color…, preview, y 4 botones Restore incluido «classic colors» =
+model negro). Implementado tal cual: `core/window_colors.py` (modelo
+headless en QSettings), `views/window_colors_dialog.py`, botón en Options ▸
+Display, contextos model / sheet-desk / block-editor.
+
+**Lo que hace que sea de verdad idéntico (y no un glClearColor):** el color
+elegido entra a las **layout properties del contexto de render**
+(`TolerantRenderContext.set_current_layout` override para Model;
+`set_colors` directo en el build del Block Editor) → **ACI 7 se voltea**
+(negro sobre claro), **las máscaras de texto rellenan con el lienzo**, la
+rejilla cambia a grises claros (`GRID_*_LIGHT`, flag en la key del buffer),
+y el crosshair automático ya se adaptaba por luminancia
+(`_light_background`). Cambiar el fondo = REGEN (colores re-resueltos), no
+repaint — el diálogo lo dispara al OK. Verificado con captura del plano
+real de Marco en blanco y crema: líneas negras, colores de entidad
+intactos, imagen raster bien. 9 tests nuevos + i18n es completo.
+
+**Y dos cierres que MATABAN el proceso (SIGABRT), cazados porque la app que
+le lancé a Marco se murió dos veces al cerrarla:**
+1. **Cerrar con una regen en vuelo**: closeEvent aceptaba con el QThread
+   vivo → Qt aborta el proceso entero. `_drain_workers()` une regen worker
+   (señal desconectada: el resultado ya no se quiere), open thread, warmers
+   y ghost workers, y para el merge timer.
+2. **El hilo de miniaturas de la ventana de inicio**: `accept()`/`reject()`
+   NO pasan por closeEvent → elegir un dibujo dejaba al worker renderizando
+   DWGs sin dueño → abort al salir. Y unir en `done()` bloqueaba el accept
+   **11 s medidos** (la miniatura en curso renderiza el plano entero). La
+   solución: `done()` hace stop + **aparca el worker en un registro de
+   huérfanos** (accept = 1 ms) y `_drain_workers` los une al salir.
+   ⚠️ Todos los QThreads llevan ahora `setObjectName` — el abort de Qt
+   imprime el nombre y el próximo dirá quién fue.
+
+**Pendiente de publicar (0.4.5, esperando el OK de Marco):** guardado de
+párrafos + imágenes raster quirúrgicas + cierres limpios + fondo
+configurable. Marco además anotó: «hay muchas cosas por pulir en cuanto a
+rendimiento, en la próxima versión puliremos».
+
 ## 🗓 Sesión 2026-08-24 (quinto) — redimensionar una imagen tardaba segundos
 
 **Marco: arrastrar el cuadradito verde de una imagen insertada «tarda unos

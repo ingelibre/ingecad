@@ -2,6 +2,22 @@
 
 ## v0.4.5 — unreleased
 
+### Added — the model background is yours (Drawing Window Colors)
+Colleagues who draw on white or cream can now have it: **Options ▸ Display
+▸ Colors...** opens AutoCAD's *Drawing Window Colors* dialog — context
+list (2D model space, Sheet / layout, Block editor), interface elements
+(Uniform background, Crosshairs), the colour drop-down with *Select
+Color...*, a live preview, and the four restore buttons including
+**Restore classic colors** (the black model space of old AutoCAD).
+
+The choice is more than a clear colour, and this is where being identical
+matters: **ACI-7 entities flip** (white over dark, black over light — the
+plan stays readable on any canvas), **text background masks fill with the
+canvas colour**, the grid switches to light-canvas grays, and the
+automatic crosshair inverts — all resolved at tessellation time, so
+applying a background change triggers the regen it needs. The sheet desk
+and the Block Editor canvas are configurable from the same dialog.
+
 ### Fixed — resizing an inserted image took seconds to take effect
 Marco: drag a corner grip of a raster reference and wait. Measured: the
 drop forced a full re-tessellation of the drawing — **9.4 s on a real

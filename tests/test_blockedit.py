@@ -151,7 +151,8 @@ def test_names_that_cannot_open(doc) -> None:
 
 
 def test_the_editor_scene_shows_the_block_alone(doc) -> None:
-    from render.backend import BLOCK_EDITOR_BACKGROUND, build_scene
+    from core import window_colors
+    from render.backend import build_scene
 
     history = History(doc)
     session = blockedit.BlockEditSession.begin(doc, history, "SILLA")
@@ -159,7 +160,8 @@ def test_the_editor_scene_shows_the_block_alone(doc) -> None:
     total = sum(len(getattr(scene, b).data)
                 for b in ("lines", "thick", "triangles", "points"))
     assert total == 2                       # ONE line: not the two inserts
-    assert scene.background == BLOCK_EDITOR_BACKGROUND
+    assert scene.background == window_colors.rgba("block_editor")
     session.close(save=True)
     after = build_scene(doc)
-    assert after.background is None         # back in the model's own room
+    # back in the model's own room (which now always names its colour)
+    assert after.background == window_colors.rgba("model")

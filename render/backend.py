@@ -50,15 +50,9 @@ HATCH_DENSITY_REL = 1.0 / 64.0
 HATCHING_TIMEOUT = 5.0
 
 
-# Layout-tab canvas: the gray "desk" around the white paper sheet (AutoCAD's
-# paper background). Slightly lighter than the model-space dark so the two
-# spaces read differently at a glance.
-PAPER_SURROUND = (0.235, 0.255, 0.275, 1.0)
-#: Canvas of the Block Editor. Both AutoCAD and BricsCAD switch to a
-#: distinct background there (BricsCAD even has BKGCOLORDBEDIT for it), so
-#: the user always knows which "room" they are in. A warm dark tone against
-#: the cool dark of the model keeps the contrast without hurting colors.
-BLOCK_EDITOR_BACKGROUND = (0.176, 0.157, 0.129, 1.0)
+# The canvas colours (model dark, the gray "desk" around the paper sheet,
+# the Block Editor's warm tone) live in core.window_colors now — the user
+# picks them in the Drawing Window Colors dialog, defaults unchanged.
 
 
 # Entity types whose fills are text glyphs; they dominate label-heavy plans
@@ -501,6 +495,21 @@ class TolerantRenderContext(RenderContext):
 
             self.document_dir = pathlib.Path.cwd()
 
+    def set_current_layout(self, layout, ctb: str = ""):
+        super().set_current_layout(layout, ctb)
+        if layout.name == "Model":
+            # The user's canvas colour, where ezdxf resolves against it:
+            # ACI 7 flips to black over a light background, and the text
+            # background masks fill with the canvas colour. Both come from
+            # current_layout_properties, so a white model canvas is wrong
+            # everywhere unless the choice lands HERE. Sheets keep ezdxf's
+            # paper-white properties: their viewports already resolve
+            # against paper.
+            from core import window_colors
+
+            self.current_layout_properties.set_colors(
+                window_colors.background("model"))
+
     def resolve_all(self, entity):
         try:
             return super().resolve_all(entity)
@@ -879,13 +888,19 @@ def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     scene.skipped = list(frontend.skipped)
     scene.layout_name = layout_name
     scene.flatten = flatten
+    if layout_name is None:
+        from core import window_colors
+
+        scene.background = window_colors.rgba("model")
     if layout_name is not None:
         # Layout tab look: gray desk around a white paper sheet (the viewport
         # draws the sheet itself from scene.paper). Entity colors were already
         # resolved by ezdxf against a white background, so ACI 7 reads black.
         from core.layouts import paper_frame
 
-        scene.background = PAPER_SURROUND
+        from core import window_colors
+
+        scene.background = window_colors.rgba("sheet")
         try:
             scene.paper = paper_frame(layout)
         except Exception:
@@ -916,13 +931,20 @@ def _build_block_scene(document: Document) -> Scene:
                       MIN_FLATTEN)
     else:
         flatten = 0.01                     # a brand-new, still-empty block
+    from core import window_colors
+
     backend = VertexBackend(flatten, order_groups(block))
     context = TolerantRenderContext(document.doc)
+    # draw_entities never calls set_current_layout, so the editor's canvas
+    # colour is applied to the resolution properties directly — same reason
+    # as the Model override above (ACI 7 flip, text masks).
+    context.current_layout_properties.set_colors(
+        window_colors.background("block_editor"))
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
     frontend.hidden_handles = frozenset(hidden_handles(document))
     frontend.draw_entities(block)
     scene = pack(backend.buckets, None, images=backend.images)
     scene.skipped = list(frontend.skipped)
     scene.flatten = flatten
-    scene.background = BLOCK_EDITOR_BACKGROUND
+    scene.background = window_colors.rgba("block_editor")
     return scene

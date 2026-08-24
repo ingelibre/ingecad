@@ -84,6 +84,7 @@ class RegenWorker(QThread):
 
     def __init__(self, document: Document, layout: str, revision: int) -> None:
         super().__init__()
+        self.setObjectName("regen")       # names the thread in Qt's aborts
         self._document = document
         self._layout = layout
         self._revision = revision
@@ -3246,8 +3247,14 @@ class MainWindow(QMainWindow):
             thread.quit()
             thread.wait()
             self._open_thread = None
+        from views import startup_dialog as _startup
+
+        _startup.drain_orphans()    # thumbnail workers the dialog left behind
         tools = getattr(self, "tools", None)
         if tools is not None:
+            timer = getattr(tools, "_merge_timer", None)
+            if timer is not None:
+                timer.stop()
             for attr in ("_warmers", "_ghost_workers"):
                 for w in list(getattr(tools, attr, ()) or ()):
                     w.wait()
@@ -3318,6 +3325,7 @@ class MainWindow(QMainWindow):
         self._opening_name = path.name
         self._set_busy(tr("Opening {name}...", name=path.name))
         thread = QThread(self)
+        thread.setObjectName("open-drawing")
         worker = _OpenWorker(path)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)

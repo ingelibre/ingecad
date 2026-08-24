@@ -171,6 +171,17 @@ class OptionsDialog(QDialog):
 
         # AutoCAD's own group on this tab (p.1348): how smooth curves and
         # edges are drawn.
+        box = QGroupBox(tr("Window Elements"), page)
+        elements_row = QHBoxLayout(box)
+        self.colors_button = QPushButton(tr("Colors..."), box)
+        self.colors_button.setToolTip(
+            tr("Background of the model, sheets and the Block Editor — "
+               "AutoCAD's Drawing Window Colors."))
+        self.colors_button.clicked.connect(self._open_window_colors)
+        elements_row.addWidget(self.colors_button)
+        elements_row.addStretch(1)
+        outer.addWidget(box)
+
         box = QGroupBox(tr("Display resolution"), page)
         grid = QFormLayout(box)
         self.msaa = QComboBox(box)
@@ -239,6 +250,24 @@ class OptionsDialog(QDialog):
             self.crosshair_swatch.setText("")
             self.crosshair_swatch.setStyleSheet(
                 f"background-color: {color.name()};")
+
+    def _open_window_colors(self) -> None:
+        from views.window_colors_dialog import WindowColorsDialog
+
+        dialog = WindowColorsDialog(self)
+        if dialog.exec() != WindowColorsDialog.Accepted:
+            return
+        # the Display tab's own swatch mirrors the dialog's crosshair edit
+        from views import viewport as viewport_prefs
+
+        self._crosshair_color = viewport_prefs.crosshair_color()
+        self._show_crosshair_swatch()
+        if dialog.changed_backgrounds():
+            # ACI 7 flips and text masks refill against the new canvas:
+            # only a regen re-resolves those colours.
+            window = self.parent()
+            if window is not None and hasattr(window, "regen_in_memory"):
+                window.regen_in_memory()
 
     def _pick_crosshair_color(self) -> None:
         from PySide6.QtWidgets import QColorDialog
