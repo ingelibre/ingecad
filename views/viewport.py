@@ -722,6 +722,49 @@ class Viewport(QOpenGLWidget):
         vbo.release()
         return (tex, vao, vbo, image.group, image.handle)
 
+    def show_image(self, handle) -> None:
+        """Un-hide one raster quad (hide_handles hides frame AND pixels)."""
+        self._hidden_images.discard(handle)
+        self.update()
+
+    def update_image_quad(self, handle, corners_wcs) -> None:
+        """Move/resize one raster IMAGE without a regen.
+
+        The texture never changes when an image is dragged or resized —
+        only the four corners of its quad do. Rewriting those 6 vertices
+        replaces what used to be a full re-tessellation of the drawing
+        (9.4 s on a real plan for one grip drop).
+        """
+        if self._scene is None:
+            return
+        ox, oy = self._scene.origin
+        c = np.array([(x - ox, y - oy) for x, y in corners_wcs],
+                     dtype=np.float32)
+        for image in getattr(self._scene, "images", []):
+            if image.handle == handle:
+                image.corners = c      # survives a later full re-upload
+                break
+        else:
+            return
+        quad = np.array([
+            [c[0][0], c[0][1], 0.0, 1.0],
+            [c[1][0], c[1][1], 1.0, 1.0],
+            [c[2][0], c[2][1], 1.0, 0.0],
+            [c[0][0], c[0][1], 0.0, 1.0],
+            [c[2][0], c[2][1], 1.0, 0.0],
+            [c[3][0], c[3][1], 0.0, 0.0],
+        ], dtype=np.float32)
+        for _tex, _vao, vbo, _group, h in self._image_bufs:
+            if h == handle:
+                self.makeCurrent()
+                vbo.bind()
+                raw = quad.tobytes()
+                vbo.write(0, raw, len(raw))
+                vbo.release()
+                self.doneCurrent()
+                break
+        self.update()
+
     def _draw_images(self, gl, mvp, front: bool) -> None:
         """The raster quads: group <= 0 under the vectors, > 0 over them."""
         if not self._image_bufs:

@@ -1130,6 +1130,12 @@ class ToolController(QObject):
             # (a dimension drawn seconds ago) would otherwise queue it twice
             # and tessellate it twice on every refresh.
             for entity in new_ents:
+                if entity.dxftype() == "IMAGE" and self._sync_image_quad(entity):
+                    # a MOVEd/ROTATEd image: its pixels are repositioned
+                    # surgically, and queuing it would decode its file on
+                    # every overlay refresh until the merge. A fresh COPY
+                    # has no quad yet — sync fails and it queues normally.
+                    continue
                 if entity not in self._pending_render:
                     self._pending_render.append(entity)
             alive = [e for e in new_ents if e.is_alive]
@@ -1211,9 +1217,21 @@ class ToolController(QObject):
         hide += [e.dxf.handle for e in touched if e.is_alive]
         if hide:
             self.window.viewport.hide_handles(hide)
+        # Raster images first, on TOUCHED and not on alive: a snapshot
+        # restore leaves the entity momentarily owner-less, and the alive
+        # filter below would skip it — the quad then stayed where the drag
+        # left it. The quad needs only a live entity; keeping the IMAGE out
+        # of the overlay also avoids decoding its file per refresh.
+        synced = set()
+        for e in touched:
+            if (e.is_alive and e.dxftype() == "IMAGE"
+                    and self._sync_image_quad(e)):
+                synced.add(id(e))
         alive = [e for e in touched
                  if e.is_alive and e.dxf.owner is not None]
         for e in alive:
+            if id(e) in synced:
+                continue
             if e not in self._pending_render:
                 self._pending_render.append(e)
         patchable = self._KNOWN_MODIFY + (
@@ -1714,14 +1732,14 @@ class ToolController(QObject):
         if entity is None:
             return
         snap = SnapshotCommand([entity])   # captures the pre-grab state
-        if entity.dxftype() == "IMAGE":
-            # Undo/redo of an image grip must regen: the overlay cannot
-            # move pixels, only the frame.
-            snap.needs_regen = True
         self._grip_drag = (handle, index, role, snap)
         # Hide the base-scene copy ONCE (a full-scene re-upload); from here
         # the live entity rides the cheap 1-entity overlay each frame.
         self.window.viewport.hide_handles([handle])
+        if entity.dxftype() == "IMAGE":
+            # hide_handles hides the frame AND the pixels; the pixels can
+            # stay — the drag moves their quad surgically, no regen.
+            self.window.viewport.show_image(handle)
         self._refresh_overlay()
 
     def grip_target(self, wx: float, wy: float) -> tuple[float, float]:
@@ -1759,6 +1777,14 @@ class ToolController(QObject):
                 self.window.viewport.update()
                 return
             apply_grip_edit(entity, index, role, (wx, wy))
+            if entity.dxftype() == "IMAGE":
+                # the pixels ride along live (6 quad vertices per frame) and
+                # the vector overlay is skipped: the frontend cannot draw an
+                # IMAGE without DECODING its file, which on a scanned sheet
+                # put a 36 MB PIL decode inside every mouse move.
+                self._sync_image_quad(entity)
+                self.window.viewport.update()
+                return
             # per frame: rebuild only the dragged entity's overlay — no
             # index rebuild, no whole-scene re-upload
             self._refresh_overlay()
@@ -1818,6 +1844,19 @@ class ToolController(QObject):
             if self.index is not None:
                 self.index.remove_handles([handle])
                 self.index.add_entities([entity])
+            if entity.dxftype() == "IMAGE":
+                # The pixels are already at their new place (the live quad);
+                # the frame catches up at the deferred merge. The entity
+                # stays OUT of the vector overlay: drawing an IMAGE through
+                # the frontend decodes its file, and pending_render would
+                # redo that on every later overlay refresh until the merge.
+                if self._sync_image_quad(entity):
+                    self._merge_timer.start()
+                else:
+                    # no quad to move (file vanished): only a regen is right
+                    self.window.regen_in_memory()
+                self.changed.emit()
+                return
             # The base copy is hidden since the grab and the grip overlay
             # empties on release: without this the entity VANISHED until
             # the deferred merge regen (seconds on a big file).
@@ -1830,12 +1869,34 @@ class ToolController(QObject):
             # from the opened file moved instantly.
             self._base_handles.discard(handle)
             self._refresh_overlay()
-            if entity.dxftype() == "IMAGE":
-                # The overlay shows only the frame; the pixels need the
-                # real regen to land at their new size.
-                self.window.regen_in_memory()
-            else:
-                self._merge_timer.start()
+            self._merge_timer.start()
+
+    def _sync_image_quad(self, entity) -> bool:
+        """Reposition a raster image's pixels surgically; True on success.
+
+        The texture is untouched by a move or resize — only the quad's four
+        corners change, computed from the entity's own transform (no pixel
+        load, no frontend: pure math per mouse move). False sends the
+        caller to a regen, e.g. when the scene holds no quad for it.
+        """
+        from render.backend import image_corners_wcs
+
+        handle = entity.dxf.handle
+        scene = self.window.viewport._scene
+        quad = None
+        for im in getattr(scene, "images", []) if scene is not None else []:
+            if im.handle == handle:
+                quad = im
+                break
+        if quad is None:
+            return False
+        height, width = quad.pixels.shape[:2]
+        corners = image_corners_wcs(entity, (width, height))
+        if corners is None:
+            return False
+        self.window.viewport.update_image_quad(handle, corners)
+        self.window.viewport.show_image(handle)
+        return True
 
     def grip_overlay_entities(self):
         if self._grip_drag is None:

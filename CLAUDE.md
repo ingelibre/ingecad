@@ -419,6 +419,43 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-24 (quinto) — redimensionar una imagen tardaba segundos
+
+**Marco: arrastrar el cuadradito verde de una imagen insertada «tarda unos
+segundos en hacer efecto».** Medido con su gesto exacto: el drop forzaba
+regen completo — **9,4 s en un plano real** — cuando mover/redimensionar una
+imagen **jamás cambia la textura**: solo cambian las 4 esquinas de su quad
+(6 vértices en un VBO). Reescribirlas es todo el trabajo.
+
+**Lo que quedó:** los píxeles siguen al mouse EN VIVO (0,04 ms/move), el
+drop ~80 ms, MOVE de imagen 2 ms, y undo/redo quirúrgicos y exactos
+(0,000000 de error contra el rebuild completo, medido).
+
+⚠️ **La segunda mitad del tirón fue la sutil, y mi primera hipótesis del
+overlay FALLÓ (medida, no argumentada): dibujar un IMAGE por el frontend
+de ezdxf DECODIFICA su archivo** (PIL load+convert en
+`draw_image_entity`, aguas ARRIBA del backend — mi backend "sin píxeles"
+no evitaba nada, lo dijo cProfile: 2,9 s de `Image.convert` en 10 moves).
+Con una lámina escaneada eran 36 MB decodificados POR MOVIMIENTO. Regla
+nueva: **las entidades raster no viajan nunca en el overlay vectorial** —
+el quad vivo ES el feedback; una COPY nueva (sin quad) sí pasa por el
+overlay para nacer visible.
+
+⚠️ **Trampa fina del undo:** la restauración de un snapshot deja a la
+entidad momentáneamente SIN owner, y el filtro `owner is not None` del
+camino quirúrgico post-undo la saltaba — el quad se quedaba donde el drag
+lo dejó aunque los atributos ya estaban restaurados. El sync de imágenes
+corre sobre `touched` (vivas), no sobre `alive`.
+
+**La matemática de esquinas vive en UNA función** (`_image_quad_corners`,
+compartida por el build completo y el camino quirúrgico vía
+`image_corners_wcs(entity, pixel_size)` = puro
+`entity.get_wcs_transform()`, cero I/O) — el test de igualdad contra el
+rebuild impide el drift. 4 tests nuevos con prueba inversa.
+
+**En main, SIN publicar** — va en el mismo tren 0.4.5 que el arreglo del
+guardado, esperando el OK de Marco.
+
 ## 🗓 Sesión 2026-08-24 (quater) — el guardado apilaba los párrafos (v0.4.5, sin publicar)
 
 **Regla nueva de proceso, pedida por Marco tras la 0.4.4: NO publicar release

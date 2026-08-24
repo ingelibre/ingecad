@@ -2,6 +2,26 @@
 
 ## v0.4.5 — unreleased
 
+### Fixed — resizing an inserted image took seconds to take effect
+Marco: drag a corner grip of a raster reference and wait. Measured: the
+drop forced a full re-tessellation of the drawing — **9.4 s on a real
+plan** — while a move or resize never changes the texture at all, only the
+four corners of its quad. Rewriting those 6 vertices is the whole job:
+
+- **the pixels follow the mouse live** now (0.04 ms per move, was 325 ms
+  with a scanned sheet), and the drop costs ~80 ms instead of seconds;
+- **MOVE of an image is instant** too (2 ms, no regen), instead of the
+  image vanishing until the deferred rebuild;
+- **undo/redo reposition the quad surgically** as well, exact against the
+  full rebuild to the last float (0.000000 measured error).
+
+The second half of the stall was subtler: drawing an IMAGE through the
+render frontend **decodes its file** (a 36 MB PIL decode per mouse move on
+a scanned sheet), so raster entities now stay out of the vector overlay
+entirely — the live quad is the feedback. The corner math is shared with
+the full build through one function, so the surgical path can never drift
+from what the next regen draws.
+
 ### Fixed — Save as DWG stacked every paragraph onto its first line
 Marco, an hour into v0.4.4: original.dwg looked right, the copy saved from
 IngeCAD drew every two-line label as two lines superimposed on one. The text

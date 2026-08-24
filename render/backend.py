@@ -67,6 +67,23 @@ BLOCK_EDITOR_BACKGROUND = (0.176, 0.157, 0.129, 1.0)
 _TEXT_TYPES = frozenset(("TEXT", "MTEXT", "ATTRIB", "ATTDEF"))
 
 
+def _image_quad_corners(image_data) -> Optional[list]:
+    """The image's WCS quad, WITHOUT touching the pixels.
+
+    One home for the corner math: the full build and the surgical
+    move/resize both call this, so they cannot drift apart. Accessing
+    ``image_data.image`` is what loads the file from disk — a live grip
+    drag must not pay that per mouse move on a scanned sheet.
+    """
+    w, h = image_data.image_size()
+    if not w or not h:
+        return None
+    m = image_data.transform
+    return [(c.x, c.y) for c in
+            (m.transform((x, y, 0.0))
+             for (x, y) in ((0.0, 0.0), (w, 0.0), (w, h), (0.0, h)))]
+
+
 class VertexBackend(Backend):
     """Collects frontend primitives into per-(layer, color) buckets."""
 
@@ -279,15 +296,12 @@ class VertexBackend(Backend):
         clip FRAME is drawn by the frontend either way; pixel-exact clipping
         can come later without touching the format.
         """
-        w, h = image_data.image_size()
-        if not w or not h:
+        corners = _image_quad_corners(image_data)
+        if corners is None:
             return
-        m = image_data.transform
-        corners = [m.transform((x, y, 0.0))
-                   for (x, y) in ((0.0, 0.0), (w, 0.0), (w, h), (0.0, h))]
         self.images.append({
             "pixels": image_data.image,
-            "corners": [(c.x, c.y) for c in corners],
+            "corners": corners,
             "handle": self._handle,
             "group": self._group,
         })
@@ -746,12 +760,53 @@ def build_scene_for_entities(document: Document, entities, flatten: float) -> Sc
     """
     from core.isolate import hidden_handles
 
-    backend = VertexBackend(flatten)
+    # The overlay never draws raster quads (pack() below is not handed the
+    # images), so loading their pixels here was pure waste — and during a
+    # live image grip drag this runs per mouse move, which on a scanned
+    # sheet re-read 36 MB from disk 30 times per second.
+    backend = _CornersOnlyBackend(flatten)
     context = TolerantRenderContext(document.doc)
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
     frontend.hidden_handles = frozenset(hidden_handles(document))
     frontend.draw_entities(entities)
     return pack(backend.buckets, _declared_extents(document))
+
+
+class _CornersOnlyBackend(VertexBackend):
+    """VertexBackend that captures the image quad without keeping pixels."""
+
+    def draw_image(self, image_data, properties) -> None:
+        corners = _image_quad_corners(image_data)
+        if corners is not None:
+            self.images.append({"corners": corners,
+                                "handle": self._handle,
+                                "group": self._group})
+
+
+def image_corners_wcs(entity, pixel_size) -> Optional[list]:
+    """The 4 WCS corners a regen would give this IMAGE, without the regen.
+
+    Pure math over the entity's own transform — the drawing add-on builds
+    its quad from ``image.get_wcs_transform()`` over the pixel rectangle,
+    which is exactly what this computes. The pixels are never touched, and
+    neither is the frontend: profiling showed ``draw_image_entity`` loads
+    and converts the file with PIL before any backend runs, which put a
+    36 MB decode inside every mouse move of a live image drag.
+
+    ``pixel_size`` is (width, height) of the ACTUAL loaded raster — the
+    caller has it in the scene's quad — because the file's real size wins
+    over the declared one in the full build too.
+    """
+    w, h = pixel_size
+    if not w or not h:
+        return None
+    try:
+        m = entity.get_wcs_transform()
+    except Exception:
+        return None
+    return [(c.x, c.y) for c in
+            (m.transform((x, y, 0.0))
+             for (x, y) in ((0.0, 0.0), (w, 0.0), (w, h), (0.0, h)))]
 
 
 def _draw_viewport_borders(layout, context, backend) -> None:
