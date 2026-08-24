@@ -117,6 +117,12 @@ class MainWindow(QMainWindow):
         # Measured regen cost per layout (ms): whether a live synchronous
         # rebuild is affordable during a viewport pan/zoom gesture.
         self._regen_ms: dict[str, float] = {}
+        #: layout name -> (document revision, built Scene). Serves ONLY the
+        #: Model/Layout tab switch: every other regen request means "the
+        #: scene is stale" and empties it (display settings such as VIEWRES
+        #: change the tessellation without touching the revision, so the
+        #: revision alone cannot be trusted as the cache key).
+        self._layout_scenes: dict[str, tuple[int, object]] = {}
         self._layers_dock = None
         self._layers_panel = None
         self._active_vp = None    # MSPACE-activated viewport entity, if any
@@ -1374,6 +1380,7 @@ class MainWindow(QMainWindow):
         self._drop_block_session()
         self.document = templates_mod.new_document(
             template or self.startup_template())
+        self._layout_scenes.clear()   # scenes of the previous drawing
         self._active_layout = "Model"
         self._deactivate_viewport()
         self._update_space_button()
@@ -2033,6 +2040,7 @@ class MainWindow(QMainWindow):
         """
         if self.document is None:
             return
+        self._layout_scenes.clear()   # whoever asks for a regen calls it stale
         self._regen_zoom = self._regen_zoom or zoom_after
         if self._regen_worker is not None:
             self._regen_rerun = True
@@ -2064,6 +2072,7 @@ class MainWindow(QMainWindow):
             return
         self.viewport.set_scene(scene)
         self.tools.mark_scene_merged()
+        self._layout_scenes[layout] = (revision, scene)
         if self._regen_zoom:
             self._regen_zoom = False
             self.viewport.zoom_extents()
@@ -2992,7 +3001,21 @@ class MainWindow(QMainWindow):
         # this tab in AutoCAD too (ezdxf does not touch the header itself).
         layout_ops.switch_active(self.document, name)
         self._active_layout = name
-        self.regen_in_memory(zoom_after=True)   # zooms when the scene lands
+        cached = self._layout_scenes.get(name)
+        if (cached is not None and cached[0] == self.document.revision
+                and self._regen_worker is None):
+            # Coming back to a tab already built at this revision: adopt the
+            # kept scene instead of re-tessellating the whole drawing (which
+            # made every Model/Layout switch cost seconds on a real plan).
+            self.viewport.set_scene(cached[1])
+            self.tools.mark_scene_merged()
+            self.viewport.zoom_extents()
+        else:
+            self._regen_zoom = True
+            if self._regen_worker is not None:
+                self._regen_rerun = True
+            else:
+                self._start_regen()
         self._refresh_layout_tabs()
         self._update_space_button()
         if name != "Model":
@@ -3293,12 +3316,16 @@ class MainWindow(QMainWindow):
         self._open_as_template = False
         self._drop_block_session()
         self.document = document
+        self._layout_scenes.clear()   # scenes of the previous drawing
         self._deactivate_viewport()
         # the open may have fallen back to a paper layout (empty modelspace)
         self._active_layout = scene.layout_name or "Model"
         self._refresh_layout_tabs()
         self._update_space_button()
         self.viewport.set_scene(scene)
+        # The open built this tab's scene: keep it, so the first switch away
+        # and back does not re-tessellate an untouched drawing.
+        self._layout_scenes[self._active_layout] = (document.revision, scene)
         self.viewport.zoom_extents()
         self.tools.attach_document(document, flatten=scene.flatten)
         if self._layers_panel is not None:

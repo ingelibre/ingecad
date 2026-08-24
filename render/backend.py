@@ -158,6 +158,19 @@ class VertexBackend(Backend):
     def draw_filled_polygon(
         self, points: BkPoints2d, properties: BackendProperties
     ) -> None:
+        if self._kind == "T":
+            # Inside a text entity this call is the BACKGROUND MASK (the
+            # glyphs arrive through draw_filled_paths). It must paint under
+            # the glyphs, but batching splits them into sibling buckets
+            # keyed by colour, and the pack order between siblings is
+            # alphabetical: on a sheet the window-colour mask is paper
+            # white, "#ffffff" sorts after the black glyphs, and every
+            # masked label erased its own text. (The model tab survived by
+            # luck: its mask colour "#212830" happens to sort first.)
+            # A kind of its own lets pack() slot masks between the ordinary
+            # fills and the glyphs.
+            self._fill_as(points.vertices(), [], properties, "TM")
+            return
         self._fill(points.vertices(), [], properties)
 
     def draw_filled_paths(
@@ -225,6 +238,21 @@ class VertexBackend(Backend):
                 bucket.text_count += 1
         for exterior, holes in groups:
             self._fill(exterior, holes, properties)
+
+    def _fill_as(
+        self,
+        exterior: list[Vec2],
+        holes: list[list[Vec2]],
+        properties: BackendProperties,
+        kind: str,
+    ) -> None:
+        """``_fill`` into a bucket of ``kind`` instead of the entity's."""
+        keep = self._kind
+        self._kind = kind
+        try:
+            self._fill(exterior, holes, properties)
+        finally:
+            self._kind = keep
 
     def _fill(
         self,
@@ -561,6 +589,10 @@ class TolerantFrontend(Frontend):
         self._vp_rect: Optional[tuple[float, float, float, float]] = None
         #: entity id -> model bounding box, computed once for the whole build
         self._vp_boxes: dict[int, Optional[tuple]] = {}
+        # MULTILEADER: draw the real content, never the baked proxy picture
+        # (white-box masks). See draw_mleader_entity.
+        self._dispatch["MULTILEADER"] = self.draw_mleader_entity
+        self._dispatch["MLEADER"] = self.draw_mleader_entity
 
     #: Handles hidden by ISOLATEOBJECTS/HIDEOBJECTS. Display only: the
     #: entity stays in the document, it is simply not drawn.
@@ -617,6 +649,38 @@ class TolerantFrontend(Frontend):
             return False        # unmeasurable: always draw
         x0, y0, x1, y1 = rect
         return box[2] < x0 or box[0] > x1 or box[3] < y0 or box[1] > y1
+
+    def draw_mleader_entity(self, entity, properties) -> None:
+        """Draw a MULTILEADER from its real content, not its proxy graphic.
+
+        ezdxf lists MULTILEADER among the proxy-graphic-only entities, so
+        whenever the entity carries a proxy graphic it replays the picture
+        the SAVING program baked into the file. That picture hard-codes the
+        text background mask in the saving machine's window colour — a white
+        HATCH on every plan a colleague saved over a white canvas — and the
+        label text in colours that white swallows. Marco's fence plan: every
+        leader was a blank white box.
+
+        The native render engine resolves the actual MTEXT instead, with the
+        mask as ``bg_fill = 3`` (window colour), which the drawing add-on
+        correctly declines to fill. The proxy graphic stays as the fallback
+        for the day the engine cannot digest a broken leader.
+        """
+        from ezdxf.render import mleader as _mleader
+
+        try:
+            children = list(
+                _mleader.virtual_entities(entity, proxy_graphic=False))
+        except Exception as exc:
+            logger.warning("MULTILEADER #%s native render failed (%s); "
+                           "falling back to its proxy graphic",
+                           getattr(entity.dxf, "handle", "?"), exc)
+            children = []
+        if not children:
+            if entity.proxy_graphic:
+                self.draw_proxy_graphic(entity.proxy_graphic, entity.doc)
+            return
+        self.draw_entities(children)
 
     def draw_entity(self, entity, properties) -> None:
         if self._vp_rect is not None and self._outside_viewport(entity):

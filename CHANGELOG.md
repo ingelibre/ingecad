@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.4.4 — 2026-08-24
+
+Marco opened a fence plan next to BricsCAD and reported three things. All
+three were real, and none was what it looked like.
+
+### Fixed — every leader label was a blank white box
+The model's 302 labels ("CERCO CON ALAMBRE DE PÚAS", "MALLA DE ALAMBRE…")
+are MULTILEADERs, and ezdxf draws a MULTILEADER only from its **proxy
+graphic** — the picture the saving program baked into the file. That picture
+hard-codes the text's background mask as a HATCH in the *saving* machine's
+window colour — white — and the text in colours white swallows. IngeCAD now
+renders the real content through ezdxf's native leader engine: the text, its
+leader lines and the arrow, with the mask correctly left unfilled. The proxy
+picture stays as the fallback for leaders the engine cannot digest.
+
+### Fixed — the title block's text was erased by its own mask
+The sheet's WIPEOUT (layer "0", filled in paper white) painted **over** the
+labels of layer "-Textos": batching by (layer, colour) re-orders what the
+file interleaves, and "0" sorts after "-Textos". Text now draws after every
+fill of its draw-order group — a label is never meant to sit under a mask.
+An explicit DRAWORDER "bring to front" still wins over text, as asked.
+
+The same mechanism hid one layer deeper, and the sheet exposed it: a masked
+label's own background quad and its glyphs land in sibling buckets keyed by
+colour, and alphabetical order painted paper-white masks **after** black
+glyphs — every masked label on a sheet erased its own text. The model tab
+survived by pure luck: its canvas colour happens to sort first. Text masks
+now carry a kind of their own and pack between the ordinary fills and the
+glyphs, so the order is right by construction, in both spaces, whatever the
+colours.
+
+### Fixed — switching Model/Layout tabs took seconds, every time
+Each tab switch launched a full re-tessellation of an unchanged drawing.
+The window now keeps the built scene per tab and re-adopts it when you come
+back: on the fence plan, **~1 s per switch became 5 ms / 1 ms**. Two things
+made it honest: the tab switch itself no longer bumps the document revision
+(it dirties the file — $TILEMODE must be saved — but changes no drawable
+content), and the scene built while *opening* the file seeds the cache, so
+the very first switch away and back already benefits. Any ordinary regen
+request still empties the cache, because display settings such as VIEWRES
+change the tessellation without touching the revision.
+
 ## v0.4.3 — 2026-08-24
 
 ### Fixed — File ▸ Open put up an error before showing the chooser

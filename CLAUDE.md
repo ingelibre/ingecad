@@ -419,6 +419,78 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-24 (ter) — v0.4.4: el plano de cercos contra BricsCAD
+
+**Marco abrió `0059_04.CERCOS PERIMETRICOS.dwg` al lado de BricsCAD y reportó
+tres cosas. Las tres eran reales y ninguna era lo que parecía.**
+
+**1. «El texto no se ve» (las 302 etiquetas del modelo eran cajas blancas).**
+No era texto sin implementar: son MULTILEADER, y ezdxf los dibuja SOLO desde
+su **gráfico proxy** (`_proxy_graphic_only_entities`, con TODO pendiente
+upstream) — la imagen que el programa que guardó horneó en el archivo, con la
+máscara del texto como HATCH del color de ventana de ESA máquina (blanco) y el
+texto en colores que el blanco se traga. `TolerantFrontend.draw_mleader_entity`
+renderiza ahora el contenido real (motor nativo de ezdxf, `bg_fill=3` para la
+máscara de color de ventana), con el proxy como reserva si el motor falla.
+⚠️ Un mleader creado por ezdxf NO lleva proxy → un test sintético pasa con y
+sin el arreglo; el test carga el blob proxy real del plano (1236 bytes,
+base64) para ejercitar el camino que falla.
+
+**2. «En el cajetín no se ve el texto» — y el hallazgo estructural del día.**
+El WIPEOUT del cajetín (capa «0», relleno blanco-papel) se pintaba ENCIMA de
+los rótulos de la capa «-Textos»: **el batching por (capa, color) destruye el
+orden de entidades del archivo**, y «0» ordena después de «-Textos». Primer
+arreglo: el texto se pinta al final de su grupo de DRAWORDER. Y al verificar
+en lámina apareció **el mismo mecanismo una capa más adentro**: la máscara de
+fondo de un MTEXT y sus glifos caen en buckets hermanos por color, y el orden
+alfabético pintaba la máscara blanca DESPUÉS de las letras negras — **cada
+etiqueta con máscara en una lámina borraba su propio texto. El modelo
+sobrevivía de pura suerte alfabética** («#212830» < «#ffffff»). La máscara
+lleva ahora kind propio «TM» (emitida por `draw_filled_polygon` bajo entidad
+de texto) y empaqueta entre los rellenos y los glifos: relleno < máscara <
+texto, por construcción, en los dos espacios.
+
+**3. «Pasar de layout a model tarda 2-3 segundos».** Cada cambio de pestaña
+relanzaba la reteselación completa. Ahora la ventana guarda la escena por
+pestaña (clave: revisión) y la re-adopta al volver: **~1 s → 5 ms / 1 ms** en
+el plano real. Tres piezas para que fuera verdad y no números de humo:
+- `switch_active` marcaba `dirty = True` y **eso subía la revisión** — el
+  propio cambio de pestaña invalidaba la caché. Nuevo
+  `Document.mark_dirty_no_revision()`: el archivo debe guardarse
+  ($TILEMODE), pero nada dibujable cambió.
+- La escena que construye el OPEN también siembra la caché (el open no pasa
+  por `_on_regen_done`; sin esto la primera vuelta re-teselaba igual).
+- **Todo `regen_in_memory` vacía la caché**: VIEWRES y el suavizado cambian
+  la teselación sin tocar la revisión, así que la revisión sola no puede ser
+  la llave. Sólo el cambio de pestaña consulta.
+
+⚠️ **Las lecciones de medición, cosechadas a pares esta sesión:**
+- Mi primer «cache HIT: 34 ms» era **la parte síncrona de un MISS** — el
+  regen es asíncrono y no lo esperé. El pytest honesto (`_regen_worker is
+  None` tras el switch) lo desmintió al instante.
+- Dos veces comparé coordenadas de ESCENA contra rects de MUNDO (los bounds
+  van en mundo, los vértices llevan el origin restado): un raster CPU «en
+  blanco» culpó a la escena cuando el error era mío. La tercera versión del
+  raster, con colores y orden reales, mostró la verdad: quad blanco encima
+  de letras negras.
+- `git checkout <archivo>` para «restaurar» durante una prueba inversa
+  **borra los arreglos no commiteados** — dos arreglos se esfumaron y hubo
+  que re-aplicarlos. Las pruebas inversas se hacen con sed/patch temporal,
+  nunca con checkout sobre árbol sucio.
+- Y otra vez el `pkill` del CLAUDE.md: `pkill -f "pytest -q"` en la misma
+  línea que relanza pytest se mató a sí mismo (exit 144), y mis watchers
+  `until ! pgrep -f pytest` se mantenían vivos MUTUAMENTE (cada uno ve el
+  patrón en la línea de comandos de los otros). Esperar por PID.
+
+**Verificado sobre el plano real:** modelo y lámina con las etiquetas
+legibles sobre su máscara (idéntico a BricsCAD lado a lado), cajetín completo
+(«MUNICIPALIDAD DISTRITAL DE CHICHAS», PCP-01…), cambio de pestañas
+instantáneo, y los tres planos de referencia (SEDAPAR/COFOPRI/COBERTURAS)
+construyen con sus números de siempre (COFOPRI clava los 2 143 191 vértices).
+**Pendiente conocido, no abierto:** el OLE2FRAME del cajetín (una tabla de
+Excel pegada) no se renderiza — ezdxf no interpreta OLE; BricsCAD tampoco lo
+mostraba en la captura de Marco.
+
 ## 🗓 Sesión 2026-08-24 (bis) — v0.4.3: el diálogo de abrir, y el sandbox
 
 **Marco lo cazó dogfoodeando una hora después de instalar la Flatpak**: File ▸

@@ -35,6 +35,16 @@
   <url type="vcs-browser">https://github.com/ingelibre/ingecad</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.4" date="2026-08-24">
+      <description>
+        <p>Leader labels draw their text instead of a white box, title-block
+        text is no longer erased by its own mask, and switching Model/Layout
+        tabs is instant.</p>
+        <p xml:lang="es">Las directrices dibujan su texto en vez de una caja
+        blanca, el texto del cajetín ya no lo borra su propia máscara, y
+        cambiar entre Modelo y Presentación es instantáneo.</p>
+      </description>
+    </release>
     <release version="0.4.3" date="2026-08-24">
       <description>
         <p>Opening a drawing no longer shows an error first: file dialogs

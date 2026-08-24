@@ -87,7 +87,9 @@ def switch_active(document, name: str) -> None:
         if active.name.lower() != name.lower():
             doc.layouts.set_active_layout(name)   # raises on unknown name
         doc.header["$TILEMODE"] = 0
-    document.dirty = True
+    # Dirty, but not a new revision: nothing drawable changed, and a bump
+    # here would defeat the per-tab scene cache the switch relies on.
+    document.mark_dirty_no_revision()
 
 
 # -- create / rename / delete ---------------------------------------------------

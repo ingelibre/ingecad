@@ -76,6 +76,16 @@ class Document:
             self.revision += 1
         self._dirty = value
 
+    def mark_dirty_no_revision(self) -> None:
+        """Dirty without a revision bump.
+
+        For changes that must reach the FILE but alter no drawable content —
+        a tab switch writing ``$TILEMODE``. The revision is what scene and
+        index caches key on; bumping it here would invalidate them on every
+        Model/Layout switch, which is exactly the moment they are needed.
+        """
+        self._dirty = True
+
     @classmethod
     def new(cls) -> "Document":
         # Load the standard linetypes (needed for linetype rendering) but not

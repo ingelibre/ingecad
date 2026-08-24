@@ -475,8 +475,19 @@ def pack(buckets: dict[tuple, Bucket],
     tell corrupt coordinates from far-off geometry. See :func:`_world_extents`.
     """
     # Stable order: by layer then color, so ranges group per layer for the
-    # future visibility toggle.
-    ordered = [buckets[k] for k in sorted(buckets)]
+    # future visibility toggle. Within each DRAWORDER group: ordinary fills
+    # first, then text background masks (kind "TM"), then glyphs (kind "T")
+    # LAST. Batching by (layer, color) destroys the file's entity order, and
+    # both halves of that order matter on a real sheet: the title block's
+    # WIPEOUT (layer "0", paper white) sorted after the labels of layer
+    # "-Textos" and erased them, and a leader label's own background mask
+    # (white on a sheet) sorted after its black glyphs and erased itself.
+    _KIND_RANK = {"": 0, "TM": 1, "T": 2}
+    ordered = [buckets[k]
+               for k in sorted(buckets,
+                               key=lambda k: (k[0],
+                                              _KIND_RANK.get(k[-1], 0),
+                                              k[1:]))]
     extents = _world_extents(ordered, extents_hint)
     if images:
         # Image corners count as geometry: zoom extents must include them
