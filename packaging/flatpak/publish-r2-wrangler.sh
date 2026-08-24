@@ -32,10 +32,21 @@ work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 cd "$REPO"
 # .lock is ostree's own local lock and has no business in a served repo.
 find . -type f ! -name '.lock' -printf '%P\t%s\n' | LC_ALL=C sort > "$work/current"
-LC_ALL=C comm -23 "$work/current" "$MANIFEST" | cut -f1 > "$work/todo"
+
+# Only the content-addressed part of the repo may be diffed by path+size:
+# there, a name change IS a content change. The metadata is the opposite and
+# the trap is silent — a re-signed summary.sig is 142 bytes both times, and a
+# ref file is a 64-character commit hash both times, so "same size" would
+# leave R2 serving the old signature over the new summary. Those always go.
+LC_ALL=C comm -23 "$work/current" "$MANIFEST" | cut -f1 > "$work/changed"
+grep -E '^(summary|refs/|config$|summaries/|delta-indexes/)' \
+    <(cut -f1 "$work/current") > "$work/always" || true
+cat "$work/changed" "$work/always" | LC_ALL=C sort -u > "$work/todo"
 
 n=$(wc -l < "$work/todo")
-echo "▶ $(wc -l < "$work/current") files in the repo, $n new or changed"
+echo "▶ $(wc -l < "$work/current") files in the repo, $n to upload" \
+     "($(wc -l < "$work/changed") new or changed," \
+     "$(wc -l < "$work/always") metadata always re-sent)"
 if [ "${1:-}" = "--dry-run" ]; then sed 's/^/    /' "$work/todo"; exit 0; fi
 [ "$n" -gt 0 ] || { echo "✔ nothing to publish"; exit 0; }
 
