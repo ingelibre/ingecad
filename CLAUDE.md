@@ -419,6 +419,64 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-24 — v0.4.2 publicada, y una sola instalación en la laptop
+
+**v0.4.2 liberada** (los seis tirones medidos, suavizado + VIEWRES, cursor
+configurable, grips de directriz, grupos auditados) con sus tres binarios en
+la release de GitHub —AppImage, tar.gz y el bundle `.flatpak`— y el **repo
+OSTree firmado actualizado en R2**, así que las instalaciones existentes
+reciben la 0.4.2 por `flatpak update`. El commit nuevo cuelga del de la 0.4.1
+(padre `3ab2be21a3`), o sea que la actualización es incremental, no una
+descarga completa.
+
+**La laptop quedó con UNA sola instalación, la Flatpak** (pedido de Marco:
+«he visto dos versiones»). Había tres cosas a la vez: la Flatpak, un install
+de tarball en `~/.local/opt/IngeCAD-0.4.0` con su lanzador y su entrada de
+menú, y el AppImage 0.1.2 de agosto. Se fue todo menos la Flatpak: **1,4 GB
+liberados**, una sola entrada «IngeCAD» en el menú, y `.dwg`/`.dxf` apuntando
+a `org.ingecad.IngeCAD.desktop`. `scripts/install-desktop.sh` no tenía
+contraparte, así que ahora existe **`scripts/uninstall-desktop.sh`**, que
+además le pasa la asociación de archivos a la Flatpak. **No se tocó** lo que
+sirve igual con cualquier instalación: el paquete MIME, los íconos de
+documento de los temas, `~/.config/IngeCAD` (sus ajustes y sus recientes) ni
+`~/.local/opt/oda` (el conversor de referencia de Track L). La lista de
+recientes se fusionó hacia la Flatpak: 12 planos suyos.
+
+⚠️ **Publicar sin las claves S3 de R2 se puede, y ya está escrito:**
+`packaging/flatpak/publish-r2-wrangler.sh` sube el repo por el login OAuth de
+wrangler, **incremental** (de 8365 archivos subió 104). Sigue pendiente lo de
+siempre —crear `R2_ACCOUNT_ID`/`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY`— para
+que `publish-flatpak.yml` lo haga solo desde el tag; hasta entonces esto es el
+camino y el workflow no corre.
+
+⚠️ **Tres trampas de esta sesión, las tres de la misma familia: el paso
+intermedio dijo que sí y la medida real dijo que no.**
+1. **`flatpak-builder` no existe como comando nativo acá** —es el Flatpak
+   `org.flatpak.Builder`, y `build-flatpak.sh` ya tenía el fallback que yo no
+   usé al invocarlo a mano. Murió con «orden no encontrada», mi comando
+   terminaba en `tail` (exit 0) y la notificación dijo «completed». Lo delató
+   **mirar el ref del repo**: seguía en el commit de la 0.4.1. *El exit code
+   de una tubería no es el exit code del trabajo.*
+2. **`--force-clean` no rescata un build dir que un `--install` anterior dejó
+   finalizado:** rehace la compilación entera —diez minutos— y recién ahí
+   muere en el export. Ahora `--repo` borra el directorio primero.
+3. **Mi propio script de publicación comparaba por ruta+tamaño**, que es
+   correcto para la mitad direccionada por contenido del repo OSTree y
+   silenciosamente falso para la otra: un `summary.sig` recién firmado mide
+   142 bytes las dos veces, y un archivo de `refs/` es un hash de 64
+   caracteres las dos veces. Los habría dado por iguales y R2 habría servido
+   **el resumen nuevo bajo la firma vieja**. Se cazó leyendo la lista del
+   `--dry-run` antes de subir, no después.
+
+**Y una consecuencia que conviene recordar: `flatpak-builder --install`
+cambia el origen de la app** a un remoto local (`ingecad1-origin`) y, al
+desinstalar, flatpak se lleva puesto el remoto público. Una instalación que ya
+no apunta a `downloads.ingecad.org` **no vuelve a ver una actualización
+nunca**. Por eso el cierre correcto es reinstalar desde el `.flatpakref`
+publicado —que de paso verifica la firma y el repo de punta a punta, como un
+usuario— y no dejar el build local puesto. Verificado: 0.4.2, origen
+`ingecad-origin`, `--check` OK y un plano real suyo abierto en el sandbox.
+
 ## 🗓 Sesión 2026-08-23 — v0.4.1 publicada, y el Flatpak con repo firmado propio
 
 **v0.4.1 liberada** (Block Editor + cotas instantáneas + i18n completo + perf;
