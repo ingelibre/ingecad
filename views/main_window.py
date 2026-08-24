@@ -3219,10 +3219,38 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.Discard
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        if self.maybe_save_changes():
-            event.accept()
-        else:
+        if not self.maybe_save_changes():
             event.ignore()
+            return
+        self._drain_workers()
+        event.accept()
+
+    def _drain_workers(self) -> None:
+        """Join every background thread before the window dies.
+
+        Qt aborts the whole process ("QThread: Destroyed while thread is
+        still running") when a live worker's owner is destroyed — closing
+        the app with a regen in flight was a guaranteed SIGABRT on exit.
+        The results are not wanted any more, only the joins.
+        """
+        worker = self._regen_worker
+        if worker is not None:
+            self._regen_worker = None
+            try:
+                worker.done.disconnect(self._on_regen_done)
+            except (RuntimeError, TypeError):
+                pass          # already disconnected
+            worker.wait()
+        thread = getattr(self, "_open_thread", None)
+        if thread is not None:
+            thread.quit()
+            thread.wait()
+            self._open_thread = None
+        tools = getattr(self, "tools", None)
+        if tools is not None:
+            for attr in ("_warmers", "_ghost_workers"):
+                for w in list(getattr(tools, attr, ()) or ()):
+                    w.wait()
 
     def _write_document(self, path: Path) -> bool:
         """The shared tail of SAVE and SAVEAS: write, report, warn."""

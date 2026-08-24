@@ -105,3 +105,20 @@ def test_a_tab_switch_dirties_the_file_but_not_the_revision(qapp):
             "a tab switch changed no drawable content")
     finally:
         win.close()
+
+
+def test_closing_with_a_regen_in_flight_joins_the_worker(qapp):
+    """Closing mid-regen aborted the process: Qt kills everything when a
+    live QThread's owner dies ("QThread: Destroyed while thread is still
+    running"). Marco hit it by closing the app after testing. closeEvent
+    must join every worker before accepting."""
+    win = _make(qapp)
+    try:
+        win.regen_in_memory()
+        assert win._regen_worker is not None or True  # may finish fast
+        win.close()
+        assert win._regen_worker is None, (
+            "closeEvent left the regen worker running — process abort at exit")
+        assert getattr(win, "_open_thread", None) is None
+    finally:
+        win.close()
