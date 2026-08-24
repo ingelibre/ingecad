@@ -432,8 +432,11 @@ El texto y su `\P` sobrevivían; el round-trip corrompía
 Mecanismo, cazado con bisección DXF-intermedio vs LibreDWG: **DXF dice
 «grupo ausente = default», ezdxf omite los grupos iguales a su default, y el
 importador DXF de LibreDWG guarda el grupo ausente como CERO** en vez de
-aplicar el default — la misma familia que su bug de MINSERT (#1385). Repro de
-una entidad listo en scratchpad para la próxima cacería Track L.
+aplicar el default — la misma familia que su bug de MINSERT (#1385).
+**Reportado y parcheado upstream el mismo día: PR #1404** (mismo hook de
+completado que #1385; verificado contra stock 8583, árbol limpio + parche,
+valores no-default sobreviven, make check 286/286). El vendor NO lo
+necesita: la app lleva doble defensa propia.
 
 **Dos defensas, cada una verificada al revés:**
 - `write_dwg_intermediate` escribe TODO grupo opcional explícito
