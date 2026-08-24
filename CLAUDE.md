@@ -419,6 +419,40 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-24 (bis) — v0.4.3: el diálogo de abrir, y el sandbox
+
+**Marco lo cazó dogfoodeando una hora después de instalar la Flatpak**: File ▸
+Open contestaba «No se pudo encontrar «/app/ingecad»» y recién después mostraba
+el selector, en su carpeta personal. **El portal tenía razón y la app estaba
+mal.** Los siete diálogos pasaban `""` como carpeta inicial y Qt eso lo resuelve
+contra el **directorio de trabajo**; desde una terminal es inofensivo, pero el
+lanzador del Flatpak trabajaba en `/app/ingecad` —que existe **dentro** del
+sandbox, mientras el selector lo dibuja el portal **fuera**—. Los diálogos de
+guardar tenían el mismo fallo en su otra forma: un `plano.pdf` pelado es tan
+relativo como una cadena vacía.
+
+**Arreglado por los dos lados, y el arreglo vale más que el bug:** todos los
+diálogos pasan por `views/file_dialogs.py`, que abre **donde estuviste la última
+vez**, luego en la carpeta del plano abierto, luego Documentos, luego home — que
+es lo que hace AutoCAD y lo que esto debió hacer desde el principio. Y el
+lanzador ya no trabaja dentro de `/app`.
+
+⚠️ **Dos rutas se rechazan por nombre porque las dos parecen reales desde
+dentro del proceso**: `/app` (el prefijo del sandbox: `is_dir()` dice que sí y
+no significa nada para el portal) y `/run/user/N/doc/ID`, el montaje del
+*document portal* por el que llega un archivo elegido fuera de
+`--filesystem=home` — perfecto para abrir, inútil para volver a abrir ahí:
+contiene un solo archivo y desaparece.
+
+**El test que sostiene el arreglo no es de comportamiento, es de estructura:**
+recorre `views/`, `tools/` y `core/` y falla si alguien llama a
+`QFileDialog.get*FileName` fuera del ayudante. Verificado como manda la casa —
+**se volvió a poner una llamada directa y el test falló**; sin esa comprobación
+sería un test que pasa por no probar nada. 922 tests.
+
+**Verificado dentro del sandbox real**, no sólo en la suite: `cd` del lanzador
+= `/home/sumaritux`, y `start_dir()` devuelve la carpeta de su último plano.
+
 ## 🗓 Sesión 2026-08-24 — v0.4.2 publicada, y una sola instalación en la laptop
 
 **v0.4.2 liberada** (los seis tirones medidos, suavizado + VIEWRES, cursor
