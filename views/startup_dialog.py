@@ -21,7 +21,6 @@ from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
-    QFileDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -35,6 +34,7 @@ from core import recent as recent_mod
 from core import templates as templates_mod
 from core.i18n import tr
 from core.version import __version__
+from views import file_dialogs
 
 THUMB_VIEW = QSize(160, 100)
 
@@ -216,8 +216,8 @@ class StartupDialog(QDialog):
         self.accept()
 
     def _open_dialog(self) -> None:
-        filename, _filter = QFileDialog.getOpenFileName(
-            self, tr("Open Drawing"), "",
+        filename = file_dialogs.get_open_file(
+            self, tr("Open Drawing"),
             tr("Drawings (*.dwg *.dxf);;All files (*)"))
         if filename:
             self._choice = ("open", Path(filename))
@@ -225,8 +225,8 @@ class StartupDialog(QDialog):
             self.accept()
 
     def _browse_template(self) -> None:
-        filename, _filter = QFileDialog.getOpenFileName(
-            self, tr("Use another drawing as a template..."), "",
+        filename = file_dialogs.get_open_file(
+            self, tr("Use another drawing as a template..."),
             tr("Drawings (*.dwg *.dxf);;All files (*)"))
         if filename:
             self._choice = ("template", Path(filename))

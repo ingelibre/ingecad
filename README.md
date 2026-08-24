@@ -31,7 +31,7 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature AutoCAD clone.
 
-## Status — v0.4.2
+## Status — v0.4.3
 
 What works today:
 

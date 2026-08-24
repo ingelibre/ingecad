@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.4.3 — 2026-08-24
+
+### Fixed — File ▸ Open put up an error before showing the chooser
+Marco, an hour after installing the Flatpak: opening a drawing answered
+**"No se pudo encontrar «/app/ingecad»"**, and only after dismissing it did
+the file chooser appear, in the home folder.
+
+Every dialog in the app passed `""` as its starting directory, and Qt
+resolves that against the process's working directory. From a terminal that
+is harmless. In the Flatpak the launcher worked in `/app/ingecad` — a path
+that exists **inside** the sandbox, while the file chooser is drawn
+**outside** it by the desktop portal, which quite correctly reported that no
+such directory exists. The same trap sat in every save dialog, where a bare
+`plano.pdf` is just as relative as an empty string.
+
+Both halves are fixed, and the fix is worth more than the bug:
+- **Dialogs now open where you were last**, then in the folder of the drawing
+  you have open, then Documents, then home — which is what AutoCAD does and
+  what the app should have done from the start. All seven dialogs (open,
+  save as, template, PDF, image, PDF underlay, startup) go through one
+  helper, and a test fails if a new one bypasses it.
+- **The Flatpak launcher no longer works inside `/app`**, so nothing that
+  resolves a relative path can leak a sandbox-only location to the host
+  again.
+
 ## v0.4.2 — 2026-08-23
 
 Three stalls Marco felt while working on real plans, all of them measured to

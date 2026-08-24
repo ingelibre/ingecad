@@ -15,7 +15,6 @@ from PySide6.QtCore import (QEvent, QObject, QPoint, QSettings, Qt,
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
-    QFileDialog,
     QLabel,
     QMainWindow,
     QMenu,
@@ -30,6 +29,7 @@ from core.actions import Dispatcher, Prompt
 from core.commands import History
 from core.document import Document, DocumentError
 from core.i18n import tr
+from views import file_dialogs
 from views.command_line import CommandLine
 from views.title_bar import TitleBar
 from core.version import __version__
@@ -3133,11 +3133,11 @@ class MainWindow(QMainWindow):
 
     # -- documents -------------------------------------------------------------
     def _open_dialog(self) -> None:
-        filename, _filter = QFileDialog.getOpenFileName(
+        filename = file_dialogs.get_open_file(
             self,
             tr("Open Drawing"),
-            "",
             tr("Drawings (*.dwg *.dxf);;All files (*)"),
+            preferred=self.document.path if self.document else None,
         )
         if filename:
             self.open_path(Path(filename))
@@ -3146,11 +3146,12 @@ class MainWindow(QMainWindow):
         if self.document is None:
             self.command_line.echo(tr("Nothing to save yet"))
             return False
-        filename, selected = QFileDialog.getSaveFileName(
+        filename, selected = file_dialogs.get_save_file(
             self,
             tr("Save Drawing As"),
             self.document.name,
             tr("DWG (*.dwg);;DXF (*.dxf)"),
+            preferred=self.document.path,
         )
         if not filename:
             return False

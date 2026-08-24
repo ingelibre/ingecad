@@ -2085,10 +2085,10 @@ class ImageAttachTool(Tool):
         self._size = None
         self._insert = None
         window = getattr(self.ctx.services, "window", None)
-        from PySide6.QtWidgets import QFileDialog
+        from views import file_dialogs
 
-        filename, _ = QFileDialog.getOpenFileName(
-            window, tr("Select Image File"), "",
+        filename = file_dialogs.get_open_file(
+            window, tr("Select Image File"),
             tr("Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.gif);;"
                "All files (*)"))
         if not filename:
@@ -2202,10 +2202,10 @@ class PdfAttachTool(Tool):
         self._insert = None
         self._scale_unit = 25.4 / self.DPI     # world units (mm) per pixel
         window = getattr(self.ctx.services, "window", None)
-        from PySide6.QtWidgets import QFileDialog
+        from views import file_dialogs
 
-        filename, _ = QFileDialog.getOpenFileName(
-            window, tr("Select PDF File"), "", tr("PDF (*.pdf)"))
+        filename = file_dialogs.get_open_file(
+            window, tr("Select PDF File"), tr("PDF (*.pdf)"))
         if not filename:
             self.ctx.finish()
             return

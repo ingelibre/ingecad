@@ -12,12 +12,12 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QFileDialog,
     QFormLayout,
     QPushButton,
 )
 
 from core.i18n import tr
+from views import file_dialogs
 from formats import pdf_out
 
 
@@ -106,8 +106,9 @@ class PrintDialog(QDialog):
     # -- outputs ---------------------------------------------------------------
     def _to_pdf(self) -> None:
         name = self.window.document.name if self.window.document else "plano"
-        path, _f = QFileDialog.getSaveFileName(
-            self, tr("Save PDF"), f"{name}.pdf", "PDF (*.pdf)")
+        path, _f = file_dialogs.get_save_file(
+            self, tr("Save PDF"), f"{name}.pdf", "PDF (*.pdf)",
+            preferred=self.window.document.path if self.window.document else None)
         if not path:
             return
         if self._layout_mode():

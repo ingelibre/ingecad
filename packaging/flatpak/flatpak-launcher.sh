@@ -9,5 +9,10 @@
 # does not look there on its own, whatever its version happens to be.
 PYVER=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 export PYTHONPATH="/app/lib/python${PYVER}/site-packages:${PYTHONPATH}"
-cd /app/ingecad || exit 1
-exec python3 main.py "$@"
+# Work from the user's own directory, NOT from /app. Anything that resolves a
+# relative path against the working directory — a file dialog above all — would
+# otherwise hand the host a sandbox-only path: the portal draws the chooser
+# outside the sandbox and answers "/app/ingecad not found". Python puts the
+# script's own directory on sys.path, so the imports do not need the cd.
+cd "${HOME:-/}" 2>/dev/null || cd /
+exec python3 /app/ingecad/main.py "$@"
