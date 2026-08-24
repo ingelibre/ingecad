@@ -103,6 +103,36 @@ def decode_escapes_in_document(doc) -> int:
     return changed
 
 
+def repair_invalid_defaults(doc) -> int:
+    """Normalize impossible MTEXT values a broken writer left behind.
+
+    Every DWG IngeCAD saved before v0.4.5 carries them: the intermediate DXF
+    omitted groups equal to their default (as DXF allows) and LibreDWG stored
+    the missing group as ZERO — so multiline text came back with
+    ``line_spacing_factor 0.0`` and every line of the paragraph drew on top
+    of the first. The valid range is 0.25-4.0 and 0 is not a flow direction
+    or a spacing style, so this only ever touches corrupt values.
+
+    Returns how many entities changed, for the tests.
+    """
+    changed = 0
+    for entity in _mtext_entities(doc):
+        dirty = False
+        d = entity.dxf
+        factor = d.get("line_spacing_factor", None)
+        if factor is not None and not (0.25 <= factor <= 4.0):
+            d.line_spacing_factor = 1.0
+            dirty = True
+        if d.get("line_spacing_style", None) == 0:
+            d.line_spacing_style = 1
+            dirty = True
+        if d.get("flow_direction", None) == 0:
+            d.flow_direction = 1
+            dirty = True
+        changed += dirty
+    return changed
+
+
 def _mtext_entities(doc):
     """Every MTEXT in the document — model space, layouts and blocks."""
     for layout in doc.layouts:
@@ -118,12 +148,50 @@ def _mtext_entities(doc):
 def write_dwg_intermediate(doc, dxf_path: Path) -> None:
     """Write the DXF that ``dxf2dwg`` will convert.
 
+    Every optional group is written EXPLICITLY, defaults included. DXF says
+    "absent means default", and ezdxf therefore omits a group whose value
+    equals its default — but LibreDWG's DXF importer stores a missing group
+    as ZERO instead of applying the default. Marco caught the visible case:
+    an MTEXT with the default line spacing came back from Save as DWG with
+    ``line_spacing_factor 1.0 -> 0.0`` (plus flow_direction and spacing
+    style 1 -> 0), which stacks every line of the paragraph on top of the
+    first one. Writing the groups out closes the whole family, not just
+    MTEXT — the same pattern was LibreDWG's MINSERT bug (upstream #1385).
+
     The document is restored to exactly its previous state afterwards: the
     caller's drawing must not notice that this happened.
     """
+    from ezdxf.lldxf.tagwriter import TagWriter
+
+    # force_optional only writes optional groups whose VALUE exists; an
+    # MTEXT drawn in IngeCAD never had them set, so materialize the three
+    # spacing defaults first (and restore after: the caller's drawing must
+    # not notice). The synthetic round-trip test caught this hole.
+    materialized = []
+    for entity in _mtext_entities(doc):
+        d = entity.dxf
+        for name, default in (("line_spacing_factor", 1.0),
+                              ("line_spacing_style", 1),
+                              ("flow_direction", 1)):
+            if not d.hasattr(name):
+                d.set(name, default)
+                materialized.append((d, name))
+
     old_version = doc.dxfversion
+    original_init = TagWriter.__init__
+
+    def forced_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        # Instance attribute, set in __init__ — a class attribute would be
+        # shadowed, which is why this wraps the constructor.
+        self.force_optional = True
+
     try:
         doc.dxfversion = INTERMEDIATE_DXF_VERSION
+        TagWriter.__init__ = forced_init
         doc.saveas(dxf_path)
     finally:
+        TagWriter.__init__ = original_init
         doc.dxfversion = old_version
+        for namespace, name in materialized:
+            namespace.discard(name)

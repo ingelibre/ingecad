@@ -255,7 +255,7 @@ def load_dwg(dwg_path: Path):
     """
     from core.document import Document
 
-    from core.encoding import decode_escapes_in_document
+    from core.encoding import decode_escapes_in_document, repair_invalid_defaults
 
     dwg_path = Path(dwg_path)
     dxf_path = dwg_to_dxf(dwg_path)
@@ -267,6 +267,10 @@ def load_dwg(dwg_path: Path):
     # hold — and what we write ourselves on save (see core.encoding). ezdxf
     # does not decode it, so without this the canvas shows the raw code.
     decode_escapes_in_document(document.doc)
+    # DWGs IngeCAD saved before v0.4.5 carry zeroed MTEXT spacing (the
+    # missing-group-becomes-zero bug this same module now writes around):
+    # normalize them so those files render right again.
+    repair_invalid_defaults(document.doc)
     document.path = dwg_path
     if len(document.modelspace()) > 0:
         return document

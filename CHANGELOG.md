@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.4.5 — unreleased
+
+### Fixed — Save as DWG stacked every paragraph onto its first line
+Marco, an hour into v0.4.4: original.dwg looked right, the copy saved from
+IngeCAD drew every two-line label as two lines superimposed on one. The text
+and its line break survived; the round trip corrupted
+**`line_spacing_factor` 1.0 → 0.0** (plus flow direction and spacing style
+1 → 0), and an interline of zero stacks the paragraph on itself.
+
+The mechanism: DXF says an absent group means its default, so ezdxf omits
+groups equal to their default — and LibreDWG's DXF importer stores a missing
+group as **zero** instead of applying the default. The same family as its
+MINSERT bug (upstream #1385); a one-entity reproducer is ready for the next
+Track L run.
+
+Two defences, verified independently and together:
+- **The intermediate DXF now writes every optional group explicitly**,
+  materializing the spacing defaults on MTEXT that never had them set. On
+  Marco's plan this also stopped two LEADER direction fields from
+  corrupting — field mismatches against the original fell from 1084 to 765,
+  and the remaining ones are fields LibreDWG does not write at all.
+- **Files already saved with the broken writer are repaired on open**: 0 is
+  not a valid spacing factor (the range is 0.25–4.0), so the repair can
+  never touch a real value. His guardado.dwg renders within 13 pixels of
+  the original, of 19 867 with ink.
+
 ## v0.4.4 — 2026-08-24
 
 Marco opened a fence plan next to BricsCAD and reported three things. All

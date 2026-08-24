@@ -419,6 +419,52 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-24 (quater) — el guardado apilaba los párrafos (v0.4.5, sin publicar)
+
+**Regla nueva de proceso, pedida por Marco tras la 0.4.4: NO publicar release
+sin preguntarle antes** (memoria `[[preguntar-antes-de-release]]`). Arreglar,
+testear y commitear sí; el tag y la publicación, con su OK.
+
+**El bug — dogfooding otra vez:** original.dwg se veía bien; el guardado desde
+IngeCAD dibujaba cada etiqueta de dos líneas con las dos líneas superpuestas.
+El texto y su `\P` sobrevivían; el round-trip corrompía
+**`line_spacing_factor` 1.0 → 0.0** (+ flow_direction y spacing_style 1 → 0).
+Mecanismo, cazado con bisección DXF-intermedio vs LibreDWG: **DXF dice
+«grupo ausente = default», ezdxf omite los grupos iguales a su default, y el
+importador DXF de LibreDWG guarda el grupo ausente como CERO** en vez de
+aplicar el default — la misma familia que su bug de MINSERT (#1385). Repro de
+una entidad listo en scratchpad para la próxima cacería Track L.
+
+**Dos defensas, cada una verificada al revés:**
+- `write_dwg_intermediate` escribe TODO grupo opcional explícito
+  (`TagWriter.force_optional` vía constructor envuelto — es atributo de
+  instancia pisado en `__init__`, un patch de clase no hace nada) y
+  **materializa** los tres defaults en los MTEXT que nunca los tuvieron —
+  el test sintético cazó ese hueco: `force_optional` solo escribe valores
+  QUE EXISTEN, y un MTEXT dibujado en IngeCAD no los tiene.
+- `repair_invalid_defaults` al abrir DWG: 0 no es un factor válido
+  (rango 0.25–4.0), así que la reparación jamás toca un valor real. El
+  guardado.dwg ya dañado de Marco vuelve a verse bien con solo abrirlo.
+
+**Medido como manda la casa:** campo a campo contra el original, 1084 → 765
+desajustes (desaparecen MTEXT spacing ×150 y LEADER direction ×135; lo que
+queda son campos que LibreDWG no escribe y unset-vs-default equivalentes), y
+**por render**: round-trip viejo 315 píxeles de diferencia, nuevo **13-16 de
+~19 860 con tinta**. Cuatro planos reales: conteos y firmas idénticos
+viejo-vs-nuevo (0 regresiones).
+
+⚠️ **Trampa de arnés nueva, cazada tras una hora de fantasmas: el
+`__pycache__` rancio.** Dos ediciones del mismo archivo en el mismo segundo
+(el patrón editar-probar-revertir de las pruebas inversas) dejan el `.pyc`
+con mtime válido y bytecode VIEJO: la fuente en disco decía una cosa y la
+función ejecutada hacía otra — `inspect.getsource` encima MIENTE (lee el
+archivo nuevo aunque corra el bytecode viejo). Síntoma: un test que pasaba,
+tras revert+restore idéntico, falla. Cura: `find core -name __pycache__
+-exec rm -rf {} +` tras cada edición programática en las pruebas inversas.
+
+**Estado: SIN PUBLICAR a propósito.** Todo en main cuando se commitee; la
+0.4.5 espera el OK de Marco.
+
 ## 🗓 Sesión 2026-08-24 (ter) — v0.4.4: el plano de cercos contra BricsCAD
 
 **Marco abrió `0059_04.CERCOS PERIMETRICOS.dwg` al lado de BricsCAD y reportó
