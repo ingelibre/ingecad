@@ -35,6 +35,16 @@
   <url type="vcs-browser">https://github.com/ingelibre/ingecad</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.2" date="2026-08-23">
+      <description>
+        <p>The drawing keeps up with the hand: six measured stalls gone,
+        antialiased lines, VIEWRES, and a crosshair you can size and
+        colour.</p>
+        <p xml:lang="es">El dibujo sigue el ritmo de la mano: seis tirones
+        medidos y eliminados, líneas suavizadas, VIEWRES, y un cursor que
+        puede cambiar de tamaño y de color.</p>
+      </description>
+    </release>
     <release version="0.4.1" date="2026-08-23">
       <description>
         <p>The Block Editor, instant dimensions, and the interface complete

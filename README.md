@@ -31,7 +31,7 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature AutoCAD clone.
 
-## Status — v0.4.1
+## Status — v0.4.2
 
 What works today:
 
@@ -107,7 +107,13 @@ What works today:
   **A language is a folder** under `i18n/` — adding one needs no Python.
 - **Fast on real drawings**: dimensions appear the instant you place them
   (was seconds on big plans), regeneration ~2× on the heaviest surveys,
-  layout tabs up to 2.5× with per-viewport culling.
+  layout tabs up to 2.5× with per-viewport culling, and the editing stalls
+  measured away — a dimension grip drops in 100 ms instead of 3.1 s,
+  MATCHPROP paints its second target in 37 ms instead of 2.76 s.
+- **The display is yours**: line smoothing (on by default), `VIEWRES` for
+  arc and circle smoothness, crosshair size and colour (`CURSORSIZE`) and
+  pickbox size (`PICKBOX`) — under AutoCAD's own names, typable at the
+  prompt or set in **Options ▸ Display / Selection**.
 - **Report a Problem** under Help: guided issue forms, Spanish welcome.
 
 Planned next (v0.5): survey-point import with elevations, coordinate

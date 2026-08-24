@@ -1,10 +1,30 @@
 # Changelog
 
-## v0.4.2 — unreleased
+## v0.4.2 — 2026-08-23
 
 Three stalls Marco felt while working on real plans, all of them measured to
-a cause, plus the object groups audited against the reference and given the
-tests they never had.
+a cause; the graphics-quality complaint underneath them answered with
+antialiasing and `VIEWRES`; a crosshair that is finally yours; and the object
+groups audited against the reference and given the tests they never had.
+IngeCAD also ships as a **Flatpak** from now on, out of a signed repository
+of its own — one click to install, and later versions arrive by themselves.
+
+### Added — IngeCAD installs like an application now
+- **A Flatpak, from its own signed repo** at
+  [downloads.ingecad.org/flatpak/ingecad.flatpakref](https://downloads.ingecad.org/flatpak/ingecad.flatpakref):
+  one click opens it in the software centre, and every later version arrives
+  through `flatpak update` without anyone visiting a download page. This is
+  the install the target user gets — the civil engineer who never opens a
+  terminal. Deliberately not Flathub yet: self-distribution, the road
+  IngePresupuestos already walks. The bundle compiles LibreDWG from the
+  pristine release plus this project's patches, exactly as the AppImage does,
+  and asks the sandbox for no network at all, because IngeCAD needs none.
+- **771 → 345 MB installed, 194 → 72 MB to download.** PySide6 ships
+  QtWebEngine and its family, which IngeCAD never imports. The manifest trims
+  by *blocklist*, not by allowlist, on purpose: a library nobody recognised
+  stays in, so a future Qt upgrade cannot leave the app blank. Verified by
+  importing the seven Qt modules the app actually uses from inside the
+  sandbox, and by opening a real drawing there.
 
 ### Fixed — the drawing keeps up with the hand
 - **Dragging a selection window no longer sticks.** The scene itself was
