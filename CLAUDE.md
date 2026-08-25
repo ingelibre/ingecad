@@ -457,10 +457,11 @@ le lancé a Marco se murió dos veces al cerrarla:**
    ⚠️ Todos los QThreads llevan ahora `setObjectName` — el abort de Qt
    imprime el nombre y el próximo dirá quién fue.
 
-**Pendiente de publicar (0.4.5, esperando el OK de Marco):** guardado de
+**v0.4.5 PUBLICADA con el OK de Marco (2026-08-24):** guardado de
 párrafos + imágenes raster quirúrgicas + cierres limpios + fondo
-configurable. Marco además anotó: «hay muchas cosas por pulir en cuanto a
-rendimiento, en la próxima versión puliremos».
+configurable (con los tonos renombrados sin marca a pedido suyo: «Gris
+oscuro / Crema / Blanco / Negro»). Marco además anotó: «hay muchas cosas
+por pulir en cuanto a rendimiento, en la próxima versión puliremos».
 
 ## 🗓 Sesión 2026-08-24 (quinto) — redimensionar una imagen tardaba segundos
 
