@@ -15,7 +15,7 @@ in this dialog.
 from __future__ import annotations
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -169,6 +169,16 @@ class WindowColorsDialog(QDialog):
         return window_colors.background(key[0])
 
     # -- widgets -------------------------------------------------------------
+    @staticmethod
+    def _swatch_icon(hexv: str) -> QIcon:
+        pix = QPixmap(14, 14)
+        pix.fill(QColor(hexv))
+        painter = QPainter(pix)
+        painter.setPen(QPen(QColor(90, 90, 90), 1))
+        painter.drawRect(0, 0, 13, 13)
+        painter.end()
+        return QIcon(pix)
+
     def _rebuild_color_combo(self, value: str) -> None:
         self.color.blockSignals(True)
         self.color.clear()
@@ -177,11 +187,12 @@ class WindowColorsDialog(QDialog):
         if crosshairs:
             self.color.addItem(tr("Automatic"), "")
         for name, hexv in _NAMED:
-            self.color.addItem(tr(name), hexv)
+            self.color.addItem(self._swatch_icon(hexv), tr(name), hexv)
         self.color.addItem(tr("Select Color..."), None)
         idx = self.color.findData(value)
         if idx < 0:
-            self.color.insertItem(0, value.upper(), value)
+            self.color.insertItem(0, self._swatch_icon(value),
+                                  value.upper(), value)
             idx = 0
         self.color.setCurrentIndex(idx)
         self.color.blockSignals(False)
@@ -204,15 +215,17 @@ class WindowColorsDialog(QDialog):
     def _color_chosen(self, index: int) -> None:
         data = self.color.itemData(index)
         if data is None:                       # Select Color...
-            from PySide6.QtWidgets import QColorDialog
+            # AutoCAD opens its own Select Color palette here (the 255-index
+            # grid) — so does IngeCAD: the same dialog layers and entities
+            # already use, without ByLayer/ByBlock, which mean nothing for
+            # a window background.
+            from views.color_dialog import SelectColorDialog, aci_qcolor
 
-            chosen = QColorDialog.getColor(
-                QColor(self._current_value() or "#FFFFFF"), self,
-                tr("Select Color"))
-            if not chosen.isValid():
+            dialog = SelectColorDialog(self, include_bylayer=False)
+            if dialog.exec() != SelectColorDialog.Accepted:
                 self._rebuild_color_combo(self._current_value())
                 return
-            data = chosen.name().upper()
+            data = aci_qcolor(dialog.result_aci()).name().upper()
         self._edits[(self._context_key(), self._element_key())] = data
         self._rebuild_color_combo(data)
         self._refresh_preview()
