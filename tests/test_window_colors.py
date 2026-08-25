@@ -125,3 +125,21 @@ def test_dialog_classic_button_stages_black(qapp):
     assert dialog._edits[("model", "background")] == "#000000"
     dialog.reject()      # cancel must not write anything
     assert window_colors.background("model") == window_colors.DEFAULTS["model"]
+
+
+def test_background_combo_offers_autocads_canvas_tones(qapp):
+    """Marco: the background drop-down must offer AutoCAD's own tones —
+    the modern charcoal (33,40,48) and the Block Editor cream
+    (254,252,240) — not red/cyan, which nobody draws on."""
+    from views.window_colors_dialog import WindowColorsDialog
+
+    dialog = WindowColorsDialog()
+    dialog.elements.setCurrentRow(0)          # Uniform background
+    offered = {dialog.color.itemData(i) for i in range(dialog.color.count())}
+    assert "#212830" in offered, "AutoCAD's modern dark canvas is missing"
+    assert "#FEFCF0" in offered, "AutoCAD's cream is missing"
+    assert "#FF0000" not in offered, "pure red is not a canvas tone"
+    dialog.elements.setCurrentRow(1)          # Crosshairs keep the colours
+    offered = {dialog.color.itemData(i) for i in range(dialog.color.count())}
+    assert "#FF0000" in offered
+    dialog.reject()

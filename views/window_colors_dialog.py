@@ -31,8 +31,19 @@ from PySide6.QtWidgets import (
 from core import window_colors
 from core.i18n import tr
 
-#: AutoCAD's colour drop-down: the seven index colours, then the two
-#: monochromes, then the full picker.
+#: For a BACKGROUND, the drop-down offers AutoCAD's own canvas tones — the
+#: ones that look right to work on — not the pure index colours:
+#: 33,40,48 is the modern model-space charcoal, 254,252,240 the cream
+#: AutoCAD uses for its Block Editor (the cream colleagues ask for).
+_BACKGROUND_TONES = [
+    ("Dark gray (AutoCAD)", "#212830"),
+    ("Cream (AutoCAD)", "#FEFCF0"),
+    ("White", "#FFFFFF"),
+    ("Black", "#000000"),
+]
+
+#: The crosshair keeps AutoCAD's colour list: the seven index colours plus
+#: the two monochromes.
 _NAMED = [
     ("Red", "#FF0000"), ("Yellow", "#FFFF00"), ("Green", "#00FF00"),
     ("Cyan", "#00FFFF"), ("Blue", "#0000FF"), ("Magenta", "#FF00FF"),
@@ -186,7 +197,8 @@ class WindowColorsDialog(QDialog):
             .currentItem() is not None else False
         if crosshairs:
             self.color.addItem(tr("Automatic"), "")
-        for name, hexv in _NAMED:
+        palette = _NAMED if crosshairs else _BACKGROUND_TONES
+        for name, hexv in palette:
             self.color.addItem(self._swatch_icon(hexv), tr(name), hexv)
         self.color.addItem(tr("Select Color..."), None)
         idx = self.color.findData(value)
