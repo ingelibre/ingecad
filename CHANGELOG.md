@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.4.5 — unreleased
+## v0.4.5 — 2026-08-24
 
 ### Added — the model background is yours (Drawing Window Colors)
 Colleagues who draw on white or cream can now have it: **Options ▸ Display

@@ -35,6 +35,17 @@
   <url type="vcs-browser">https://github.com/ingelibre/ingecad</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.5" date="2026-08-24">
+      <description>
+        <p>Pick your model background — white, cream, or any tone — with
+        colors that flip to stay readable; paragraphs survive Save as DWG;
+        images move and resize instantly; clean exits.</p>
+        <p xml:lang="es">Elige el fondo del modelo — blanco, crema o el tono
+        que quieras — con colores que se adaptan para seguir legibles; los
+        párrafos sobreviven al guardar como DWG; las imágenes se mueven y
+        redimensionan al instante; cierres limpios.</p>
+      </description>
+    </release>
     <release version="0.4.4" date="2026-08-24">
       <description>
         <p>Leader labels draw their text instead of a white box, title-block
