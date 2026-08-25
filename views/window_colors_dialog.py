@@ -36,8 +36,8 @@ from core.i18n import tr
 #: 33,40,48 is the modern model-space charcoal, 254,252,240 the cream
 #: AutoCAD uses for its Block Editor (the cream colleagues ask for).
 _BACKGROUND_TONES = [
-    ("Dark gray (AutoCAD)", "#212830"),
-    ("Cream (AutoCAD)", "#FEFCF0"),
+    ("Dark gray", "#212830"),
+    ("Cream", "#FEFCF0"),
     ("White", "#FFFFFF"),
     ("Black", "#000000"),
 ]
