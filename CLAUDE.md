@@ -419,7 +419,14 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
-## 🗓 Sesión 2026-08-27 — la lámina se edita (el espacio actual, generalizado)
+## 🗓 Sesión 2026-08-27 — v0.4.6: la lámina se edita (el espacio actual, generalizado)
+
+**v0.4.6 PUBLICADA con el OK de Marco (2026-08-27):** los tres binarios en la
+release de GitHub (AppImage, tar.gz y el bundle `.flatpak`) y el repo OSTree
+firmado actualizado en R2 — commit `114f1cf8` colgando del de la 0.4.5
+(`001022f8`), o sea actualización incremental: 106 archivos subidos de 5632.
+Verificado como usuario: `flatpak update` deja la instalación en 0.4.6 desde
+`ingecad-origin` y `--check` pasa dentro del sandbox.
 
 **Marco, dogfooding:** un amigo le pasó una plantilla de layout en A1, abre
 bien, y **no se podía editar nada en la lámina** — ni mover, ni borrar, ni
