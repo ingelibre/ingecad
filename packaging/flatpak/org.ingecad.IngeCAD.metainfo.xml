@@ -35,6 +35,17 @@
   <url type="vcs-browser">https://github.com/ingelibre/ingecad</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.6" date="2026-08-27">
+      <description>
+        <p>A layout tab now edits its own sheet: select, move, erase, trim,
+        scale and edit the text of a title block in paper millimetres, and
+        move or scale a viewport like any other object.</p>
+        <p xml:lang="es">Una pestaña de lámina ahora edita su propia hoja:
+        seleccione, mueva, borre, recorte, escale y edite el texto de un
+        cajetín en milímetros de papel, y mueva o escale una ventana gráfica
+        como cualquier otro objeto.</p>
+      </description>
+    </release>
     <release version="0.4.5" date="2026-08-24">
       <description>
         <p>Pick your model background — white, cream, or any tone — with

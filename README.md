@@ -31,7 +31,7 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature AutoCAD clone.
 
-## Status — v0.4.5
+## Status — v0.4.6
 
 What works today:
 
@@ -44,9 +44,12 @@ What works today:
 - **Classic interface**: command line at the bottom with AutoCAD aliases
   (`L`, `C`, `M`, `TR`, `Z`+`E` …), dark model space, dockable Layers /
   Properties / Styles panels.
-- **Paper space like AutoCAD**: Model/Layout tabs, MVIEW floating viewports
-  with grips, exact scales via `ZOOM nXP` or the scale dropdown, MSPACE /
-  PSPACE, viewport lock, PAGESETUP per layout, and PLOT of the sheet at 1:1.
+- **Paper space like AutoCAD**: Model/Layout tabs and **the sheet itself is
+  editable** — draw, move, erase, trim, scale and edit the text of a title
+  block with the commands you already know, in paper millimetres. Plus MVIEW
+  floating viewports (objects you select by their frame, with grips), exact
+  scales via `ZOOM nXP` or the scale dropdown, MSPACE / PSPACE, viewport
+  lock, PAGESETUP per layout, and PLOT of the sheet at 1:1.
 - **Drawing with the real prompt trees**: lines, circles (2P/3P/TTR), the
   full 11-way ARC matrix, polylines with arcs and width, rectangles
   (chamfer/fillet/area/rotation), polygons, ellipses and elliptical arcs,

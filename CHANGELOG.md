@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.4.6 — 2026-08-27
+
+### Added — the layout sheet is editable, like AutoCAD
+A colleague sent Marco an A1 layout template. It opened perfectly and
+nothing on it could be touched: no move, no erase, no trim, no scale, no
+text edit — the title block could not even be **selected**. That was a
+deliberate limitation, and the reference settles it in one line:
+*"Commands operate in either model space or paper space"* (MSPACE,
+p. 1213). There are no commands that stop working on a layout tab; only
+the current space changes.
+
+So now a layout tab edits its own sheet, through the very code paths the
+model uses:
+
+- **Select anything on the sheet** — click, window, crossing, Shift to
+  remove, click again to cycle between overlapping objects.
+- **Draw and edit in paper millimetres**: LINE, MOVE, COPY, ERASE, TRIM,
+  EXTEND, SCALE, ROTATE, FILLET, dimensions… with object snap to the title
+  block's own geometry.
+- **Edit a title block's text** by double-clicking it, exactly as AutoCAD
+  does (MTEDIT's access method *is* the double click) — and the object's
+  own action now wins over entering a viewport, as the reference specifies.
+- **A viewport is an object again**: picked by its frame (never by clicking
+  inside it, which is AutoCAD's rule), caught by window/crossing, moved and
+  scaled like anything else. MOVE carries its picture along; SCALE ×0.5
+  draws it at half size — which is what refitting an A1 sheet to A3 needs.
+
+The three states of a layout are now the reference's own: the sheet
+(PSPACE) is fully editable; inside a viewport (MSPACE) navigation works and
+editing the model through its projection is still to come — it says so, and
+a click there no longer selects anything, instead of picking paper
+coordinates against the model's index.
+
+### Fixed — three faults the same change uncovered
+- **A line drawn on the sheet was white on white.** The instant-feedback
+  overlay never resolved colours against the canvas it lands on, so ACI 7
+  came out white on the white paper — invisible until the next full regen.
+- **Undo followed you to another tab.** Erasing an object on a sheet and
+  pressing Ctrl+Z from the Model tab resurrected it **in the modelspace**:
+  a command asked "which space?" twice and, with the space now mutable, the
+  two answers stopped agreeing. Every command asks once and remembers.
+- **The background cache warmer could adopt the wrong space**, because a
+  tab switch deliberately does not bump the document revision.
+
 ## v0.4.5 — 2026-08-24
 
 ### Added — the model background is yours (Drawing Window Colors)
