@@ -23,6 +23,22 @@ class Command(ABC):
     @abstractmethod
     def undo(self, document) -> None: ...
 
+    def space(self, document):
+        """The space this command works in, PINNED at its first run.
+
+        ``Document.current_space()`` answers "where is the user now", and
+        that is right while a command runs — but undo happens later, and by
+        then the user may be on another tab. An ERASE on a sheet undone
+        from the Model tab put the entity back in the modelspace, because
+        the command asked the same question twice and got two answers.
+        A command asks once and remembers.
+        """
+        space = getattr(self, "_space", None)
+        if space is None:
+            space = document.current_space()
+            self._space = space
+        return space
+
 
 class CompositeCommand(Command):
     """Several sub-commands executed as ONE undo step (DIVIDE's n-1 points,

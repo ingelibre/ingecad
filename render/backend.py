@@ -365,7 +365,7 @@ def pick_layout(document: Document):
             return document.doc.layouts.get(saved), saved
         except Exception:
             pass
-    msp = document.modelspace()
+    msp = document.doc.modelspace()
     if len(msp) > 0:
         return msp, None
     best = None
@@ -775,10 +775,35 @@ def build_scene_for_entities(document: Document, entities, flatten: float) -> Sc
     # sheet re-read 36 MB from disk 30 times per second.
     backend = _CornersOnlyBackend(flatten)
     context = TolerantRenderContext(document.doc)
+    _apply_space_colors(context, document)
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
     frontend.hidden_handles = frozenset(hidden_handles(document))
     frontend.draw_entities(entities)
     return pack(backend.buckets, _declared_extents(document))
+
+
+def _apply_space_colors(context, document) -> None:
+    """Resolve colours against the canvas the overlay will land on.
+
+    ``draw_entities`` never calls ``set_current_layout``, so the context
+    keeps ezdxf's dark modelspace defaults — and on a white sheet that
+    paints a freshly drawn ACI 7 line **white on white**. The overlay must
+    answer the same question the base scene answered: which space is this?
+    """
+    from core import window_colors
+
+    space = document.current_space()
+    try:
+        if getattr(space, "is_any_paperspace", False):
+            context.set_current_layout(space)      # ezdxf's paper white
+        elif getattr(document, "edit_block", None):
+            context.current_layout_properties.set_colors(
+                window_colors.background("block_editor"))
+        else:
+            context.current_layout_properties.set_colors(
+                window_colors.background("model"))
+    except Exception:
+        pass    # a colour is never worth losing the overlay over
 
 
 class _CornersOnlyBackend(VertexBackend):
@@ -866,7 +891,7 @@ def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     if getattr(document, "edit_block", None) and layout_name in (None, "Model"):
         return _build_block_scene(document)
     if layout_name == "Model":
-        layout, layout_name = document.modelspace(), None
+        layout, layout_name = document.doc.modelspace(), None
     elif layout_name and layout_name in document.doc.layouts:
         layout = document.doc.layouts.get(layout_name)
     else:

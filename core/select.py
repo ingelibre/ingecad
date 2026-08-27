@@ -85,8 +85,32 @@ def flatten_points(entity, max_segments: int = MAX_CURVE_SEGMENTS):
     return points if len(points) > 1 else None
 
 
+def _selectable_viewports(space):
+    """Handles of the VIEWPORT entities that are real objects on a sheet,
+    or None where the question does not apply (model, block definition).
+
+    A paper-space layout also carries the "main" viewport that stands for
+    the paper view itself; AutoCAD never lets you pick that one. The
+    heuristic lives in core.layouts (it is the frontend's own), so this
+    only borrows it.
+    """
+    if not getattr(space, "is_any_paperspace", False):
+        return None
+    try:
+        from core.layouts import visible_viewports
+
+        return frozenset(vp.dxf.handle for vp in visible_viewports(space))
+    except Exception:
+        return frozenset()
+
+
 class GeometryIndex:
-    """Per-entity pick geometry over a Document's modelspace."""
+    """Per-entity pick geometry over the Document's CURRENT space.
+
+    Modelspace on the Model tab, the sheet on a layout tab, the definition
+    inside the Block Editor — ``Document.current_space()`` decides, so a
+    tab switch is an ``invalidate()`` and nothing else.
+    """
 
     def __init__(self, document) -> None:
         self.document = document
@@ -213,6 +237,18 @@ class GeometryIndex:
             elif t == "HATCH":
                 if not GeometryIndex._hatch(e, oid, segs, seg_o):
                     GeometryIndex._box(e, oid, boxes, box_o)
+            elif t == "VIEWPORT":
+                # "AutoCAD selects viewports by their frame, not their
+                # interior" — the same rule viewport_border_hit codes, said
+                # here so the ordinary pick/window/crossing machinery obeys
+                # it too. A box would swallow every click inside the view.
+                cx, cy = e.dxf.center.x, e.dxf.center.y
+                hw, hh = float(e.dxf.width) / 2.0, float(e.dxf.height) / 2.0
+                corners = [(cx - hw, cy - hh), (cx + hw, cy - hh),
+                           (cx + hw, cy + hh), (cx - hw, cy + hh)]
+                for a, b in zip(corners, corners[1:] + corners[:1]):
+                    segs.append((a[0], a[1], b[0], b[1]))
+                    seg_o.append(oid)
             else:
                 GeometryIndex._box(e, oid, boxes, box_o)
         except Exception:
@@ -406,13 +442,18 @@ class GeometryIndex:
         from core.isolate import hidden_handles
 
         hidden = hidden_handles(self.document)
-        for e in self.document.modelspace():
+        space = self.document.current_space()
+        pickable_vps = _selectable_viewports(space)
+        for e in space:
             try:
                 oid = self._intern(e.dxf.handle)
             except Exception:
                 continue
             if hidden and e.dxf.handle in hidden:
                 continue
+            if (pickable_vps is not None and e.dxftype() == "VIEWPORT"
+                    and e.dxf.handle not in pickable_vps):
+                continue    # the sheet's own "main" viewport is not an object
             self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
                           pboxes, pbox_o)
         self._segs = np.asarray(segs, dtype=np.float64).reshape(-1, 4)

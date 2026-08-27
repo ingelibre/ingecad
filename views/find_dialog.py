@@ -90,7 +90,7 @@ class FindReplaceDialog(QDialog):
             return self.window.tools._selection_entities()
         if where == "layout":
             name = getattr(self.window, "_active_layout", "Model")
-            layout = (document.modelspace() if name == "Model"
+            layout = (document.doc.modelspace() if name == "Model"
                       else document.doc.layouts.get(name))
             return list(layout)
         out = []

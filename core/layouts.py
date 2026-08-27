@@ -229,7 +229,7 @@ def _model_extents(document):
     try:
         from ezdxf import bbox
 
-        ext = bbox.extents(document.modelspace(), fast=True)
+        ext = bbox.extents(document.doc.modelspace(), fast=True)
         if ext.has_data:
             return (ext.extmin.x, ext.extmin.y, ext.extmax.x, ext.extmax.y)
     except Exception:
@@ -362,6 +362,36 @@ def viewport_grip_command(vp, index: int, role: str, point):
     return SetViewportGeometryCommand(
         vp, new_center, (w, h), view_center, h / scale,
         name="Resize viewport")
+
+
+def transform_viewport(vp, matrix) -> None:
+    """Apply a transform to a VIEWPORT, which ezdxf refuses to transform.
+
+    A viewport is a rectangle on the sheet plus a view into the model. The
+    honest reading of "transform this object" moves and scales the
+    RECTANGLE and leaves the view alone: the same model area stays on
+    display, so a viewport moved travels with its picture and one scaled by
+    a half draws that picture at half size -- which is exactly what halving
+    an A1 sheet into an A3 has to do. (Its own grip resize means something
+    different on purpose -- there the scale is held and the window reveals
+    more model, as AutoCAD does when you drag a corner.)
+
+    Rotation has nowhere to go: a VIEWPORT has no angle, only a view twist,
+    which is not the same thing. Raise rather than silently deform it.
+    """
+    from ezdxf.math import Vec3
+
+    cx, cy = float(vp.dxf.center.x), float(vp.dxf.center.y)
+    w, h = float(vp.dxf.width), float(vp.dxf.height)
+    origin = matrix.transform(Vec3(0, 0, 0))
+    ex = matrix.transform(Vec3(1, 0, 0)) - origin
+    ey = matrix.transform(Vec3(0, 1, 0)) - origin
+    if abs(ex.y) > 1e-9 or abs(ey.x) > 1e-9:
+        raise NotImplementedError("a viewport cannot be rotated or sheared")
+    centre = matrix.transform(Vec3(cx, cy, 0))
+    vp.dxf.center = (centre.x, centre.y, float(vp.dxf.center.z))
+    vp.dxf.width = abs(w * ex.x)
+    vp.dxf.height = abs(h * ey.y)
 
 
 class RemoveViewportCommand(Command):

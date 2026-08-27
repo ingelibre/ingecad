@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import math
 
-from core.actions import ReplaceEntitiesCommand, _restore_entity
+from core.actions import (ReplaceEntitiesCommand, _restore_entity,
+                          transform_entity)
 from core.commands import Command
 
 Point = tuple[float, float]
@@ -90,7 +91,7 @@ def stretch_points(entity) -> list[Point]:
 def _move_whole(entity, dx: float, dy: float) -> None:
     from ezdxf.math import Matrix44
 
-    entity.transform(Matrix44.translate(dx, dy, 0))
+    transform_entity(entity, Matrix44.translate(dx, dy, 0))
 
 
 def stretch_entity(entity, rects, dx: float, dy: float) -> bool:
@@ -574,18 +575,18 @@ class ArrayCommand(Command):
         self.new_entities: list = []
 
     def do(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         self.new_entities = []
         for matrix in self._transforms:
             for source in self.entities:
                 copy = source.copy()
-                copy.transform(matrix)
+                transform_entity(copy, matrix)
                 msp.add_entity(copy)
                 self.new_entities.append(copy)
         document.dirty = True
 
     def undo(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         for entity in self.new_entities:
             msp.delete_entity(entity)
         self.new_entities = []

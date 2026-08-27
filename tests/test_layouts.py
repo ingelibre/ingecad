@@ -574,11 +574,20 @@ def test_paper_click_selects_viewport_border(qapp):
     t._pick_tolerance = 2.0
     t.on_click(60.0, 100.0)            # left border
     assert t.paper_vp is vp
+    assert t.selection == {vp.dxf.handle}   # an ordinary selection now
     segs, circles, boxes = t.highlight_geometry()
-    assert boxes.shape == (1, 4)
+    # The border is real pick geometry, so the ordinary highlight draws its
+    # four sides -- it used to be a special-cased rectangle.
+    assert segs.shape == (4, 4), segs
     grips = t.grip_points()
     assert len(grips) == 5
-    t.on_click(10.0, 10.0)             # empty paper: deselect
+    # Inside the frame a viewport is not pickable, so this click means what
+    # it means in the model: the first corner of a selection window, with
+    # the current selection kept until Esc.
+    t.on_click(100.0, 100.0)
+    assert t._window_anchor == (100.0, 100.0)
+    assert t.paper_vp is vp
+    t.cancel()
     assert t.paper_vp is None
     win.close()
 

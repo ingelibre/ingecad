@@ -272,7 +272,7 @@ def load_dwg(dwg_path: Path):
     # normalize them so those files render right again.
     repair_invalid_defaults(document.doc)
     document.path = dwg_path
-    if len(document.modelspace()) > 0:
+    if len(document.doc.modelspace()) > 0:
         return document
     # Empty modelspace is legitimate for published sheets (ArchiCAD etc.):
     # the content lives in a paperspace layout and the renderer falls back

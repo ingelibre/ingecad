@@ -60,10 +60,16 @@ class Document:
         # changed under it and that its result is stale.
         self.revision = 0
         #: Name of the block open in the Block Editor, or None. While set,
-        #: :meth:`modelspace` answers with that block's layout, so every
+        #: :meth:`current_space` answers with that block's layout, so every
         #: draw/edit/snap/pick path operates on the definition without
         #: knowing the editor exists. Owned by core.blockedit.
         self.edit_block: Optional[str] = None
+        #: Name of the paper-space layout tab that is current, or None for
+        #: the Model tab. Same trick as edit_block and the same reason:
+        #: AutoCAD's commands "operate in either model space or paper space"
+        #: (MSPACE, p. 1213), so the sheet is edited through the very code
+        #: paths the model uses. Owned by views.main_window.switch_layout.
+        self.active_layout: Optional[str] = None
         _repair_material_dict(doc)
 
     @property
@@ -125,14 +131,37 @@ class Document:
     def name(self) -> str:
         return self.path.name if self.path else "Untitled"
 
-    def modelspace(self):
-        """The space edits happen in: the modelspace, or the block being
-        edited in the Block Editor. Callers that must always mean the real
-        modelspace (save paths, layout machinery) run outside an edit
-        session or go through ``self.doc`` directly."""
+    def current_space(self):
+        """The space edits happen in — what every draw/edit/snap/pick path
+        means by "the drawing".
+
+        Three answers, in priority order: the block open in the Block
+        Editor, the active paper-space layout tab, or the modelspace. A
+        caller that must always mean the real modelspace says
+        ``document.doc.modelspace()`` — being explicit is the whole guard,
+        so grep for it before adding one.
+        """
         if self.edit_block is not None and self.edit_block in self.doc.blocks:
             return self.doc.blocks.get(self.edit_block)
+        if self.active_layout is not None:
+            try:
+                return self.doc.layouts.get(self.active_layout)
+            except Exception:
+                self.active_layout = None    # deleted under us: fall back
         return self.doc.modelspace()
+
+    #: Historical name of :meth:`current_space`, kept because most callers
+    #: read better as "the modelspace" and every one of them means "the
+    #: current space" — the audit that generalized paper-space editing
+    #: checked all 42.
+    modelspace = current_space
+
+    @property
+    def space_name(self) -> str:
+        """Human name of the current space, for prompts and status."""
+        if self.edit_block is not None:
+            return self.edit_block
+        return self.active_layout or "Model"
 
     def save_as(self, path: Path) -> str:
         """Save as DXF directly, or as DWG via the bundled LibreDWG.

@@ -192,7 +192,7 @@ class AddEntityCommand(Command):
         self.entity = None
 
     def do(self, document) -> None:
-        self.entity = self._factory(document.modelspace())
+        self.entity = self._factory(self.space(document))
         # New entities take the CURRENT properties, the ones the Properties
         # bar sets: layer, colour, linetype, lineweight. They default to
         # ByLayer, so a drawing stays layer-driven unless the user overrides
@@ -220,7 +220,7 @@ class AddEntityCommand(Command):
             # Handles destroyed here are recorded so the UI can hide the
             # base-scene copies surgically instead of paying a full regen.
             self.removed_handles = [self.entity.dxf.handle]
-            document.modelspace().delete_entity(self.entity)
+            self.space(document).delete_entity(self.entity)
             self.entity = None
         document.dirty = True
 
@@ -638,27 +638,65 @@ def add_polygon(center, vertex, sides: int) -> AddEntityCommand:
 
 # -- editing actions (headless, undoable) --------------------------------------
 
+def transform_entity(entity, matrix) -> None:
+    """``entity.transform(matrix)``, with the types ezdxf leaves out.
+
+    ezdxf raises NotImplementedError for VIEWPORT, and a layout viewport is
+    an object a user moves and scales like any other -- especially when
+    refitting a sheet from A1 to A3. The fallback lives in core.layouts,
+    which owns what a viewport means.
+    """
+    try:
+        entity.transform(matrix)
+    except NotImplementedError:
+        if entity.dxftype() != "VIEWPORT":
+            raise
+        from core.layouts import transform_viewport
+
+        transform_viewport(entity, matrix)
+
+
+def can_transform(entity, matrix) -> bool:
+    """False for the few pairs of (object, matrix) that have no answer.
+
+    Only one today: a VIEWPORT has no angle of its own, so a rotation would
+    have to deform its rectangle. Refusing it up front keeps the command
+    consistent -- what it transforms, it un-transforms.
+    """
+    if entity.dxftype() != "VIEWPORT":
+        return True
+    from ezdxf.math import Vec3
+
+    origin = matrix.transform(Vec3(0, 0, 0))
+    ex = matrix.transform(Vec3(1, 0, 0)) - origin
+    ey = matrix.transform(Vec3(0, 1, 0)) - origin
+    return abs(ex.y) <= 1e-9 and abs(ey.x) <= 1e-9
+
+
 class TransformCommand(Command):
     """Apply a Matrix44 to entities in place; undo applies the inverse."""
 
     def __init__(self, name: str, entities, matrix) -> None:
         self.name = name
-        self.entities = list(entities)
+        entities = list(entities)
+        #: Objects this matrix cannot move (a rotated viewport). Kept so the
+        #: UI can say so instead of the command half-working.
+        self.skipped = [e for e in entities if not can_transform(e, matrix)]
+        self.entities = [e for e in entities if can_transform(e, matrix)]
         self.matrix = matrix
 
     def do(self, document) -> None:
         for e in self.entities:
-            e.transform(self.matrix)
+            transform_entity(e, self.matrix)
         document.dirty = True
 
     def undo(self, document) -> None:
-        import numpy as np
         from ezdxf.math import Matrix44
 
         inverse = Matrix44(self.matrix)
         inverse.inverse()
         for e in self.entities:
-            e.transform(inverse)
+            transform_entity(e, inverse)
         document.dirty = True
 
 
@@ -671,13 +709,13 @@ class EraseCommand(Command):
         self.entities = list(entities)
 
     def do(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         for e in self.entities:
             msp.unlink_entity(e)
         document.dirty = True
 
     def undo(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         for e in self.entities:
             msp.add_entity(e)
         document.dirty = True
@@ -694,17 +732,17 @@ class CopyEntitiesCommand(Command):
         self.copies = []
 
     def do(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         self.copies = []
         for e in self.sources:
             clone = e.copy()
-            clone.transform(self.matrix)
+            transform_entity(clone, self.matrix)
             msp.add_entity(clone)
             self.copies.append(clone)
         document.dirty = True
 
     def undo(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         self.removed_handles = [c.dxf.handle for c in self.copies]
         for clone in self.copies:
             msp.delete_entity(clone)
@@ -725,14 +763,14 @@ class ReplaceEntitiesCommand(Command):
         self.new_entities = []
 
     def do(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         for e in self.old_entities:
             msp.unlink_entity(e)
         self.new_entities = [factory(msp) for factory in self._factories]
         document.dirty = True
 
     def undo(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         self.removed_handles = [e.dxf.handle for e in self.new_entities]
         for e in self.new_entities:
             msp.delete_entity(e)
@@ -764,7 +802,7 @@ class CreateBlockCommand(Command):
 
     def do(self, document) -> None:
         doc = document.doc
-        msp = document.modelspace()
+        msp = self.space(document)
         if self.block_name not in doc.blocks:
             blk = doc.blocks.new(
                 name=self.block_name,
@@ -780,7 +818,7 @@ class CreateBlockCommand(Command):
 
     def undo(self, document) -> None:
         doc = document.doc
-        msp = document.modelspace()
+        msp = self.space(document)
         if self.insert is not None:
             self.removed_handles = [self.insert.dxf.handle]
             msp.delete_entity(self.insert)
@@ -821,7 +859,7 @@ class ExplodeCommand(Command):
         self.pieces: list = []
 
     def do(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         self.pieces = []
         for e in self.sources:
             if e.dxftype() not in ("INSERT", "LWPOLYLINE", "POLYLINE"):
@@ -835,7 +873,7 @@ class ExplodeCommand(Command):
         document.dirty = True
 
     def undo(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         self.removed_handles = [v.dxf.handle
                                 for _o, parts in self.pieces for v in parts]
         for original, parts in self.pieces:
@@ -979,7 +1017,7 @@ class AddDimensionCommand(Command):
         self._block_name = None
 
     def do(self, document) -> None:
-        override = self._factory(document.modelspace(), document)
+        override = self._factory(self.space(document), document)
         override.render()
         self.dim = override.dimension
         self._block_name = self.dim.dxf.get("geometry", None)
@@ -992,7 +1030,7 @@ class AddDimensionCommand(Command):
         document.dirty = True
 
     def undo(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         block = self._block_name
         if self.dim is not None and self.dim.is_alive:
             # DIMTEDIT re-renders into a fresh *D block: trust the entity's
@@ -1597,18 +1635,18 @@ class PasteCommand(Command):
     def do(self, document) -> None:
         from ezdxf.math import Matrix44
 
-        msp = document.modelspace()
+        msp = self.space(document)
         m = Matrix44.translate(self.dx, self.dy, 0.0)
         self.copies = []
         for e in self.sources:
             clone = e.copy()
-            clone.transform(m)
+            transform_entity(clone, m)
             msp.add_entity(clone)
             self.copies.append(clone)
         document.dirty = True
 
     def undo(self, document) -> None:
-        msp = document.modelspace()
+        msp = self.space(document)
         self.removed_handles = [c.dxf.handle for c in self.copies]
         for clone in self.copies:
             msp.delete_entity(clone)

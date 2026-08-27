@@ -419,6 +419,89 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-27 — la lámina se edita (el espacio actual, generalizado)
+
+**Marco, dogfooding:** un amigo le pasó una plantilla de layout en A1, abre
+bien, y **no se podía editar nada en la lámina** — ni mover, ni borrar, ni
+recortar, ni escalar, ni tocar un texto, ni **seleccionar el cajetín**. Era
+deliberado y estaba escrito: `start_tool` contestaba «dibujar sobre la hoja
+todavía no está disponible» y el espacio papel tenía **su propia selección
+diminuta**: un único VIEWPORT picado por su borde.
+
+**Lo que dice AutoCAD, que es lo que había que copiar** (investigado en
+`docs/reference/acad_acr.txt`, nota nueva en
+`docs/reference/layout/autocad-editing-in-paperspace.md`): *«Commands operate
+in either model space or paper space»* (MSPACE, p. 1213). No hay comandos que
+no funcionen en una lámina; lo único que cambia es **cuál es el espacio
+actual**. De ahí salen las reglas finas: no se selecciona entre espacios (por
+eso existe CHSPACE, p. 325), una ventana gráfica **es un objeto** que se pica
+por su marco, y **la acción de doble clic del objeto gana** sobre la regla de
+entrar/salir de la ventana (DBLCLKEDIT, p. 2207 — MTEDIT se alcanza
+literalmente con «Double-click a multiline text object»).
+
+**La apuesta del BEDIT se cobró exactamente como estaba anotada:** el editor
+de bloques ya había convertido `Document.modelspace()` en «el espacio
+actual», así que la lámina entró por la misma puerta —
+`Document.current_space()` responde bloque → lámina activa → modelo, y
+`MainWindow._active_layout` es ahora una **property** que escribe el espacio
+en el documento, para que la pestaña y el documento no puedan divergir en
+ninguno de sus siete puntos de asignación. Dibujar, TRIM, cotas, snap, picado,
+grips y undo llegan al cajetín **por los caminos de siempre**. La auditoría de
+los 42 `modelspace()` dejó **seis clavados al modelo de verdad** (`doc.modelspace()`):
+el encuadre de MVIEW, la pestaña que elige el open, `build_scene("Model")`, el
+ocultado del horneado de las ventanas, el ámbito «Model» de FIND y la guarda de
+DXF truncado.
+
+**Verificado sobre el plano de un colega** (`Planos Constructivos.dwg`, lámina
+A-01, 90 objetos): las 90 entidades pican, un clic sobre «PLANO:» la
+selecciona, una ventana toma 37 objetos del cajetín, se mueven 120 mm y el
+deshacer los devuelve. Y una LINE dibujada en la hoja sale **negra**.
+
+⚠️ **Tres fallos que abrió este mismo cambio, y ninguno se veía en la suite:**
+1. **La superposición pintaba blanco sobre blanco.** `draw_entities` nunca
+   llama a `set_current_layout`, así que el contexto se quedaba con el modelo
+   oscuro de ezdxf por defecto y **ACI 7 resolvía a blanco**: una línea recién
+   dibujada sobre la hoja era invisible hasta la siguiente regeneración
+   completa. `_apply_space_colors` resuelve contra el lienzo donde va a
+   aterrizar. El test lleva su inverso: la MISMA entidad en el modelo tiene
+   que salir blanca, o no prueba nada.
+2. **El deshacer seguía al usuario de pestaña.** Un comando preguntaba «¿qué
+   espacio?» dos veces —al hacer y al deshacer— y con el espacio ya mutable
+   las dos respuestas dejaron de coincidir: borrar en la lámina y pulsar
+   Ctrl+Z desde la pestaña Modelo **resucitaba el objeto en el modelo**.
+   `Command.space(document)` lo pregunta **una vez y lo recuerda**; los 18
+   sitios de `actions.py`/`modify.py` pasan por ahí.
+3. **El pre-calentador de cachés adoptaba el espacio equivocado.** Sellaba su
+   resultado con `document.revision`, y **un cambio de pestaña no sube la
+   revisión a propósito** (`mark_dirty_no_revision`, que es lo que sostiene la
+   caché de escenas por pestaña): un índice construido en Modelo parecía
+   fresco sobre la hoja. Ahora sella también el nombre del espacio. Es la
+   familia de siempre: *la guarda existía y no cubría el eje nuevo.*
+
+**Y ezdxf se niega a transformar un VIEWPORT** (`NotImplementedError`), que
+hasta hoy no importaba porque una ventana no era seleccionable con las
+herramientas normales. `core.layouts.transform_viewport` mueve y escala el
+**rectángulo** dejando la vista quieta — con eso MOVE lleva la ventana con su
+dibujo y SCALE ×0,5 la dibuja a la mitad, que es justo lo que exige pasar una
+A1 a A3; una **rotación se rechaza** en vez de deformarla, y el comando dice
+cuántos objetos no movió en lugar de quedar a medias.
+
+**Lo que NO entró, y hay que decirlo:** dentro de una ventana gráfica (MSPACE)
+la edición sigue sin existir — habría que alcanzar el modelo a través de su
+proyección. Ahí el comando lo dice y **el clic ya no selecciona nada**, que es
+más honesto que lo de antes: picaba en coordenadas de papel contra el índice
+del modelo, o sea que podía seleccionar cualquier cosa. Tampoco está el snap
+entre espacios (AutoCAD sí engancha desde la hoja a lo que muestra UNA
+ventana, DIST p. 27716). 979 tests.
+
+⚠️ **Hallazgo aparte, medido y sin arreglar (no es de este encargo):** en
+`Planos Constructivos.dwg`, **4 de 5 láminas se abren con la hoja vacía**
+porque sus VIEWPORT llegan con `status = 0` y tanto `visible_viewports` como
+el `_draw_viewports` de ezdxf —que aquel copia a propósito— descartan todo lo
+que no tenga status positivo. Sólo la lámina que estaba activa al guardar trae
+status 1. Antes de tocarlo hay que comprobar contra BricsCAD/ODA si esas
+láminas sí muestran su contenido, que es la regla de la casa.
+
 ## 🗓 Sesión 2026-08-24 (sexto) — el fondo del modelo es del usuario (y dos cierres que mataban la app)
 
 **Pedido de Marco antes de la 0.4.5: fondo del model configurable (colegas

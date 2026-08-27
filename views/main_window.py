@@ -109,6 +109,29 @@ class MainWindow(QMainWindow):
     # A live viewport regen must fit a frame-ish budget or pan blocks the UI.
     _VP_LIVE_BUDGET_MS = 33.0
 
+    #: Backing store of :attr:`_active_layout`. A class attribute so the
+    #: property answers before __init__ has run a line.
+    _active_layout_name = "Model"
+
+    @property
+    def _active_layout(self) -> str:
+        """The current tab: "Model" or a layout name.
+
+        Writing it also tells the DOCUMENT which space is current, and that
+        is the whole point of the property: paper-space editing works because
+        ``Document.current_space()`` follows the tab, and the two must never
+        be able to drift apart. Seven places set the tab; none of them has to
+        remember.
+        """
+        return self._active_layout_name
+
+    @_active_layout.setter
+    def _active_layout(self, name: str) -> None:
+        self._active_layout_name = name
+        document = getattr(self, "document", None)
+        if document is not None:
+            document.active_layout = None if name in ("Model", "") else name
+
     def __init__(self) -> None:
         super().__init__()
         self.document: Document | None = None
@@ -2386,7 +2409,7 @@ class MainWindow(QMainWindow):
         scene = self.viewport._scene
         if scene is None:
             return
-        model = {e.dxf.handle for e in self.document.modelspace()}
+        model = {e.dxf.handle for e in self.document.doc.modelspace()}
         self.viewport.hide_handles([h for h in scene.handle_ranges
                                     if h in model])
         self._vp_content_hidden = True
@@ -2452,12 +2475,16 @@ class MainWindow(QMainWindow):
 
         if self.document is None:
             return
+        # An object's own double-click action comes first, in either space
+        # (DBLCLKEDIT, p. 2207): "Double-click a multiline text object" is
+        # how MTEDIT is reached, and a title block's text is a paper-space
+        # object like any other. Only when the double-click lands on no
+        # object does the layout's enter/leave rule apply.
+        entity = self.tools.pick_entity((wx, wy))
+        if (entity is not None and entity.dxftype() != "VIEWPORT"
+                and self.tools.open_text_editor_for(entity)):
+            return
         if self._active_layout == "Model":
-            # Model space: double-click a text and edit it where it stands
-            # (TEXTED 0 / the MTEXT editor — the AutoCAD double-click).
-            entity = self.tools.pick_entity((wx, wy))
-            if entity is not None:
-                self.tools.open_text_editor_for(entity)
             return
         layout = self.document.doc.layouts.get(self._active_layout)
         vp = layout_ops.viewport_hit(layout, wx, wy)
@@ -2780,9 +2807,13 @@ class MainWindow(QMainWindow):
             if not ok or not name.strip():
                 return
             name = name.strip()
+        self._bedit_return_tab = None
         if self._active_layout != "Model":
             # AutoCAD opens the editor from a layout too; our editor renders
-            # through the Model path, so land there first.
+            # through the Model path, so land there first -- and come back
+            # to the sheet when the editor closes, which is where the user
+            # was working.
+            self._bedit_return_tab = self._active_layout
             self.switch_layout("Model")
         try:
             self._block_session = blockedit.BlockEditSession.begin(
@@ -2858,6 +2889,10 @@ class MainWindow(QMainWindow):
                name=name)
             if save else
             tr("Changes to block \"{name}\" discarded.", name=name))
+        back, self._bedit_return_tab = getattr(
+            self, "_bedit_return_tab", None), None
+        if back is not None and back in self._layout_names():
+            self.switch_layout(back)
 
     def _cmd_undo(self, *args) -> None:
         session = self._block_session
@@ -3001,7 +3036,10 @@ class MainWindow(QMainWindow):
         # $TILEMODE + the *Paper_Space block dance, so the file reopens on
         # this tab in AutoCAD too (ezdxf does not touch the header itself).
         layout_ops.switch_active(self.document, name)
-        self._active_layout = name
+        self._active_layout = name        # ... and the document's space
+        # Pick, snap and the overlay's curve tolerance all describe ONE
+        # space; crossing tabs makes every one of them stale.
+        self.tools.space_changed()
         cached = self._layout_scenes.get(name)
         if (cached is not None and cached[0] == self.document.revision
                 and self._regen_worker is None):
@@ -3021,8 +3059,9 @@ class MainWindow(QMainWindow):
         self._update_space_button()
         if name != "Model":
             self.command_line.echo(
-                tr("Layout \"{n}\" — MVIEW adds a viewport, MSPACE works "
-                   "inside it, PSPACE returns to the sheet.", n=name))
+                tr("Layout \"{n}\" — draw and edit on the sheet; MVIEW adds "
+                   "a viewport, MSPACE works inside it, PSPACE returns.",
+                   n=name))
 
     # -- layout tab operations (right-click menu / + button) --------------------
     def _layout_tab_menu(self, name: str, global_pos) -> None:

@@ -67,7 +67,8 @@ class _CacheWarmer(QThread):
     """Build the snap/pick caches off the UI thread right after a document
     opens — the first click on a cadastre paid a 5-8 s synchronous walk."""
 
-    done = Signal(object, object, object, int)  # document, index, snap, rev
+    # document, index, snap, revision, space name
+    done = Signal(object, object, object, int, str)
 
     def __init__(self, document) -> None:
         super().__init__()
@@ -76,6 +77,13 @@ class _CacheWarmer(QThread):
 
     def run(self) -> None:
         revision = self._document.revision
+        # Which space these caches describe. NOT derivable from the
+        # revision: a Model/Layout switch marks the document dirty WITHOUT
+        # bumping it (mark_dirty_no_revision, so the per-tab scene cache
+        # survives), so a warmer started on the Model tab would otherwise
+        # look fresh after the user has moved to a sheet -- and the sheet
+        # would be picked against the model's geometry.
+        space = self._document.space_name
         index = GeometryIndex(self._document)
         engine = SnapEngine(self._document)
         try:
@@ -83,7 +91,7 @@ class _CacheWarmer(QThread):
             engine._build()
         except Exception:
             index = engine = None   # doc mutated mid-walk: discard
-        self.done.emit(self._document, index, engine, revision)
+        self.done.emit(self._document, index, engine, revision, space)
 
 
 class _GhostWorker(QThread):
@@ -266,9 +274,6 @@ class ToolController(QObject):
         # Selection state (idle noun set, or the set a tool is acquiring).
         self.index: Optional[GeometryIndex] = None
         self.selection: set[str] = set()
-        # Paper space has its own tiny selection: the one picked VIEWPORT
-        # entity (border click). Model selection machinery never sees it.
-        self.paper_vp = None
         self._selecting_for: Optional[Tool] = None
         # Rectangles a crossing selection covered, for the one command that
         # cares WHERE the selection touched: STRETCH.
@@ -319,7 +324,8 @@ class ToolController(QObject):
         self.window.history.clear()
         self._refresh_overlay()
 
-    def _on_caches_warm(self, document, index, engine, revision) -> None:
+    def _on_caches_warm(self, document, index, engine, revision,
+                        space) -> None:
         worker = self.sender()
         if worker in self._warmers:
             worker.wait()   # thread has emitted; joins immediately
@@ -327,8 +333,9 @@ class ToolController(QObject):
         if index is None or engine is None:
             return
         if (self.window.document is not document
-                or document.revision != revision):
-            return          # the user edited or opened another file: stale
+                or document.revision != revision
+                or document.space_name != space):
+            return          # edited, reopened, or a different space: stale
         # adopt only what the user has not built already
         if self.index is not None and self.index._dirty:
             self.index = index
@@ -371,11 +378,14 @@ class ToolController(QObject):
                 tr("** {name} is not allowed in the Model tab — switch to a "
                    "layout. **", name=name))
             return
-        if in_paper and name not in LAYOUT_TOOL_CLASSES:
-            # Model-space editing from a layout tab arrives with MSPACE.
+        if (in_paper and getattr(self.window, "_active_vp", None) is not None
+                and name not in LAYOUT_TOOL_CLASSES):
+            # Inside a viewport the commands would have to reach the MODEL
+            # through its projection; the sheet is one PSPACE away and that
+            # works fully.
             self.window.command_line.echo(
-                tr("Drawing on the sheet itself is not available yet — "
-                   "MSPACE to draw inside a viewport, or use the Model tab."))
+                tr("Editing the model through a viewport is not available "
+                   "yet — PSPACE edits the sheet, or use the Model tab."))
             return
         if self.window.document is None:
             self.window.new_document()
@@ -539,7 +549,6 @@ class ToolController(QObject):
     def clear_selection(self) -> None:
         self.reset_pick_cycle()
         self.selection = set()
-        self.paper_vp = None
         self._window_anchor = None
         self.changed.emit()
 
@@ -548,18 +557,6 @@ class ToolController(QObject):
         """Supr/Delete: erase the selected objects (only when idle)."""
         if self.tool is not None:
             return False
-        if self._paper_select_mode():
-            vp = self.paper_vp
-            if vp is None or not vp.is_alive:
-                return False
-            self.paper_vp = None
-            # hide the border instantly (its vertices are owned by the vp
-            # handle); the content refreshes with the regen
-            self.window.viewport.hide_handles([vp.dxf.handle])
-            self._execute(layout_ops.RemoveViewportCommand(
-                vp, self.window._active_layout))
-            self.changed.emit()
-            return True
         entities = self._selection_entities()
         if not entities:
             return False
@@ -999,10 +996,43 @@ class ToolController(QObject):
         return (isinstance(command, cls._KNOWN_MODIFY)
                 or getattr(command, "targets", None) is not None)
 
+    @staticmethod
+    def _touches_viewport(command) -> bool:
+        """True if the command reaches a VIEWPORT entity.
+
+        A viewport's picture is the model re-projected through it: moving,
+        scaling or erasing one changes pixels no overlay can predict, so
+        these ask for the regen the surgical path would otherwise skip.
+        """
+        for attr in ("entities", "sources", "old_entities", "targets"):
+            group = getattr(command, attr, None)
+            if group:
+                try:
+                    if any(e.dxftype() == "VIEWPORT" for e in group
+                           if e is not None and e.is_alive):
+                        return True
+                except Exception:
+                    continue
+        entity = getattr(command, "entity", None)
+        try:
+            return (entity is not None and entity.is_alive
+                    and entity.dxftype() == "VIEWPORT")
+        except Exception:
+            return False
+
     def _execute(self, command) -> None:
         # the drawing changed under the candidates: never cycle stale ones
         self.reset_pick_cycle()
+        # asked BEFORE the command runs: an ERASE leaves its entities
+        # unlinked and an is_alive test afterwards answers about a ghost
+        touched_viewport = self._touches_viewport(command)
         self.window.history.execute(command)
+        skipped = getattr(command, "skipped", None)
+        if skipped:
+            # Say what did not move rather than let the command look done.
+            self.window.command_line.echo(
+                tr("{count} object(s) unchanged: a viewport has no angle to "
+                   "rotate.", count=len(skipped)))
         # Any real edit invalidates the model tessellation the layout tab
         # keeps for live viewport navigation.
         invalidate = getattr(self.window, "invalidate_vp_model_cache", None)
@@ -1035,7 +1065,8 @@ class ToolController(QObject):
                 h for h in self.selection
                 if (e := self.index.entity(h)) is not None and e.is_alive
             }
-        if getattr(command, "needs_regen", False):
+        if (getattr(command, "needs_regen", False)
+                or touched_viewport):
             # A viewport's content is the model re-projected: the overlay
             # cannot show that, so only a regen is right.
             self.window.regen_in_memory()
@@ -1343,9 +1374,11 @@ class ToolController(QObject):
         needs_snap = grip_hot or (
             self.tool is not None and self._selecting_for is None
             and not self.tool.entity_picker)
-        if getattr(self.window, "_active_layout", "Model") != "Model":
-            # The snap engine indexes MODEL geometry; its points are model
-            # coordinates and mean nothing on a paper-space sheet.
+        if getattr(self.window, "_active_vp", None) is not None:
+            # Inside a viewport the pointer is over MODEL content while the
+            # snap engine describes the sheet: every hit would be a lie.
+            # On the sheet itself the engine indexes the sheet, so snapping
+            # to the title block works exactly as it does in the model.
             needs_snap = False
         if needs_snap and self.osnap_on and self.snap_engine is not None \
                 and self.osnap_modes:
@@ -1479,24 +1512,56 @@ class ToolController(QObject):
         self.tool.on_point(self.resolved_point(wx, wy))
         self.changed.emit()
 
-    def _paper_select_mode(self) -> bool:
-        """Paper-space selection is live: layout tab, not inside MSPACE."""
+    @property
+    def paper_vp(self):
+        """The selected VIEWPORT, when the selection is exactly that.
+
+        A layout viewport is an object on the sheet like any other: it is
+        picked by its border, window/crossing catch it, Shift removes it.
+        What stays special is what its GRIPS do — resize the window, not
+        stretch a rectangle — so the rest of the code asks this question
+        instead of reading a second, parallel selection.
+        """
+        if len(self.selection) != 1 or self.index is None:
+            return None
+        entity = self.index.entity(next(iter(self.selection)))
+        if entity is None or not entity.is_alive:
+            return None
+        return entity if entity.dxftype() == "VIEWPORT" else None
+
+    def in_paper_space(self) -> bool:
+        """On a layout tab with the SHEET current (not inside MSPACE)."""
         return (getattr(self.window, "_active_layout", "Model") != "Model"
                 and getattr(self.window, "_active_vp", None) is None
                 and self.window.document is not None)
 
+    def space_changed(self) -> None:
+        """The current space changed under us (tab switch, MSPACE/PSPACE).
+
+        Pick index, snap engine and the overlay's curve tolerance each
+        describe ONE space, so all three are rebuilt; the selection goes
+        because AutoCAD does not carry a selection across spaces either.
+        """
+        self.selection = set()
+        self.reset_pick_cycle()
+        self._window_anchor = None
+        self._crossing_rects = []
+        self._highlight_cache = None
+        self._grips_cache = None
+        self._sel_entities_cache = None
+        self._invalidate_geometry()
+        document = self.window.document
+        if document is not None:
+            self._flatten = _flatten_distance(document.current_space())
+            self._ghost_cache = None
+        self.changed.emit()
+
     def _selection_click(self, wx: float, wy: float, shift: bool) -> None:
-        if self._paper_select_mode():
-            # Paper space: the only selectable entity (v0.1) is a viewport,
-            # picked by its border like AutoCAD. No selection windows here.
-            self._window_anchor = None
-            layout = self.window.document.doc.layouts.get(
-                self.window._active_layout)
-            vp = layout_ops.viewport_border_hit(
-                layout, wx, wy, self._pick_tolerance)
-            self.paper_vp = vp
-            if vp is not None:
-                self.window.command_line.echo(tr("{count} selected.", count=1))
+        if getattr(self.window, "_active_vp", None) is not None:
+            # Inside a viewport AutoCAD selects MODEL objects; we cannot
+            # reach them through the projection yet, and the pointer's paper
+            # coordinates would otherwise pick whatever sheet object happens
+            # to lie under them. Doing nothing is the only honest answer.
             return
         if self.index is None:
             if self.window.document is None:
@@ -1681,9 +1746,9 @@ class ToolController(QObject):
         # inserted vertex before the user drops it.
         if self._grip_drag is not None:
             return []
-        if self._paper_select_mode():
-            vp = self.paper_vp
-            if self.tool is not None or vp is None or not vp.is_alive:
+        vp = self.paper_vp
+        if vp is not None:
+            if self.tool is not None or not vp.is_alive:
                 return []
             return [(x, y, role, vp.dxf.handle, i)
                     for i, (x, y, role) in enumerate(layout_ops.viewport_grips(vp))]
@@ -1724,7 +1789,7 @@ class ToolController(QObject):
         from core.select import entity_grips
 
         gx, gy, role, handle, index = grip
-        if self._paper_select_mode() and self.paper_vp is not None:
+        if self.paper_vp is not None:
             # viewport grip: only the rubber rectangle moves until the drop
             self._grip_drag = (_VP_GRIP, index, role, None)
             self.window.viewport.vp_drag_rect = layout_ops.viewport_rect(
@@ -1921,12 +1986,6 @@ class ToolController(QObject):
         the isin sweep over a cadastre's 1.35 M rows costs ~40 ms and must
         not run per frame.
         """
-        if self._paper_select_mode():
-            empty = np.empty((0, 4))
-            vp = self.paper_vp
-            if vp is None or not vp.is_alive:
-                return empty, empty, empty
-            return empty, empty, np.array([layout_ops.viewport_rect(vp)])
         if not self.selection or self.index is None:
             empty = np.empty((0, 4))
             return empty, empty, empty
