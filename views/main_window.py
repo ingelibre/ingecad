@@ -210,6 +210,13 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self._menu_bar)
         self.setMenuWidget(header)
 
+        # Qt hands the bottom corners to the BOTTOM dock area by default, so
+        # the command window ran the full width and cut the right sidebar
+        # short. The sidebar is a palette that belongs beside the drawing all
+        # the way down (AutoCAD docks its palettes to the full height and the
+        # command window spans the drawing area, not the palette).
+        self.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
+
         self._build_menus()
         self._build_status_bar()
         self._build_command_line()
