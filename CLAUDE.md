@@ -419,6 +419,50 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-28/29 — las láminas vacías, y el PR #1406 upstream
+
+El hallazgo que quedó anotado sin arreglar en la sesión anterior —cuatro de
+las cinco láminas de `Planos Constructivos.dwg` abriendo con la hoja vacía—
+resultó ser **un bug de lectura de LibreDWG**, y está enviado:
+**[PR #1406](https://github.com/LibreDWG/libredwg/pull/1406)**. IngeCAD ya lo
+sortea por su cuenta con `core.layouts.repair_viewport_status` (commit
+`30402a9`), como `_dedupe_handles`: el vendor no lo lleva todavía.
+
+**La causa:** los grupos DXF 68 (estado) y 69 (id) **no se guardan en un DWG**,
+así que el escritor los deriva — y los derivaba de `entmode`, tomando el 0 por
+«la ventana global del espacio papel». Pero `entmode 0` sólo dice que la
+entidad **trae su dueño explícito**, que es como guarda sus entidades toda
+lámina salvo la que estaba activa al guardar. O sea: en cualquier plano con
+más de una lámina, **todas las ventanas de las otras salían apagadas**.
+
+**Verificado como manda la casa, y contra ODA:** `make check` 254/254; barrido
+de los **1657 planos** master contra parche con el mismo criterio en los dos
+lados — **1307 láminas revividas, 0 apagadas, 0 cambios de conteo de ventanas,
+0 fallos de conversión nuevos**; y las cinco láminas del plano salen
+`(1,1) (2,2)…` **idénticas a ODA**, igual que los R13/R14 del corpus.
+
+⚠️ **Tres lecciones de método, las tres de la familia de siempre:**
+1. **`/tmp` es un tmpfs de 12 GB — o sea RAM.** El barrido del corpus escribe
+   ahí sus DXF intermedios y lo llenó: **eso fue lo que cerró la terminal de
+   la sesión anterior**, no un cuelgue. El síntoma engaña: todo comando falla
+   con un exit 1 pelado, sin una línea de error. Todo barrido va con
+   `TMPDIR` en disco. Memoria: `[[tmpfs-corpus-runs]]`.
+2. **Mi primer barrido midió mal y culpó al parche:** leía el **primer** grupo
+   330 de cada VIEWPORT como su dueño, y ese 330 suele ser un *reactor* dentro
+   de un bloque `102 {…}`. Daban 769 láminas «mal numeradas» que en el archivo
+   estaban perfectas. El medidor se verifica igual que el código.
+3. **Escribí en el PR una afirmación sobre el issue vecino #1213 sin medirla**
+   («su archivo seguía dando id 0»). Bajé su reproductor: **era falsa** —
+   master ya escribía 1 y 2 ahí; lo que cambia es el 68. Corregido antes de
+   que nadie lo leyera. *Un issue ajeno se mide, no se recuerda.*
+
+**Y una rama que no se probaba sola:** el chequeo del nombre `*` en archivos
+R2007+ (nombres en UTF-16) no lo ejercita ningún plano del corpus —todas sus
+láminas tienen LAYOUT, así que la otra condición las cubría—. Se compiló una
+**sonda** con ese chequeo como única condición: R2018 numera sus cinco
+láminas, R14 sus dos. Una rama sin caso que la ejercite es una rama sin
+probar, aunque el conjunto pase.
+
 ## 🗓 Sesión 2026-08-27 — v0.4.6: la lámina se edita (el espacio actual, generalizado)
 
 **v0.4.6 PUBLICADA con el OK de Marco (2026-08-27):** los tres binarios en la
