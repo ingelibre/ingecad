@@ -759,13 +759,19 @@ def _declared_extents(document) -> Optional[tuple[float, float, float, float]]:
     return box
 
 
-def build_scene_for_entities(document: Document, entities, flatten: float) -> Scene:
+def build_scene_for_entities(document: Document, entities, flatten: float,
+                             canvas=None) -> Scene:
     """Pack just ``entities`` (freshly drawn ones) into a small overlay scene.
 
     Drawing must feel instant on any file size: instead of a full regen per
     added entity, the viewport draws this overlay on top of the base scene
     and merges on the next real regen. ``flatten`` comes from the base scene
     build so curve quality matches.
+
+    ``canvas`` is the space whose canvas the overlay lands on, when that is
+    not the space being edited: inside a viewport (MSPACE) the entities are
+    the MODEL's but they are drawn on the white sheet, and an ACI 7 line
+    resolved against the model's dark background would be white on white.
     """
     from core.isolate import hidden_handles
 
@@ -775,24 +781,28 @@ def build_scene_for_entities(document: Document, entities, flatten: float) -> Sc
     # sheet re-read 36 MB from disk 30 times per second.
     backend = _CornersOnlyBackend(flatten)
     context = TolerantRenderContext(document.doc)
-    _apply_space_colors(context, document)
+    _apply_space_colors(context, document, canvas)
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
     frontend.hidden_handles = frozenset(hidden_handles(document))
     frontend.draw_entities(entities)
     return pack(backend.buckets, _declared_extents(document))
 
 
-def _apply_space_colors(context, document) -> None:
+def _apply_space_colors(context, document, canvas=None) -> None:
     """Resolve colours against the canvas the overlay will land on.
 
     ``draw_entities`` never calls ``set_current_layout``, so the context
     keeps ezdxf's dark modelspace defaults — and on a white sheet that
     paints a freshly drawn ACI 7 line **white on white**. The overlay must
     answer the same question the base scene answered: which space is this?
+
+    Which is why ``canvas`` exists: inside a viewport the space being edited
+    (the model) and the canvas it is drawn on (the sheet) are not the same
+    one, and it is the CANVAS that decides the colour.
     """
     from core import window_colors
 
-    space = document.current_space()
+    space = canvas if canvas is not None else document.current_space()
     try:
         if getattr(space, "is_any_paperspace", False):
             context.set_current_layout(space)      # ezdxf's paper white

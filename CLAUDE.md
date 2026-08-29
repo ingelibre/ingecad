@@ -419,6 +419,57 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-29 — editar DENTRO de la ventana gráfica (MSPACE)
+
+**El tercer estado de una lámina, que la v0.4.6 dejó anotado como pendiente,
+existe.** MSPACE (o doble clic dentro de una ventana) hace del modelo el
+espacio actual y **dibujar, editar, enganchar, picar y los grips llegan a él a
+través de la proyección de la ventana**. La matemática vive en UN lugar
+—`core.layouts.paper_to_model` / `model_to_paper`, con escala, centro de vista
+y **giro**— y sólo dos capas la cruzan:
+
+| dirección | quién convierte |
+|---|---|
+| el mouse da PAPEL, las herramientas quieren MODELO | `ToolController.to_space`, en la puerta: hover, clic, ventana de selección, grips, `pick_entity` — y las tolerancias, que son distancias de pantalla medidas en milímetros de papel |
+| las herramientas contestan MODELO, el lienzo dibuja PAPEL | `ViewportWidget._space_to_screen` / `space_affine` para todo el overlay de QPainter, y `_mvp(space=True)` para el overlay GL, el fantasma y los sellos, recortados al marco |
+
+**Las reglas de AutoCAD que se copiaron** (referencia en
+`docs/reference/layout/`): un clic sólo cuenta **dentro** de la ventana activa
+—uno en otra la hace actual, incluso a mitad de un comando; uno sobre el papel
+pelado no hace nada, porque a través de la proyección significaría un punto del
+modelo que la ventana no muestra—; el cursor se recorta a la ventana activa; la
+lectura de coordenadas pasa a unidades del modelo; los comandos de la hoja
+(MVIEW) siguen siendo de papel y lo dicen; ZOOM Ventana y la rueda mueven la
+vista de la VENTANA (antes la rueda sí y ZOOM Ventana no: se contradecían);
+Ctrl+R cicla la ventana actual.
+
+⚠️ **El bug que sólo apareció dogfoodeando, y es el de la v0.4.6 un espacio más
+adentro:** la entidad que se dibuja es del **modelo**, pero el lienzo donde
+aterriza es la **hoja blanca**, así que el overlay resolvía ACI 7 contra el
+fondo oscuro del modelo. Medido sobre el plano real: la línea recién dibujada
+salía **blanco puro (255,255,255)** sobre contenido negro. Ahora el constructor
+del overlay recibe su *canvas* aparte del espacio que se edita — son dos
+preguntas distintas y hasta hoy eran la misma. Vuelto a medir: **0,1 de media,
+33 el píxel más claro** (bordes suavizados).
+
+**Verificado sobre `Planos Constructivos.dwg` (lámina A-02, 13 ventanas, 1:10,
+modelo de 9 847 entidades):** picar donde la ventana dibuja el punto medio de
+una línea selecciona **esa** entidad (#3400A0 apuntada = #3400A0 picada);
+dibujar dos puntos deja la LINE en el modelo en las coordenadas exactas que
+predice la proyección; MOVE de 20 × 10 mm de papel mueve el modelo
+**(2,000, 1,000)** = papel/escala, y el deshacer devuelve (0,0); el fantasma se
+dibuja dentro del marco. **Tiempos: el primer picado 1 924 ms —construye el
+índice del modelo— y los siguientes 12 ms**, que es lo que se siente.
+
+⚠️ **Y una ventana real de ese plano tiene `view_twist_angle = 60°`**: el giro
+en la proyección no era un lujo teórico. La rama del nombre `*` para archivos
+R2007+ (nombres UTF-16) tampoco la ejercita ningún plano del corpus, así que se
+probó con una **sonda** donde ese chequeo era la única condición.
+
+**Lo que sigue pendiente, dicho:** el snap entre espacios (enganchar desde la
+hoja a lo que muestra una ventana) y que una capa congelada *en esa ventana*
+no se pueda picar a través de ella.
+
 ## 🗓 Sesión 2026-08-28/29 — las láminas vacías, y el PR #1406 upstream
 
 El hallazgo que quedó anotado sin arreglar en la sesión anterior —cuatro de

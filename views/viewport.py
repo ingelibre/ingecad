@@ -15,6 +15,7 @@ Navigation (AutoCAD-like):
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -275,6 +276,11 @@ class Viewport(QOpenGLWidget):
         # MSPACE-active viewport rect (paper world coords) — drawn with the
         # heavy border AutoCAD gives the active viewport. None = paper space.
         self.active_vp_rect = None
+        # The projection of the activated viewport, or None on the sheet and
+        # in the Model tab. Set by the MainWindow; every overlay this widget
+        # draws for the TOOL layer goes through it, because inside a
+        # viewport the tools speak model coordinates and the canvas paper.
+        self.space_placement = None
         # Rubber rectangle while a selected viewport's grip follows the
         # cursor (move/resize preview). Set by the ToolController.
         self.vp_drag_rect = None
@@ -799,21 +805,70 @@ class Viewport(QOpenGLWidget):
         self.view.width = max(self.width(), 1)
         self.view.height = max(self.height(), 1)
 
-    def _mvp(self, ox: float = 0.0, oy: float = 0.0) -> QMatrix4x4:
+    def _mvp(self, ox: float = 0.0, oy: float = 0.0,
+             space: bool = False) -> QMatrix4x4:
         """World -> clip for vertices stored relative to origin (ox, oy).
 
         The subtraction (view center - vertex origin) happens here in float64;
         both operands are large (UTM), the difference is small, and only the
         small number reaches the float32 matrix.
+
+        ``space=True`` means the vertices are in the CURRENT space, which
+        inside an activated viewport is the model: the viewport's projection
+        is inserted between them and the view. The sheet's own scene never
+        passes it, which is why this is a flag and not the default.
         """
         kx, ky, cx, cy = self.view.ndc_factors()
         m = QMatrix4x4()
         m.scale(kx, ky, 1.0)
+        place = self.space_placement if space else None
+        if place:
+            self._space_chain(m, cx, cy, ox, oy)
+            return m
         m.translate(-(cx - ox), -(cy - oy), 0.0)
         return m
 
+    def _space_chain(self, m: QMatrix4x4, cx: float, cy: float,
+                     ox: float, oy: float) -> None:
+        """Append "project the current space onto the paper" to ``m``.
+
+        Every large subtraction is done here in float64 -- the view centre
+        against the viewport's paper position, and the vertex origin against
+        the view centre of the model -- so the float32 matrix only ever sees
+        small numbers. A UTM drawing seen through a viewport is exactly the
+        case where the naive chain loses millimetres.
+        """
+        place = self.space_placement
+        bx, by = place["base"]
+        offx, offy = place["offset"]
+        f = place["factor"]
+        angle = place.get("angle", 0.0) or 0.0
+        m.translate(-(cx - bx - offx), -(cy - by - offy), 0.0)
+        if angle:
+            m.rotate(angle, 0.0, 0.0, 1.0)
+        m.scale(f, f, 1.0)
+        m.translate(ox - bx, oy - by, 0.0)
+
+    def space_scissor(self, gl) -> bool:
+        """Clip GL drawing to the active viewport's frame. True when set."""
+        place = self.space_placement
+        if not place:
+            return False
+        x0, y0, x1, y1 = place["rect"]
+        sx0, sy0 = self.view.world_to_screen(x0, y1)
+        sx1, sy1 = self.view.world_to_screen(x1, y0)
+        dpr = self.devicePixelRatioF()
+        px, py = int(sx0 * dpr), int(sy0 * dpr)
+        pw, ph = int((sx1 - sx0) * dpr), int((sy1 - sy0) * dpr)
+        if pw <= 0 or ph <= 0:
+            return False
+        gl.glEnable(GL_SCISSOR_TEST)
+        gl.glScissor(px, int(self.height() * dpr) - py - ph, pw, ph)
+        return True
+
     def _mvp_about(self, ox: float, oy: float, base, angle: float,
-                   factor: float, dx: float = 0.0, dy: float = 0.0):
+                   factor: float, dx: float = 0.0, dy: float = 0.0,
+                   space: bool = False):
         """World -> clip with the ghost turned/grown about ``base``.
 
         A stored vertex v sits at ``v + origin``; the placement sends it to
@@ -825,8 +880,12 @@ class Viewport(QOpenGLWidget):
         bx, by = base
         m = QMatrix4x4()
         m.scale(kx, ky, 1.0)
-        m.translate(-cx, -cy, 0.0)
-        m.translate(bx + dx, by + dy, 0.0)
+        if space and self.space_placement:
+            # the placement lands the *base* point, then the ghost turns
+            # and grows about it as usual
+            self._space_chain(m, cx, cy, bx + dx, by + dy)
+        else:
+            m.translate(-(cx - bx - dx), -(cy - by - dy), 0.0)
         if angle:
             m.rotate(angle, 0.0, 0.0, 1.0)
         if factor != 1.0:
@@ -922,6 +981,10 @@ class Viewport(QOpenGLWidget):
             self._draw_live_viewport(gl)
 
         if self._stamps:
+            # Everything below draws the CURRENT space: inside a viewport
+            # that is the model, so it goes through the projection and is
+            # clipped to the viewport's frame like the content it joins.
+            scissored = self.space_scissor(gl)
             self._program.bind()
             for group in self._stamps:
                 if group["bufs"] is None:
@@ -937,7 +1000,7 @@ class Viewport(QOpenGLWidget):
                 for dx, dy in group["offsets"].values():
                     self._program.bind()
                     self._program.setUniformValue(
-                        self._loc_mvp, self._mvp(ox + dx, oy + dy))
+                        self._loc_mvp, self._mvp(ox + dx, oy + dy, space=True))
                     for name, mode in (("triangles", GL_TRIANGLES),
                                        ("lines", GL_LINES),
                                        ("points", GL_POINTS)):
@@ -949,13 +1012,17 @@ class Viewport(QOpenGLWidget):
                         gl.glDrawArrays(mode, 0, count)
                         vao.release()
                     self._program.release()
-                    self._draw_thick(gl, self._mvp(ox + dx, oy + dy), None,
+                    self._draw_thick(gl, self._mvp(ox + dx, oy + dy,
+                                                    space=True), None,
                                      group["bufs"].get("thick"),
                                      group["scene"].thick)
             self._program.release()
+            if scissored:
+                gl.glDisable(GL_SCISSOR_TEST)
 
         if self._overlay_scene is not None and self._overlay_bufs:
-            overlay_mvp = self._mvp(*self._overlay_scene.origin)
+            scissored = self.space_scissor(gl)
+            overlay_mvp = self._mvp(*self._overlay_scene.origin, space=True)
             self._program.bind()
             self._program.setUniformValue(self._loc_mvp, overlay_mvp)
             for name, mode in (("triangles", GL_TRIANGLES),
@@ -972,18 +1039,22 @@ class Viewport(QOpenGLWidget):
             self._draw_thick(gl, overlay_mvp, None,
                              self._overlay_bufs.get("thick"),
                              self._overlay_scene.thick)
+            if scissored:
+                gl.glDisable(GL_SCISSOR_TEST)
 
         if self._ghost_scene is not None and self._ghost_bufs:
             # The ghost translates by shifting the vertex origin in the MVP:
             # same buffers every frame, only this uniform changes.
             ox, oy = self._ghost_scene.origin
             dx, dy = self._ghost_offset
+            scissored = self.space_scissor(gl)
             if self._ghost_base is None:
-                ghost_mvp = self._mvp(ox + dx, oy + dy)
+                ghost_mvp = self._mvp(ox + dx, oy + dy, space=True)
             else:
                 ghost_mvp = self._mvp_about(ox, oy, self._ghost_base,
                                             self._ghost_angle,
-                                            self._ghost_factor, dx, dy)
+                                            self._ghost_factor, dx, dy,
+                                            space=True)
             self._program.bind()
             self._program.setUniformValue(self._loc_mvp, ghost_mvp)
             for name, mode in (("triangles", GL_TRIANGLES),
@@ -1000,6 +1071,8 @@ class Viewport(QOpenGLWidget):
             self._draw_thick(gl, ghost_mvp, None,
                              self._ghost_bufs.get("thick"),
                              self._ghost_scene.thick)
+            if scissored:
+                gl.glDisable(GL_SCISSOR_TEST)
 
         self._paint_overlay()
 
@@ -1204,6 +1277,42 @@ class Viewport(QOpenGLWidget):
         vao.release()
         prog.release()
 
+    # -- the current space vs the paper the canvas draws ----------------------
+    def space_affine(self):
+        """(a, b, c, d, tx, ty): a CURRENT-SPACE point -> paper coordinates.
+
+        ``px = a*x + b*y + tx``, ``py = c*x + d*y + ty``. The identity on the
+        sheet and in the Model tab, the viewport's projection inside MSPACE.
+        """
+        place = self.space_placement
+        if not place:
+            return (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+        f = place["factor"]
+        bx, by = place["base"]
+        ox, oy = place["offset"]
+        angle = math.radians(place.get("angle", 0.0) or 0.0)
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        a, b = f * cos_a, -f * sin_a
+        c, d = f * sin_a, f * cos_a
+        # scale/turn about base, then shift: p = R*f*(x - base) + base + off
+        return (a, b, c, d,
+                bx + ox - (a * bx + b * by),
+                by + oy - (c * bx + d * by))
+
+    def _space_to_screen(self, x: float, y: float):
+        """A point of the current space -> pixels, through the projection."""
+        if self.space_placement:
+            a, b, c, d, tx, ty = self.space_affine()
+            x, y = a * x + b * y + tx, c * x + d * y + ty
+        return self.view.world_to_screen(x, y)
+
+    def _space_scale(self) -> float:
+        """Pixels per unit of the CURRENT space (a model unit is smaller on
+        the sheet by the viewport's scale)."""
+        if self.space_placement:
+            return self.view.scale * self.space_placement["factor"]
+        return self.view.scale
+
     # -- overlay (QPainter, logical pixels) -----------------------------------
     def _paint_overlay(self) -> None:
         p = QPainter(self)
@@ -1231,7 +1340,7 @@ class Viewport(QOpenGLWidget):
             grip_marker = getattr(self.tool_delegate,
                                   "grip_align_marker", None)
             if grip_marker is not None:
-                mx, my = self.view.world_to_screen(*grip_marker)
+                mx, my = self._space_to_screen(*grip_marker)
                 half = self.MARKER_SIZE / 2.0
                 p.save()
                 p.setPen(QPen(QColor(80, 220, 80), 2))
@@ -1243,7 +1352,7 @@ class Viewport(QOpenGLWidget):
                          else QColor(200, 200, 200))
                 p.setPen(QPen(color, 1, Qt.DashLine))
                 if "text_at" in grip_dim:
-                    tx, ty = self.view.world_to_screen(*grip_dim["text_at"])
+                    tx, ty = self._space_to_screen(*grip_dim["text_at"])
                     p.setPen(QPen(color))
                     p.drawText(QPointF(tx, ty), grip_dim["text"])
                 else:
@@ -1281,7 +1390,7 @@ class Viewport(QOpenGLWidget):
         squares, others = [], []
         hot = None
         for x, y, role, handle, i in grips:
-            sx, sy = self.view.world_to_screen(x, y)
+            sx, sy = self._space_to_screen(x, y)
             if sx < -s or sy < -s or sx > w + s or sy > h_px + s:
                 continue
             if hovered is not None and hovered[3] == handle and hovered[4] == i:
@@ -1324,8 +1433,8 @@ class Viewport(QOpenGLWidget):
         from PySide6.QtGui import QFont
 
         pos, buffer, height, rotation = info
-        sx, sy = self.view.world_to_screen(pos[0], pos[1])
-        px = max(6.0, height * self.view.scale)   # world height -> pixels
+        sx, sy = self._space_to_screen(pos[0], pos[1])
+        px = max(6.0, height * self._space_scale())  # world height -> pixels
         p.save()
         p.translate(sx, sy)
         p.rotate(-rotation)                        # world CCW -> screen
@@ -1351,11 +1460,21 @@ class Viewport(QOpenGLWidget):
         # grip, typing at the prompt -- the same lines are rebuilt every
         # frame. Keyed by the array IDENTITY (holding the reference keeps it
         # alive, so a rebuilt selection can never alias a freed one).
-        state = (v.cx, v.cy, v.scale, v.width, v.height, cap)
+        xf = self.space_affine()
+        state = (v.cx, v.cy, v.scale, v.width, v.height, cap, xf)
         cached = self._hl_lines_cache
         if cached is not None and cached[0] is segs and cached[1] == state:
             return cached[2]
         a = np.asarray(segs, dtype=float)
+        if xf != (1.0, 0.0, 0.0, 1.0, 0.0, 0.0):
+            # inside a viewport the segments are model coordinates: project
+            # them onto the paper in the same numpy pass
+            m11, m12, m21, m22, tx, ty = xf
+            a = np.column_stack((
+                m11 * a[:, 0] + m12 * a[:, 1] + tx,
+                m21 * a[:, 0] + m22 * a[:, 1] + ty,
+                m11 * a[:, 2] + m12 * a[:, 3] + tx,
+                m21 * a[:, 2] + m22 * a[:, 3] + ty))
         sx = (a[:, 0] - v.cx) * v.scale + v.width / 2.0
         sy = v.height / 2.0 - (a[:, 1] - v.cy) * v.scale
         ex = (a[:, 2] - v.cx) * v.scale + v.width / 2.0
@@ -1387,8 +1506,8 @@ class Viewport(QOpenGLWidget):
             import math as _math
 
             for c in circles[:1000]:
-                x, y = self.view.world_to_screen(c[0], c[1])
-                r = c[2] * self.view.scale
+                x, y = self._space_to_screen(c[0], c[1])
+                r = c[2] * self._space_scale()
                 if x + r < 0 or y + r < 0 or x - r > self.width() \
                         or y - r > self.height():
                     continue
@@ -1402,8 +1521,8 @@ class Viewport(QOpenGLWidget):
                     p.drawEllipse(QPointF(x, y), r, r)
             rects = []
             for b in boxes[:1000]:
-                x1, y1 = self.view.world_to_screen(b[0], b[3])
-                x2, y2 = self.view.world_to_screen(b[2], b[1])
+                x1, y1 = self._space_to_screen(b[0], b[3])
+                x2, y2 = self._space_to_screen(b[2], b[1])
                 if x2 < 0 or y2 < 0 or x1 > self.width() or y1 > self.height():
                     continue
                 rects.append(QRectF(x1, y1, x2 - x1, y2 - y1))
@@ -1412,8 +1531,8 @@ class Viewport(QOpenGLWidget):
         rect_info = delegate.selection_rect()
         if rect_info is not None:
             (x0, y0, x1, y1), crossing = rect_info
-            sx1, sy1 = self.view.world_to_screen(x0, y1)
-            sx2, sy2 = self.view.world_to_screen(x1, y0)
+            sx1, sy1 = self._space_to_screen(x0, y1)
+            sx2, sy2 = self._space_to_screen(x1, y0)
             fill = self.CROSSING_FILL if crossing else self.WINDOW_FILL
             border = self.CROSSING_BORDER if crossing else self.WINDOW_BORDER
             p.fillRect(sx1, sy1, sx2 - sx1, sy2 - sy1, fill)
@@ -1433,7 +1552,7 @@ class Viewport(QOpenGLWidget):
             if marker is not None:
                 # AutoCAD's chained-dimension aid: the green square where
                 # the new line locked onto an existing dimension's line.
-                mx, my = self.view.world_to_screen(*marker)
+                mx, my = self._space_to_screen(*marker)
                 half = self.MARKER_SIZE / 2.0
                 p.save()
                 p.setPen(QPen(QColor(80, 220, 80), 2))
@@ -1441,12 +1560,12 @@ class Viewport(QOpenGLWidget):
                 p.restore()
         else:
             for (ax, ay), (bx, by) in delegate.preview_segments():
-                x1, y1 = self.view.world_to_screen(ax, ay)
-                x2, y2 = self.view.world_to_screen(bx, by)
+                x1, y1 = self._space_to_screen(ax, ay)
+                x2, y2 = self._space_to_screen(bx, by)
                 p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
         hit = delegate.snap_hit
         if hit is not None:
-            sx, sy = self.view.world_to_screen(hit.x, hit.y)
+            sx, sy = self._space_to_screen(hit.x, hit.y)
             self._draw_snap_marker(p, hit.kind, sx, sy)
 
     def _draw_dim_preview(self, p: QPainter, dim: dict, color: QColor) -> None:
@@ -1454,7 +1573,7 @@ class Viewport(QOpenGLWidget):
         arrowheads, and the live measurement — floats with the cursor."""
         import math
 
-        s = self.view.world_to_screen
+        s = self._space_to_screen
         p1 = QPointF(*s(*dim["p1"]))
         p2 = QPointF(*s(*dim["p2"]))
         d1 = QPointF(*s(*dim["d1"]))
@@ -1600,6 +1719,16 @@ class Viewport(QOpenGLWidget):
         if color is None:
             color = (CROSSHAIR_COLOR_LIGHT if self._light_background()
                      else CROSSHAIR_COLOR)
+        clipped = False
+        if self.active_vp_rect is not None:
+            # "the crosshairs are clipped to the current viewport" — the
+            # cue that says which viewport an edit will land in.
+            x0, y0, x1, y1 = self.active_vp_rect
+            sx0, sy0 = self.view.world_to_screen(x0, y1)
+            sx1, sy1 = self.view.world_to_screen(x1, y0)
+            p.save()
+            p.setClipRect(QRectF(sx0, sy0, sx1 - sx0, sy1 - sy0))
+            clipped = True
         p.setPen(QPen(color, 1))
         x, y = pos.x(), pos.y()
         box = self._pickbox_px
@@ -1619,6 +1748,8 @@ class Viewport(QOpenGLWidget):
                 p.drawLine(QPointF(x, y - arm), QPointF(x, y + arm))
         if mode != "point":
             p.drawRect(x - half, y - half, box, box)
+        if clipped:
+            p.restore()
 
     # -- input -----------------------------------------------------------------
     def mousePressEvent(self, event) -> None:
@@ -1703,6 +1834,14 @@ class Viewport(QOpenGLWidget):
             if abs(pos.x() - x0) > 4 and abs(pos.y() - y0) > 4:
                 wx0, wy0 = self.view.screen_to_world(x0, y0)
                 wx1, wy1 = self.view.screen_to_world(pos.x(), pos.y())
+                window = self._mspace_window()
+                if window is not None and window.vp_zoom_window(
+                        min(wx0, wx1), min(wy0, wy1),
+                        max(wx0, wx1), max(wy0, wy1)):
+                    # inside a viewport the window zooms THAT view, like the
+                    # wheel does, not the sheet the frame sits on
+                    self.update()
+                    return
                 self.push_view()
                 self.view.zoom_extents(min(wx0, wx1), min(wy0, wy1),
                                        max(wx0, wx1), max(wy0, wy1), margin=0.0)

@@ -128,8 +128,37 @@ class MainWindow(QMainWindow):
     @_active_layout.setter
     def _active_layout(self, name: str) -> None:
         self._active_layout_name = name
+        self._sync_document_space()
+
+    #: Backing store of :attr:`_active_vp`, for the same reason.
+    _active_vp_entity = None
+
+    @property
+    def _active_vp(self):
+        """The viewport MSPACE activated, or None while the sheet is current.
+
+        A property for the same reason the tab is one: inside a viewport the
+        current space is the MODELSPACE -- that is what MSPACE means -- and
+        the document has to hear it, or a command would edit the sheet while
+        the user is drawing in the model.
+        """
+        return self._active_vp_entity
+
+    @_active_vp.setter
+    def _active_vp(self, vp) -> None:
+        self._active_vp_entity = vp
+        self._sync_document_space()
+
+    def _sync_document_space(self) -> None:
+        """Tell the document which space is current: model, sheet, or the
+        model reached through an activated viewport."""
         document = getattr(self, "document", None)
-        if document is not None:
+        if document is None:
+            return
+        name = self._active_layout_name
+        if self._active_vp_entity is not None:
+            document.active_layout = None       # MSPACE: the model is current
+        else:
             document.active_layout = None if name in ("Model", "") else name
 
     def __init__(self) -> None:
@@ -802,6 +831,10 @@ class MainWindow(QMainWindow):
              lambda: self._invoke_command("MSPACE"))
         item(vp_menu, tr("Paper space (PSPACE)"),
              lambda: self._invoke_command("PSPACE"))
+        # AutoCAD's Ctrl+R: "cycles the current viewport among the active
+        # viewports when in model space in a layout".
+        item(vp_menu, tr("Next viewport"), self.cycle_active_viewport,
+             QKeySequence("Ctrl+R"))
         view_menu.addSeparator()
         item(view_menu, tr("Layers panel"), self.toggle_layers_panel,
              icon="LAYER")
@@ -2064,6 +2097,10 @@ class MainWindow(QMainWindow):
         """
         if self.document is None:
             return
+        # A regen follows every command and every undo, so this is where the
+        # projection is picked up when ZOOM nXP, a fit or an undo moved the
+        # active viewport's view.
+        self.refresh_space_placement()
         self._layout_scenes.clear()   # whoever asks for a regen calls it stale
         self._regen_zoom = self._regen_zoom or zoom_after
         if self._regen_worker is not None:
@@ -2228,10 +2265,21 @@ class MainWindow(QMainWindow):
     def _activate_viewport(self, vp) -> None:
         from core import layouts as layout_ops
 
+        placement = layout_ops.viewport_placement(vp)
+        if placement is None:
+            self.command_line.echo(
+                tr("That viewport has no usable view — set its scale first "
+                   "(Z + nXP), or fit it."))
+            return
         self.tools.clear_selection()      # entering MSPACE deselects (AutoCAD)
         self._active_vp = vp
         self.viewport.active_vp_rect = layout_ops.viewport_rect(vp)
-        self.viewport.update()
+        # Everything the mouse says is paper and everything the model
+        # answers is model: the projection goes to the two layers that
+        # cross it, the tool controller (points) and the canvas (matrices).
+        self.viewport.space_placement = placement
+        self.tools.space_changed()        # index, snap and tolerance are the
+        self.viewport.update()            # model's now, not the sheet's
         label = layout_ops.scale_label(layout_ops.viewport_scale(vp))
         if layout_ops.is_viewport_locked(vp):
             self.command_line.echo(
@@ -2259,6 +2307,7 @@ class MainWindow(QMainWindow):
         layout_ops.zoom_viewport_view(vp, factor, anchor)
         self.document.dirty = True
         self._vp_gesture_timer.start()
+        self.refresh_space_placement()
         self._vp_live_regen()
         return True
 
@@ -2275,8 +2324,50 @@ class MainWindow(QMainWindow):
         layout_ops.pan_viewport_view(vp, dx_world, dy_world)
         self.document.dirty = True
         self._vp_gesture_timer.start()
+        self.refresh_space_placement()
         self._vp_live_regen()
         return True
+
+    def vp_zoom_window(self, x0: float, y0: float,
+                       x1: float, y1: float) -> bool:
+        """ZOOM Window while a viewport is active: it zooms THAT viewport.
+
+        True when it was handled, so the canvas leaves its own view alone.
+        """
+        from core import layouts as layout_ops
+
+        vp = self._active_vp
+        if vp is None or not vp.is_alive:
+            return False
+        if layout_ops.is_viewport_locked(vp):
+            self.command_line.echo(
+                tr("Viewport is view-locked — VPLOCK to unlock."))
+            return True
+        command = layout_ops.zoom_window_command(vp, x0, y0, x1, y1)
+        if command is None:
+            return False
+        self._vp_gesture_commit()      # settle any wheel burst first
+        self.history.execute(command)
+        self.refresh_space_placement()
+        self.regen_in_memory()
+        return True
+
+    def cycle_active_viewport(self) -> None:
+        """Ctrl+R: make the next viewport of the layout current (AutoCAD)."""
+        from core import layouts as layout_ops
+
+        if self.document is None or self._active_layout == "Model":
+            return
+        layout = self.document.doc.layouts.get(self._active_layout)
+        viewports = layout_ops.visible_viewports(layout)
+        if not viewports:
+            return
+        current = self._active_vp
+        if current is None or current not in viewports:
+            self._activate_viewport(viewports[-1])
+            return
+        nxt = viewports[(viewports.index(current) + 1) % len(viewports)]
+        self._activate_viewport(nxt)
 
     def _vp_live_regen(self) -> None:
         """A pan/zoom tick inside an active viewport.
@@ -2317,6 +2408,21 @@ class MainWindow(QMainWindow):
         self.viewport.set_scene(scene)
         self.tools.mark_scene_merged()
 
+    def refresh_space_placement(self) -> None:
+        """The active viewport's view moved: the canvas needs the new
+        projection or the overlay would draw where the model USED to be.
+
+        Called from every path that can change what a viewport shows -- the
+        wheel, the pan, ZOOM nXP, fit, and undo of any of them.
+        """
+        from core import layouts as layout_ops
+
+        vp = self._active_vp
+        if vp is None or not vp.is_alive:
+            self.viewport.space_placement = None
+            return
+        self.viewport.space_placement = layout_ops.viewport_placement(vp)
+
     def invalidate_vp_model_cache(self) -> None:
         """The model changed: the tessellation kept for live viewport
         navigation is stale. Called from the edit path, NOT from the document
@@ -2355,17 +2461,10 @@ class MainWindow(QMainWindow):
                 return None
             if vp.dxf.get("clipping_boundary_handle", None):
                 return None
-            factor = float(vp.dxf.height) / float(vp.dxf.view_height)
-            centre, view_centre = vp.dxf.center, vp.dxf.view_center_point
-            rect = layout_ops.viewport_rect(vp)
         except Exception:
             return None
-        if not (factor > 0):
-            return None
-        return {"rect": rect,
-                "base": (view_centre.x, view_centre.y),
-                "factor": factor,
-                "offset": (centre.x - view_centre.x, centre.y - view_centre.y)}
+        # past those, the placement IS the projection MSPACE edits through
+        return layout_ops.viewport_placement(vp)
 
     def _vp_live_draw(self) -> bool:
         """Show EVERY viewport's content live, at its current view.
@@ -2457,6 +2556,9 @@ class MainWindow(QMainWindow):
         self._vp_gesture_commit()       # leaving MSPACE settles the gesture
         had = getattr(self, "_active_vp", None) is not None
         self._active_vp = None
+        self.viewport.space_placement = None
+        if had:
+            self.tools.space_changed()    # back to the sheet's own entities
         if getattr(self.viewport, "active_vp_rect", None) is not None:
             self.viewport.active_vp_rect = None
             self._vp_live_stop()
@@ -3191,6 +3293,15 @@ class MainWindow(QMainWindow):
     def _on_cursor_moved(self, wx: float, wy: float) -> None:
         if self._busy_text:
             return          # the coordinates line is showing progress
+        vp = self._active_vp
+        if vp is not None and vp.is_alive:
+            # Inside a viewport the readout is the MODEL coordinate under
+            # the pointer, not the millimetre of paper it lands on.
+            from core import layouts as layout_ops
+
+            point = layout_ops.paper_to_model(vp, wx, wy)
+            if point is not None:
+                wx, wy = point
         units = self.display_units()
         self._coords_label.setText(f"{units.length(wx)}, {units.length(wy)}")
 

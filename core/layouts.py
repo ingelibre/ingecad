@@ -504,6 +504,86 @@ def viewport_rect(vp) -> tuple[float, float, float, float]:
     return (cx - hw, cy - hh, cx + hw, cy + hh)
 
 
+# -- the projection: paper <-> model through a viewport --------------------------
+#
+# A floating viewport shows the model at a scale, around a view centre, and
+# optionally turned by a twist angle. Editing through it (MSPACE) means every
+# point the mouse gives is paper and every point a tool answers is model, so
+# the two directions live here, in ONE place, and everything else -- picking,
+# snapping, grips, the overlay matrices -- goes through them.
+#
+#     paper = R(twist) * (model - view_centre) * scale + centre
+#     model = R(-twist) * (paper - centre) / scale + view_centre
+
+
+def viewport_view(vp) -> Optional[tuple]:
+    """(centre, view_centre, scale, twist_radians) of a viewport, or None.
+
+    None means "this viewport cannot state a projection" -- a missing or
+    degenerate view, a non-finite number -- and every caller then refuses
+    rather than inventing coordinates.
+    """
+    try:
+        centre = (float(vp.dxf.center.x), float(vp.dxf.center.y))
+        view_centre = (float(vp.dxf.view_center_point.x),
+                       float(vp.dxf.view_center_point.y))
+        height = float(vp.dxf.height)
+        view_height = float(vp.dxf.view_height)
+        twist = math.radians(float(vp.dxf.get("view_twist_angle", 0.0) or 0.0))
+    except Exception:
+        return None
+    if not (math.isfinite(view_height) and view_height > 0.0):
+        return None
+    scale = height / view_height
+    values = (*centre, *view_centre, scale, twist)
+    if not all(math.isfinite(v) for v in values) or scale <= 0.0:
+        return None
+    return centre, view_centre, scale, twist
+
+
+def paper_to_model(vp, x: float, y: float) -> Optional[tuple[float, float]]:
+    """A point on the sheet -> the model point the viewport shows there."""
+    view = viewport_view(vp)
+    if view is None:
+        return None
+    (cx, cy), (vcx, vcy), scale, twist = view
+    dx, dy = (x - cx) / scale, (y - cy) / scale
+    if twist:
+        cos_a, sin_a = math.cos(-twist), math.sin(-twist)
+        dx, dy = dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a
+    return (vcx + dx, vcy + dy)
+
+
+def model_to_paper(vp, x: float, y: float) -> Optional[tuple[float, float]]:
+    """A model point -> where this viewport draws it on the sheet."""
+    view = viewport_view(vp)
+    if view is None:
+        return None
+    (cx, cy), (vcx, vcy), scale, twist = view
+    dx, dy = x - vcx, y - vcy
+    if twist:
+        cos_a, sin_a = math.cos(twist), math.sin(twist)
+        dx, dy = dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a
+    return (cx + dx * scale, cy + dy * scale)
+
+
+def viewport_placement(vp) -> Optional[dict]:
+    """How a renderer places the model scene inside this viewport.
+
+    The same numbers as :func:`model_to_paper`, in the form the GL matrix
+    helper wants: turn and scale about ``base``, then shift by ``offset``.
+    """
+    view = viewport_view(vp)
+    if view is None:
+        return None
+    (cx, cy), (vcx, vcy), scale, twist = view
+    return {"rect": viewport_rect(vp),
+            "base": (vcx, vcy),
+            "factor": scale,
+            "angle": math.degrees(twist),
+            "offset": (cx - vcx, cy - vcy)}
+
+
 def parse_xp_factor(token: str) -> Optional[float]:
     """AutoCAD's ZOOM nXP syntax: "1/100XP", "0.5XP", "2XP" → the paper/model
     scale factor, or None when the token is not an XP scale."""
@@ -577,6 +657,37 @@ def xp_zoom_command(vp, factor: float) -> SetViewportViewCommand:
     keeping the view center (AutoCAD keeps it too)."""
     return SetViewportViewCommand(
         vp, view_height=float(vp.dxf.height) / factor)
+
+
+def zoom_window_command(vp, x0: float, y0: float, x1: float, y1: float):
+    """ZOOM Window inside an active viewport: the paper rectangle dragged on
+    the sheet becomes what that viewport shows.
+
+    The wheel already zooms the viewport's view rather than the sheet, so
+    ZOOM Window has to do the same or the two gestures would disagree about
+    what "zoom" means while a viewport is current. A twisted viewport gets
+    the model rectangle that circumscribes the dragged one -- never less
+    than what was asked for. None when the projection cannot be stated.
+    """
+    corners = [paper_to_model(vp, x, y)
+               for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+    if any(c is None for c in corners):
+        return None
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    width, height = max(xs) - min(xs), max(ys) - min(ys)
+    try:
+        aspect = float(vp.dxf.width) / float(vp.dxf.height)
+    except (ZeroDivisionError, ValueError, TypeError):
+        aspect = 1.0
+    if not (math.isfinite(aspect) and aspect > 0.0):
+        aspect = 1.0
+    view_height = max(height, width / aspect)
+    if not (math.isfinite(view_height) and view_height > 0.0):
+        return None
+    return SetViewportViewCommand(
+        vp, ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0),
+        view_height, name="ZOOM Window")
 
 
 def is_viewport_locked(vp) -> bool:

@@ -982,8 +982,12 @@ class MTextInPlaceEditor(QWidget):
 
     # -- geometry --------------------------------------------------------------
     def _scale(self) -> float:
-        view = self._viewport.view
-        return max(float(view.scale), 1e-9)
+        # Pixels per unit of the space the text LIVES in: inside a viewport
+        # that is the model, drawn on the sheet at the viewport's scale.
+        scale = getattr(self._viewport, "_space_scale", None)
+        if scale is not None:
+            return max(float(scale()), 1e-9)
+        return max(float(self._viewport.view.scale), 1e-9)
 
     def _rescale_rich_text(self) -> None:
         """Zoom changed: every run's pixel size follows its stored factor."""
@@ -1022,9 +1026,9 @@ class MTextInPlaceEditor(QWidget):
     def _sync_geometry(self) -> None:
         if self._closed:
             return
-        view = self._viewport.view
         scale = self._scale()
-        sx, sy = view.world_to_screen(self._top_left[0], self._top_left[1])
+        sx, sy = self._viewport._space_to_screen(self._top_left[0],
+                                                 self._top_left[1])
         width = max(int(self._width_world * scale), MIN_WIDTH_PX)
 
         if abs(scale - self._last_scale) / scale > 0.01:

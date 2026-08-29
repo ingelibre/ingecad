@@ -100,17 +100,18 @@ class _GhostWorker(QThread):
 
     done = Signal(object, object)   # ents list, Scene | None
 
-    def __init__(self, document, ents, flatten: float) -> None:
+    def __init__(self, document, ents, flatten: float, canvas=None) -> None:
         super().__init__()
         self.setObjectName("ghost")
         self._document = document
         self._ents = ents
         self._flatten = flatten
+        self._canvas = canvas
 
     def run(self) -> None:
         try:
             scene = build_scene_for_entities(
-                self._document, self._ents, self._flatten)
+                self._document, self._ents, self._flatten, self._canvas)
         except Exception:
             scene = None    # doc mutated mid-read: caller falls back to regen
         self.done.emit(self._ents, scene)
@@ -378,14 +379,13 @@ class ToolController(QObject):
                 tr("** {name} is not allowed in the Model tab — switch to a "
                    "layout. **", name=name))
             return
-        if (in_paper and getattr(self.window, "_active_vp", None) is not None
-                and name not in LAYOUT_TOOL_CLASSES):
-            # Inside a viewport the commands would have to reach the MODEL
-            # through its projection; the sheet is one PSPACE away and that
-            # works fully.
+        if (in_paper and self.space_vp is not None
+                and name in LAYOUT_TOOL_CLASSES):
+            # The mirror of the rule above: a viewport is an object ON the
+            # sheet, so making one belongs to paper space (MVIEW, p. 1224).
             self.window.command_line.echo(
-                tr("Editing the model through a viewport is not available "
-                   "yet — PSPACE edits the sheet, or use the Model tab."))
+                tr("** {name} works on the sheet — PSPACE first. **",
+                   name=name))
             return
         if self.window.document is None:
             self.window.new_document()
@@ -429,6 +429,7 @@ class ToolController(QObject):
         return self.window.display_units()
 
     def pick_entity(self, point):
+        point = self.to_space(*point)
         if self.index is None:
             return None
         handle = self.pick_cycling(point)
@@ -1360,13 +1361,17 @@ class ToolController(QObject):
                      if e.is_alive and e.dxf.owner is not None
                      and e.dxf.handle not in self._base_handles]
         entities += self.grip_overlay_entities()
-        scene = (build_scene_for_entities(document, entities, self._flatten)
+        scene = (build_scene_for_entities(document, entities, self._flatten,
+                                          self.canvas_space())
                  if entities else None)
         self.window.viewport.set_overlay_scene(scene)
         self.changed.emit()
 
     # -- pointer input ---------------------------------------------------------
     def on_hover(self, wx: float, wy: float, threshold_world: float) -> None:
+        inside = self.in_active_viewport(wx, wy)
+        wx, wy = self.to_space(wx, wy)
+        threshold_world = threshold_world / self.space_factor()
         self._cursor = (wx, wy)
         from views.viewport import PICKBOX_PX
 
@@ -1381,12 +1386,8 @@ class ToolController(QObject):
         needs_snap = grip_hot or (
             self.tool is not None and self._selecting_for is None
             and not self.tool.entity_picker)
-        if getattr(self.window, "_active_vp", None) is not None:
-            # Inside a viewport the pointer is over MODEL content while the
-            # snap engine describes the sheet: every hit would be a lie.
-            # On the sheet itself the engine indexes the sheet, so snapping
-            # to the title block works exactly as it does in the model.
-            needs_snap = False
+        if not inside:
+            needs_snap = False    # over the paper, outside the viewport
         if needs_snap and self.osnap_on and self.snap_engine is not None \
                 and self.osnap_modes:
             self.snap_hit = self.snap_engine.find(
@@ -1432,7 +1433,8 @@ class ToolController(QObject):
             return self._ghost_cache[1]
         if self._ghost_wanted is not ents:
             self._ghost_wanted = ents
-            worker = _GhostWorker(self.window.document, ents, self._flatten)
+            worker = _GhostWorker(self.window.document, ents, self._flatten,
+                                  self.canvas_space())
             worker.done.connect(self._on_ghost_done)
             self._ghost_workers.add(worker)
             worker.start()
@@ -1484,11 +1486,17 @@ class ToolController(QObject):
 
     def start_window(self, wx: float, wy: float) -> None:
         """Anchor a selection window (drag start). Idempotent during a drag."""
+        if not self.in_active_viewport(wx, wy):
+            return
+        wx, wy = self.to_space(wx, wy)
         if self._window_anchor is None:
             self._window_anchor = (wx, wy)
             self.changed.emit()
 
     def on_click(self, wx: float, wy: float, shift: bool = False) -> None:
+        if not self.mspace_route(wx, wy):
+            return
+        wx, wy = self.to_space(wx, wy)
         if self.in_selection_mode():
             self._selection_click(wx, wy, shift)
             self.changed.emit()
@@ -1536,6 +1544,89 @@ class ToolController(QObject):
             return None
         return entity if entity.dxftype() == "VIEWPORT" else None
 
+    # -- the current space vs the paper the mouse points at --------------------
+    @property
+    def space_vp(self):
+        """The viewport the current space is reached THROUGH, or None.
+
+        Inside MSPACE every point the canvas hands over is a paper point and
+        every point this controller answers with is a model point, so the
+        conversion happens once, here, at the door.
+        """
+        vp = getattr(self.window, "_active_vp", None)
+        if vp is None or not getattr(vp, "is_alive", True):
+            return None
+        return vp
+
+    def mspace_route(self, wx: float, wy: float) -> bool:
+        """Should a canvas click at this PAPER point reach the tools?
+
+        On the sheet and in the Model tab: always. Inside MSPACE only when
+        it lands in the active viewport -- a click in another one makes that
+        viewport current instead, which is what AutoCAD does even in the
+        middle of a command, and a click on the bare paper does nothing at
+        all, because through the projection it would mean a model point the
+        viewport does not show.
+        """
+        vp = self.space_vp
+        if vp is None:
+            return True
+        x0, y0, x1, y1 = layout_ops.viewport_rect(vp)
+        if x0 <= wx <= x1 and y0 <= wy <= y1:
+            return True
+        document = self.window.document
+        name = getattr(self.window, "_active_layout", "Model")
+        if document is not None and name != "Model":
+            layout = document.doc.layouts.get(name)
+            other = layout_ops.viewport_hit(layout, wx, wy)
+            if other is not None and other is not vp:
+                self.window._activate_viewport(other)
+        return False
+
+    def in_active_viewport(self, wx: float, wy: float) -> bool:
+        """Is this PAPER point inside the viewport MSPACE activated?"""
+        vp = self.space_vp
+        if vp is None:
+            return True
+        x0, y0, x1, y1 = layout_ops.viewport_rect(vp)
+        return x0 <= wx <= x1 and y0 <= wy <= y1
+
+    def canvas_space(self):
+        """The space whose CANVAS is on screen, when it is not the one being
+        edited: the sheet, while a viewport of it is active. None otherwise,
+        which means "the current space draws on its own canvas"."""
+        if self.space_vp is None:
+            return None
+        document = self.window.document
+        name = getattr(self.window, "_active_layout", "Model")
+        if document is None or name == "Model":
+            return None
+        try:
+            return document.doc.layouts.get(name)
+        except Exception:
+            return None
+
+    def to_space(self, wx: float, wy: float) -> tuple[float, float]:
+        """A canvas (paper) point -> the current space."""
+        vp = self.space_vp
+        if vp is None:
+            return (wx, wy)
+        point = layout_ops.paper_to_model(vp, wx, wy)
+        return point if point is not None else (wx, wy)
+
+    def space_factor(self) -> float:
+        """Paper units per unit of the current space; 1.0 on the sheet.
+
+        Screen distances (the pickbox, the snap radius) arrive in paper
+        units and have to shrink or grow by this before they mean anything
+        to a model-space index.
+        """
+        vp = self.space_vp
+        if vp is None:
+            return 1.0
+        view = layout_ops.viewport_view(vp)
+        return view[2] if view is not None else 1.0
+
     def in_paper_space(self) -> bool:
         """On a layout tab with the SHEET current (not inside MSPACE)."""
         return (getattr(self.window, "_active_layout", "Model") != "Model"
@@ -1564,12 +1655,6 @@ class ToolController(QObject):
         self.changed.emit()
 
     def _selection_click(self, wx: float, wy: float, shift: bool) -> None:
-        if getattr(self.window, "_active_vp", None) is not None:
-            # Inside a viewport AutoCAD selects MODEL objects; we cannot
-            # reach them through the projection yet, and the pointer's paper
-            # coordinates would otherwise pick whatever sheet object happens
-            # to lie under them. Doing nothing is the only honest answer.
-            return
         if self.index is None:
             if self.window.document is None:
                 return
@@ -1786,6 +1871,8 @@ class ToolController(QObject):
         return out
 
     def grip_at(self, wx: float, wy: float, tol: float):
+        wx, wy = self.to_space(wx, wy)
+        tol = tol / self.space_factor()
         for x, y, role, h, i in self.grip_points():
             if abs(x - wx) <= tol and abs(y - wy) <= tol:
                 return (x, y, role, h, i)
@@ -1818,6 +1905,7 @@ class ToolController(QObject):
 
     def grip_target(self, wx: float, wy: float) -> tuple[float, float]:
         """Where the hot grip should sit: snap wins, then ortho/polar."""
+        wx, wy = self.to_space(wx, wy)
         if self.snap_hit is not None:
             return (self.snap_hit.x, self.snap_hit.y)
         return (wx, wy)
