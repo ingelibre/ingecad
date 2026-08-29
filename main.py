@@ -234,6 +234,13 @@ def main() -> int:
             window.open_path(doc)
             opened = True
     if not opened:
+        # A crash left work behind: that is what the user came back for, so
+        # it is offered before anything else (AutoCAD shows its Drawing
+        # Recovery Manager at the next start too).
+        from views.recovery_dialog import offer_recovery
+
+        opened = offer_recovery(window)
+    if not opened:
         # No file to open: ask which unit this drawing is in, and offer the
         # recent ones — the two things BricsCAD asks at startup. A drawing
         # double-clicked in the file manager never sees this window, and the

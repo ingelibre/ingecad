@@ -22,7 +22,7 @@ Apply applies and stays — the three buttons the dialog has always had.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -95,6 +95,7 @@ class OptionsDialog(QDialog):
 
         self.tabs = QTabWidget(self)
         self.tabs.addTab(self._files_tab(), tr("Files"))
+        self.tabs.addTab(self._open_save_tab(), tr("Open and Save"))
         self.tabs.addTab(self._display_tab(), tr("Display"))
         self.tabs.addTab(self._drafting_tab(), tr("Drafting"))
         self.tabs.addTab(self._user_tab(), tr("User Preferences"))
@@ -128,6 +129,54 @@ class OptionsDialog(QDialog):
                          "same choice the startup window offers."), page)
         note.setWordWrap(True)
         form.addRow(note)
+        return page
+
+    def _open_save_tab(self) -> QWidget:
+        """AutoCAD's Open and Save tab, with its File Safety Precautions
+        group: the automatic save and how often it runs (SAVETIME)."""
+        from core import autosave
+
+        page = QWidget(self)
+        outer = QVBoxLayout(page)
+
+        box = QGroupBox(tr("File Safety Precautions"), page)
+        inner = QVBoxLayout(box)
+        minutes = autosave.savetime()
+        self.autosave_on = QCheckBox(tr("Automatic save"), box)
+        self.autosave_on.setChecked(minutes > 0)
+        inner.addWidget(self.autosave_on)
+
+        row = QHBoxLayout()
+        row.addSpacing(20)
+        row.addWidget(QLabel(tr("Minutes between saves:"), box))
+        self.autosave_minutes = QSpinBox(box)
+        self.autosave_minutes.setRange(1, autosave.MAX_SAVETIME)
+        self.autosave_minutes.setValue(minutes or autosave.DEFAULT_SAVETIME)
+        self.autosave_minutes.setEnabled(minutes > 0)
+        self.autosave_on.toggled.connect(self.autosave_minutes.setEnabled)
+        row.addWidget(self.autosave_minutes)
+        row.addStretch(1)
+        inner.addLayout(row)
+
+        note = QLabel(
+            tr("The drawing is copied to a recovery file while you work; a "
+               "real save clears it. The copy is written in the background, "
+               "so it does not interrupt what you are doing. What a crash "
+               "leaves behind is offered at the next start, and in File ▸ "
+               "Drawing Utilities ▸ Drawing Recovery."), box)
+        note.setWordWrap(True)
+        inner.addWidget(note)
+
+        folder = QHBoxLayout()
+        folder.addWidget(QLabel(tr("Recovery files are kept in:"), box))
+        self.autosave_path = QLabel(str(autosave.save_file_path()), box)
+        self.autosave_path.setTextInteractionFlags(
+            Qt.TextSelectableByMouse)
+        self.autosave_path.setWordWrap(True)
+        folder.addWidget(self.autosave_path, 1)
+        inner.addLayout(folder)
+        outer.addWidget(box)
+        outer.addStretch(1)
         return page
 
     def _display_tab(self) -> QWidget:
@@ -371,6 +420,13 @@ class OptionsDialog(QDialog):
                           "" if self._crosshair_color is None
                           else self._crosshair_color.name())
         settings.setValue(viewport_prefs.SETTING_PICKBOX, self.pickbox.value())
+        from core import autosave
+
+        autosave.set_savetime(self.autosave_minutes.value()
+                              if self.autosave_on.isChecked() else 0)
+        arm = getattr(self.window, "_autosave_arm", None)
+        if arm is not None:
+            arm()          # the new interval starts counting now
         viewport.refresh_cursor_prefs()
         if self.viewres.value() != backend.viewres():
             settings.setValue(backend.SETTING_VIEWRES, self.viewres.value())

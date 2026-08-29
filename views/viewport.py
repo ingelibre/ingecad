@@ -441,10 +441,16 @@ class Viewport(QOpenGLWidget):
                 self._scene_dirty = True
             self.update()
 
-    def unhide_handles(self, handles) -> None:
+    def unhide_handles(self, handles) -> int:
         """Restore entities hidden by ``hide_handles`` (undo of a stamped
-        MOVE): the base-scene copy at the original position is still valid."""
+        MOVE): the base-scene copy at the original position is still valid.
+
+        Returns how many of them it could actually bring back: zero means
+        the scene was rebuilt in the meantime and no longer carries their
+        vertices, so the caller has to regenerate instead.
+        """
         touched = False
+        restored = 0
         for h in handles:
             if h in self._hidden_images:
                 self._hidden_images.discard(h)
@@ -452,6 +458,7 @@ class Viewport(QOpenGLWidget):
             saved = self._hidden_rgba.pop(h, None)
             if not saved:
                 continue
+            restored += 1
             for batch_name, first, count, alpha in saved:
                 getattr(self._scene, batch_name).data["rgba"][
                     first:first + count, 3] = alpha
@@ -464,6 +471,7 @@ class Viewport(QOpenGLWidget):
                 self._pending_hide.clear()
                 self._scene_dirty = True
             self.update()
+        return restored
 
     # -- view stack (ZOOM Previous) -------------------------------------------
     def push_view(self) -> None:

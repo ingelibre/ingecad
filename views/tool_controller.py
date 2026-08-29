@@ -666,6 +666,41 @@ class ToolController(QObject):
             char_height=char_height, text="", on_commit=commit,
             document=document, style=style, allow_justify=True)
 
+    def edit_hatch(self, entity) -> bool:
+        """HATCHEDIT on one hatch: the Hatch dialog, prefilled. True if done.
+
+        "Modifies hatch-specific properties, such as pattern, scale, and
+        angle for an existing hatch or fill" (reference p. 896). Its
+        boundaries are untouched -- editing those is a different job, and
+        AutoCAD keeps it in its own option.
+        """
+        from views.hatch_dialog import HatchDialog
+
+        if entity is None or not entity.is_alive or entity.dxftype() != "HATCH":
+            return False
+        document = self.window.document
+        if document is None:
+            return False
+        before = actions.hatch_settings(entity)
+        dialog = HatchDialog(self.window, before)
+        if not dialog.exec():
+            return True             # handled: the user said no
+        after = dialog.settings()
+        if after == before:
+            return True
+        snap = actions.SnapshotCommand([entity])
+        snap.name = "HATCHEDIT"
+        actions.apply_hatch_settings(entity, after)
+        snap.commit(document)
+        self.window.history._undo.append(snap)
+        self.window.history._redo.clear()
+        # its look changed, its geometry did not: redraw that one entity
+        # instead of the drawing (the same path a layer's colour takes)
+        self.redraw_entities([entity])
+        self.window.command_line.echo(
+            tr("Hatch pattern {name}.", name=after.get("pattern", "SOLID")))
+        return True
+
     def open_text_editor_for(self, entity) -> bool:
         """Double-click on a text object: edit it in place. True if handled.
 
@@ -1341,6 +1376,35 @@ class ToolController(QObject):
                 self._pending_stamps.append(key)
         self._merge_timer.start()
         self.changed.emit()
+
+    def redraw_entities(self, entities) -> bool:
+        """Draw these entities again with their current look, no regen.
+
+        The two steps MATCHPROP already takes -- hide the base scene's copy
+        and queue them for the overlay -- so the cost is what changed, not
+        the whole drawing. Used when a LAYER's colour, linetype or
+        lineweight changes: those entities look different, but their
+        geometry, their handles and therefore the pick index and the snap
+        engine are untouched.
+        """
+        alive = [e for e in entities
+                 if e.is_alive and e.dxf.owner is not None
+                 and e.dxf.get("handle", None)]
+        if not alive:
+            return False
+        handles = [e.dxf.handle for e in alive]
+        self._drop_conflicting_stamps(handles)
+        self.window.viewport.hide_handles(handles)
+        # the base copies are hidden now: lift the no-double-draw exclusion
+        # or the overlay would skip them and leave a hole
+        self._base_handles -= set(handles)
+        for entity in alive:
+            if entity not in self._pending_render:
+                self._pending_render.append(entity)
+        self._refresh_overlay()
+        self._merge_timer.start()
+        self.changed.emit()
+        return True
 
     def _draw_commands(self):
         return [c for c in self.window.history._undo

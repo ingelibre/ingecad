@@ -70,8 +70,18 @@ class History:
         self.document = document
         self._undo: list[Command] = []
         self._redo: list[Command] = []
+        #: Called before anything mutates the document, if set. The window
+        #: uses it to let a running automatic save finish first: writing a
+        #: real plan takes a second or two on a worker thread, and the
+        #: drawing must not change under the writer's feet.
+        self.before_mutation = None
+
+    def _gate(self) -> None:
+        if self.before_mutation is not None:
+            self.before_mutation()
 
     def execute(self, command: Command) -> None:
+        self._gate()
         command.do(self.document)
         self._undo.append(command)
         self._redo.clear()
@@ -87,12 +97,14 @@ class History:
     def undo(self) -> Command | None:
         if not self._undo:
             return None
+        self._gate()
         command = self._undo.pop()
         command.undo(self.document)
         self._redo.append(command)
         return command
 
     def redo(self) -> Command | None:
+        self._gate()
         if not self._redo:
             return None
         command = self._redo.pop()

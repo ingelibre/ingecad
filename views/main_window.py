@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import (QEvent, QObject, QPoint, QSettings, Qt,
-                            QThread, Signal)
+                            QThread, QTimer, Signal)
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -105,6 +105,44 @@ class RegenWorker(QThread):
         self.done.emit(self._document, scene, self._revision, self._layout)
 
 
+class _AutoSaveWorker(QThread):
+    """Writes the drawing to its .sv$ file off the UI thread.
+
+    A real plan takes 1.0-2.2 s to serialise (measured), and a freeze that
+    long every ten minutes is exactly what the automatic save is not
+    allowed to cost. The document must not change while this runs, which
+    is what MainWindow's mutation gate is for.
+    """
+
+    done = Signal(bool, str)     # ok, message
+
+    def __init__(self, document, sv_path, info_path) -> None:
+        super().__init__()
+        self.setObjectName("autosave")
+        self._document = document
+        self._sv = Path(sv_path)
+        self._info = Path(info_path)
+
+    def run(self) -> None:
+        from core import autosave
+
+        temporary = self._sv.with_suffix(self._sv.suffix + ".part")
+        try:
+            self._sv.parent.mkdir(parents=True, exist_ok=True)
+            self._document.doc.saveas(str(temporary))
+            temporary.replace(self._sv)     # atomic: never a half file
+            autosave.write_info(self._info, self._document.path,
+                                len(self._document.doc.entitydb))
+        except Exception as exc:            # a failed autosave is not fatal
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            self.done.emit(False, str(exc))
+            return
+        self.done.emit(True, str(self._sv))
+
+
 class MainWindow(QMainWindow):
     # A live viewport regen must fit a frame-ish budget or pan blocks the UI.
     _VP_LIVE_BUDGET_MS = 33.0
@@ -179,12 +217,21 @@ class MainWindow(QMainWindow):
         self._layers_dock = None
         self._layers_panel = None
         self._active_vp = None    # MSPACE-activated viewport entity, if any
+        # Automatic save (SAVETIME): the timer starts when the drawing is
+        # first changed and is reset by a real save, exactly as AutoCAD
+        # documents it. The write itself runs on a worker.
+        self._autosave_worker = None
+        #: When the drawing last changed. The automatic save waits for a
+        #: pause, so the one moment it can make the app wait -- an edit
+        #: landing while the file is being written -- almost never arrives.
+        self._last_mutation = 0.0
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.timeout.connect(self._autosave_tick)
         # Wheel/pan inside the active viewport mutate its view live; ONE
         # Command is committed when the gesture settles (AutoCAD groups
         # zooms too). Holds (vp, old_view_center, old_view_height).
         self._vp_gesture = None
-        from PySide6.QtCore import QTimer
-
         self._vp_gesture_timer = QTimer(self)
         self._vp_gesture_timer.setSingleShot(True)
         self._vp_gesture_timer.setInterval(700)
@@ -761,6 +808,11 @@ class MainWindow(QMainWindow):
         item(file_menu, tr("Save As..."), self._save_as_dialog,
              QKeySequence.SaveAs, icon="SAVEAS")
         file_menu.addSeparator()
+        # AutoCAD: File > Drawing Utilities > Drawing Recovery (p. 659).
+        utilities = file_menu.addMenu(tr("Drawing Utilities"))
+        item(utilities, tr("Drawing Recovery..."),
+             lambda: self._cmd_drawing_recovery())
+        file_menu.addSeparator()
         item(file_menu, tr("Page Setup..."), lambda: self._cmd_pagesetup(),
              icon="PAGESETUP")
         item(file_menu, tr("Plot..."), self._plot_dialog, QKeySequence.Print,
@@ -946,13 +998,16 @@ class MainWindow(QMainWindow):
             cmd_item(modify_menu, label, name)
         modify_menu.addSeparator()
         cmd_item(modify_menu, tr("Match Properties"), "MATCHPROP")
+        # ONE Object submenu -- there used to be two of them, both added to
+        # Modify, so Image and Polyline lived in different menus of the
+        # same name. AutoCAD's is Modify > Object > {Image, Polyline,
+        # Hatch, ...}.
         object_menu = modify_menu.addMenu(tr("Object"))
         image_menu = object_menu.addMenu(tr("Image"))
         cmd_item(image_menu, tr("Adjust..."), "IMAGEADJUST", icon=False)
         cmd_item(image_menu, tr("Transparency"), "TRANSPARENCY", icon=False)
-        object_menu = QMenu(tr("Object"), self)
-        modify_menu.addMenu(object_menu)
         cmd_item(object_menu, tr("Polyline"), "PEDIT")
+        cmd_item(object_menu, tr("Hatch..."), "HATCHEDIT")
         cmd_item(modify_menu, tr("Explode"), "EXPLODE")
 
         # -- Tools ------------------------------------------------------------
@@ -1065,6 +1120,10 @@ class MainWindow(QMainWindow):
         self._command_dock = dock
 
         self.history = History()
+        # Every mutation of the drawing goes through History; that is where
+        # the automatic save's gate belongs, and why no call site had to
+        # learn about it.
+        self.history.before_mutation = self._autosave_gate
         self.dispatcher = Dispatcher(echo=self.command_line.echo)
 
         from views.tool_controller import ToolController
@@ -1444,6 +1503,7 @@ class MainWindow(QMainWindow):
         self._drop_block_session()
         self.document = templates_mod.new_document(
             template or self.startup_template())
+        self._autosave_arm()          # a new drawing, a new countdown
         self._layout_scenes.clear()   # scenes of the previous drawing
         self._active_layout = "Model"
         self._deactivate_viewport()
@@ -2183,6 +2243,8 @@ class MainWindow(QMainWindow):
         d.register("PRINT", lambda *a: self._plot_dialog())
         d.register("LAYOUT", self._cmd_layout)
         d.register("MSPACE", self._cmd_mspace)
+        d.register("DRAWINGRECOVERY", self._cmd_drawing_recovery)
+        d.register("SAVETIME", self._cmd_savetime)
         d.register("PSPACE", self._cmd_pspace)
         d.register("VPLOCK", self._cmd_vplock)
         d.register("PAGESETUP", self._cmd_pagesetup)
@@ -2430,6 +2492,77 @@ class MainWindow(QMainWindow):
             return
         self.viewport.space_placement = layout_ops.viewport_placement(vp)
 
+    def apply_layer_visibility(self, layer_name: str, visible: bool) -> bool:
+        """Show or hide a layer's geometry without rebuilding the scene.
+
+        AutoCAD turns a layer off instantly; we used to retessellate the
+        whole drawing, which on a real plan of 88 000 entities was 7.7 s
+        before the change appeared. The vertices are already on the GPU, so
+        zeroing their alpha (the same surgical display the eraser uses) is
+        all it takes.
+
+        Returns True when the display is now correct on its own. False means
+        "regenerate too": either the layer also lives inside a block, where
+        the vertices belong to the INSERT and not to the entity, or the
+        scene has been rebuilt since it was hidden and no longer carries
+        them.
+        """
+        from core import layers as layer_ops
+
+        document = self.document
+        if document is None or self.viewport._scene is None:
+            return False
+        handles = [e.dxf.handle for e in self._drawn_entities_of_layer(layer_name)
+                   if e.dxf.get("handle", None)]
+        if not handles:
+            return False        # nothing of it is drawn: let the regen decide
+        if visible:
+            if not self.viewport.unhide_handles(handles):
+                return False    # rebuilt without them: only a regen can help
+        else:
+            self.viewport.hide_handles(handles)
+        self.viewport.update()
+        return layer_name not in layer_ops.layers_inside_blocks(document)
+
+    def _drawn_entities_of_layer(self, layer_name: str) -> list:
+        """The entities of that layer the current scene actually draws."""
+        document = self.document
+        scene = self.viewport._scene
+        if document is None or scene is None:
+            return []
+        ranges = getattr(scene, "handle_ranges", None)
+        if not ranges:
+            return []
+        db = document.doc.entitydb
+        found = []
+        for handle in ranges:
+            entity = db.get(handle)
+            if (entity is not None and entity.is_alive
+                    and entity.dxf.get("layer", None) == layer_name):
+                found.append(entity)
+        return found
+
+    def apply_layer_appearance(self, layer_name: str) -> bool:
+        """A layer's colour / linetype / lineweight changed: redraw IT.
+
+        Its geometry is the same, only its look, so the drawing does not
+        need rebuilding -- the layer's own entities are re-tessellated and
+        swapped in over the hidden originals. Returns False when the layer
+        also lives inside a block (that geometry belongs to the INSERT) or
+        when nothing of it is on screen, and the caller regenerates.
+        """
+        from core import layers as layer_ops
+
+        document = self.document
+        if document is None:
+            return False
+        if layer_name in layer_ops.layers_inside_blocks(document):
+            return False
+        entities = self._drawn_entities_of_layer(layer_name)
+        if not entities:
+            return False
+        return self.tools.redraw_entities(entities)
+
     def invalidate_vp_model_cache(self) -> None:
         """The model changed: the tessellation kept for live viewport
         navigation is stale. Called from the edit path, NOT from the document
@@ -2590,9 +2723,13 @@ class MainWindow(QMainWindow):
         # object like any other. Only when the double-click lands on no
         # object does the layout's enter/leave rule apply.
         entity = self.tools.pick_entity((wx, wy))
-        if (entity is not None and entity.dxftype() != "VIEWPORT"
-                and self.tools.open_text_editor_for(entity)):
-            return
+        if entity is not None and entity.dxftype() != "VIEWPORT":
+            if self.tools.open_text_editor_for(entity):
+                return
+            # A hatch's double-click action is HATCHEDIT, the same rule that
+            # sends a double-clicked MTEXT to MTEDIT (DBLCLKEDIT, p. 2207).
+            if entity.dxftype() == "HATCH" and self.tools.edit_hatch(entity):
+                return
         if self._active_layout == "Model":
             return
         layout = self.document.doc.layouts.get(self._active_layout)
@@ -3376,11 +3513,150 @@ class MainWindow(QMainWindow):
             return self.save_document()
         return answer == QMessageBox.Discard
 
+    def _cmd_drawing_recovery(self, *args) -> None:
+        """DRAWINGRECOVERY — the Drawing Recovery Manager (p. 659)."""
+        from views.recovery_dialog import DrawingRecoveryDialog, offer_recovery
+        from core import autosave
+
+        if not autosave.recoverable():
+            self.command_line.echo(
+                tr("No drawings to recover — nothing was left by a crash."))
+            return
+        if not self.maybe_save_changes():
+            return
+        offer_recovery(self)
+
+    def _cmd_savetime(self, *args) -> Prompt | None:
+        """SAVETIME — minutes between automatic saves; 0 turns them off."""
+        from core import autosave
+
+        current = autosave.savetime()
+        if args and str(args[0]).strip():
+            return self._set_savetime(str(args[0]))
+        return Prompt(
+            tr("Enter new value for SAVETIME <{v}>:", v=current),
+            self._set_savetime)
+
+    def _set_savetime(self, text: str) -> None:
+        from core import autosave
+
+        try:
+            minutes = int(float(str(text).strip()))
+        except (TypeError, ValueError):
+            self.command_line.echo(tr("Requires an integer value."))
+            return
+        value = autosave.set_savetime(minutes)
+        self._autosave_arm()
+        if value:
+            self.command_line.echo(
+                tr("Automatic save every {n} minutes.", n=value))
+        else:
+            self.command_line.echo(tr("Automatic save is off."))
+
+    # -- automatic save (SAVETIME) and recovery --------------------------------
+    def _autosave_arm(self) -> None:
+        """Start the SAVETIME countdown; a save or a new drawing resets it."""
+        from core import autosave
+
+        minutes = autosave.savetime()
+        self._autosave_timer.stop()
+        if minutes > 0 and self.document is not None:
+            self._autosave_timer.start(minutes * 60 * 1000)
+
+    def _autosave_idle(self) -> bool:
+        """Is this a moment where writing the drawing is safe and unfelt?
+
+        Not while a command is collecting points, not while a regen or an
+        open is in flight, and not while the mouse is dragging something --
+        AutoCAD postpones its automatic save the same way.
+        """
+        if self.document is None or not self.document.dirty:
+            return False
+        if self._autosave_worker is not None:
+            return False
+        # A regen does NOT stand in the way: it reads the document, and so
+        # does the autosave -- two readers. Waiting for it was measured to
+        # mean "almost never save", because on a real plan a regen is in
+        # flight for seconds after every single edit.
+        opening = getattr(self, "_open_thread", None)
+        if opening is not None and opening.isRunning():
+            return False        # the document itself is being replaced
+        import time as _time
+
+        if _time.monotonic() - self._last_mutation < self.AUTOSAVE_QUIET_S:
+            return False        # still drawing: wait for a pause
+        tools = getattr(self, "tools", None)
+        if tools is not None:
+            # active() = a command is collecting input. NOT
+            # in_selection_mode(), which is True whenever no command runs --
+            # that is the idle state, and testing it here meant the
+            # automatic save never fired at all (measured: the file was
+            # never written).
+            if tools.active():
+                return False
+            if getattr(tools, "_grip_drag", None) is not None:
+                return False
+        return True
+
+    def _autosave_tick(self) -> None:
+        from core import autosave
+
+        if autosave.savetime() <= 0:
+            return
+        if not self._autosave_idle():
+            self._autosave_timer.start(30 * 1000)   # busy: ask again shortly
+            return
+        sv_path, info_path = autosave.autosave_paths(self.document.path)
+        worker = _AutoSaveWorker(self.document, sv_path, info_path)
+        worker.done.connect(self._on_autosave_done)
+        self._autosave_worker = worker
+        worker.start()
+
+    def _on_autosave_done(self, ok: bool, message: str) -> None:
+        worker = self._autosave_worker
+        self._autosave_worker = None
+        if worker is not None:
+            worker.wait()
+        if ok:
+            self.command_line.echo(
+                tr("Automatic save to {path}", path=message))
+        self._autosave_arm()
+
+    #: How long the drawing must sit still before an automatic save starts.
+    AUTOSAVE_QUIET_S = 15.0
+
+    def _autosave_gate(self) -> None:
+        """Let a running automatic save finish before the drawing changes.
+
+        The only moment the app can stall. Measured on a plan of 88 897
+        entities, an edit that lands right at the start of a write waits
+        2.3 s -- which is why the save only starts after the drawing has
+        been still for AUTOSAVE_QUIET_S.
+        """
+        import time as _time
+
+        self._last_mutation = _time.monotonic()
+        worker = self._autosave_worker
+        if worker is not None and worker.isRunning():
+            worker.wait()
+
+    def _autosave_discard(self) -> None:
+        """A real save (or a clean exit) makes the automatic one moot."""
+        from core import autosave
+
+        if self.document is None:
+            return
+        self._autosave_gate()
+        autosave.discard(*autosave.autosave_paths(self.document.path))
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         if not self.maybe_save_changes():
             event.ignore()
             return
         self._drain_workers()
+        # A normal exit leaves nothing behind: what the Drawing Recovery
+        # Manager lists is, by definition, what a crash left.
+        self._autosave_discard()
         event.accept()
 
     def _drain_workers(self) -> None:
@@ -3404,6 +3680,13 @@ class MainWindow(QMainWindow):
             thread.quit()
             thread.wait()
             self._open_thread = None
+        timer = getattr(self, "_autosave_timer", None)
+        if timer is not None:
+            timer.stop()
+        auto = getattr(self, "_autosave_worker", None)
+        if auto is not None:
+            auto.wait()
+            self._autosave_worker = None
         from views import startup_dialog as _startup
 
         _startup.drain_orphans()    # thumbnail workers the dialog left behind
@@ -3420,6 +3703,7 @@ class MainWindow(QMainWindow):
         """The shared tail of SAVE and SAVEAS: write, report, warn."""
         if self.document is None:
             return False
+        self._autosave_gate()      # never write while the .sv$ is being made
         try:
             engine, warnings = self.document.save_as(path)
         except Exception as exc:
@@ -3454,6 +3738,10 @@ class MainWindow(QMainWindow):
                    "as DXF instead — DXF is always exact.",
                    name=path.name, detail=detail),
             )
+        # "It is reset and restarted by a manual QSAVE, SAVE, or SAVEAS"
+        # (SAVETIME) -- and what the drawing was rescued into is now moot.
+        self._autosave_discard()
+        self._autosave_arm()
         return True
 
     def open_path(self, path: Path, as_template: bool = False) -> None:
@@ -3509,6 +3797,7 @@ class MainWindow(QMainWindow):
         self._open_as_template = False
         self._drop_block_session()
         self.document = document
+        self._autosave_arm()          # a new drawing, a new countdown
         self._layout_scenes.clear()   # scenes of the previous drawing
         self._deactivate_viewport()
         # the open may have fallen back to a paper layout (empty modelspace)

@@ -91,6 +91,7 @@ DEFAULT_ALIASES: dict[str, str] = {
     "ME": "MEASURE",
     "PU": "PURGE",
     "MA": "MATCHPROP",
+    "HE": "HATCHEDIT",
     "UN": "UNITS",
     "-UN": "-UNITS",
     "DDUNITS": "UNITS",
