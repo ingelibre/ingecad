@@ -1247,3 +1247,66 @@ def test_a_viewport_a_matrix_cannot_reproduce_keeps_the_bake(qapp):
     finally:
         win.document.dirty = False
         win.close()
+
+
+# -- viewport status a DWG never carried --------------------------------------
+
+def _sheet_with_viewports(document, name, numbers):
+    """A layout holding one viewport per (status, id) pair given."""
+    layout = document.doc.layouts.new(name)
+    for status, vp_id in numbers:
+        vp = layout.add_viewport(center=(100, 100), size=(80, 60),
+                                 view_center_point=(0, 0), view_height=50)
+        vp.dxf.status = status
+        vp.dxf.id = vp_id
+    return layout
+
+
+def test_unnumbered_viewports_are_renumbered_and_become_visible(doc):
+    """Four of the five layouts of a real plan opened blank.
+
+    A DWG does not store DXF group 68; LibreDWG derives it from entmode,
+    which only says whether the entity carries an explicit owner handle --
+    true for every layout except the one current when the file was saved.
+    So all their viewports came out (status 0, id 0) and every consumer
+    that honors the status, ours and ezdxf's alike, drew an empty sheet.
+    ODA writes 1..N per layout and turns none off.
+    """
+    sheet = _sheet_with_viewports(doc, "Blank", [(0, 0), (0, 0), (0, 0)])
+    assert layout_ops.visible_viewports(sheet) == []      # the reported bug
+
+    assert layout_ops.repair_viewport_status(doc.doc) == 3
+    numbers = [(vp.dxf.status, vp.dxf.id)
+               for vp in sheet if vp.dxftype() == "VIEWPORT"]
+    assert numbers == [(1, 1), (2, 2), (3, 3)]
+    # the first is the paper view itself, which visible_viewports drops
+    assert len(layout_ops.visible_viewports(sheet)) == 2
+
+
+def test_a_viewport_the_user_turned_off_stays_off(doc):
+    """The inverse, and the reason the pair matters.
+
+    AutoCAD hides a viewport by zeroing its status while KEEPING its id.
+    Repairing on status alone would switch every hidden viewport back on.
+    """
+    sheet = _sheet_with_viewports(doc, "Mixed", [(1, 1), (2, 2), (0, 5)])
+    assert layout_ops.repair_viewport_status(doc.doc) == 0
+    numbers = [(vp.dxf.status, vp.dxf.id)
+               for vp in sheet if vp.dxftype() == "VIEWPORT"]
+    assert numbers == [(1, 1), (2, 2), (0, 5)], "a hidden viewport was revived"
+    assert len(layout_ops.visible_viewports(sheet)) == 1
+
+
+def test_a_layout_that_already_numbers_its_viewports_is_untouched(doc):
+    """D-01, the layout that WAS current on save, must not move."""
+    sheet = _sheet_with_viewports(doc, "Good", [(1, 1), (2, 2), (3, 3)])
+    before = [(vp.dxf.status, vp.dxf.id)
+              for vp in sheet if vp.dxftype() == "VIEWPORT"]
+    assert layout_ops.repair_viewport_status(doc.doc) == 0
+    assert [(vp.dxf.status, vp.dxf.id)
+            for vp in sheet if vp.dxftype() == "VIEWPORT"] == before
+
+
+def test_the_repair_never_reaches_the_model(doc):
+    doc.doc.modelspace().add_line((0, 0), (10, 10))
+    assert layout_ops.repair_viewport_status(doc.doc) == 0

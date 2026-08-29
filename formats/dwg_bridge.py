@@ -256,6 +256,7 @@ def load_dwg(dwg_path: Path):
     from core.document import Document
 
     from core.encoding import decode_escapes_in_document, repair_invalid_defaults
+    from core.layouts import repair_viewport_status
 
     dwg_path = Path(dwg_path)
     dxf_path = dwg_to_dxf(dwg_path)
@@ -271,6 +272,10 @@ def load_dwg(dwg_path: Path):
     # missing-group-becomes-zero bug this same module now writes around):
     # normalize them so those files render right again.
     repair_invalid_defaults(document.doc)
+    # A DWG does not store the DXF viewport status; LibreDWG derives it from
+    # entmode and gets it wrong for every layout but the one that was current
+    # on save, which left those sheets blank.
+    repair_viewport_status(document.doc)
     document.path = dwg_path
     if len(document.doc.modelspace()) > 0:
         return document

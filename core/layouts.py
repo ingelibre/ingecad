@@ -449,6 +449,44 @@ def visible_viewports(layout) -> list:
     return viewports
 
 
+def repair_viewport_status(doc) -> int:
+    """Renumber viewports a converter left with no status at all.
+
+    DXF group 68 is not stored in a DWG -- a reader has to derive it -- and
+    LibreDWG derives it from ``entmode``, which only says whether the entity
+    carries an explicit owner handle. Every layout except the one current
+    when the file was saved stores its entities that way, so ALL of their
+    viewports came out "off" and the sheet rendered blank: four of the five
+    layouts of a real plan, measured against ODA, which writes 1..N per
+    layout and turns none off.
+
+    The artifact is exact: status 0 AND id 0 together. AutoCAD turns a
+    viewport off by zeroing the status while KEEPING its id, and ODA never
+    writes the pair at all -- so a genuinely hidden viewport is never
+    touched. Only a layout whose viewports are ALL unnumbered is renumbered,
+    1..N in file order, the convention ODA writes: the first one is the
+    paper view itself, which :func:`visible_viewports` then drops.
+
+    Returns how many viewports changed, for the tests.
+    """
+    changed = 0
+    for layout in doc.layouts:
+        if layout.name == "Model":
+            continue
+        viewports = [e for e in layout if e.dxftype() == "VIEWPORT"]
+        if not viewports:
+            continue
+        if not all(int(vp.dxf.get("status", 0) or 0) == 0
+                   and int(vp.dxf.get("id", 0) or 0) == 0
+                   for vp in viewports):
+            continue            # some carry real numbers: trust the file
+        for number, vp in enumerate(viewports, start=1):
+            vp.dxf.status = number
+            vp.dxf.id = number
+            changed += 1
+    return changed
+
+
 def viewport_hit(layout, x: float, y: float):
     """Topmost visible viewport whose paper rectangle contains (x, y)."""
     hit = None
