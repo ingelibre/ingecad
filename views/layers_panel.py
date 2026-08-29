@@ -8,7 +8,7 @@ Every change routes through the layer Commands so undo/redo is exact.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -214,14 +214,37 @@ class LayersPanel(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(20)  # compact rows
 
+        #: Columns the user has resized by hand: their width is theirs.
+        self._user_sized: set[int] = set()
+        self._auto_sizing = False
+
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(1, QHeaderView.Stretch)    # Name takes room
-        header.setSectionResizeMode(9, QHeaderView.Stretch)
+        # Every column that carries a value sizes itself to that value. The
+        # widths used to be constants, and they were too small for their own
+        # content at EVERY width of the panel -- measured on a real plan:
+        # Color got 40 px and needed 43, Linetype 84 of 99, Lineweight 68 of
+        # 85 -- so widening the sidebar never revealed them, and what it did
+        # instead was squeeze Name and Description down to 24 px.
+        # Interactive, NOT ResizeToContents: that mode re-measures the whole
+        # column on every setItem while the table fills, which is O(rows^2)
+        # -- measured on a real plan of 82 layers, one bulb click froze the
+        # UI for 16 s against 103 ms. The content width is computed once per
+        # refresh instead, in _size_columns.
         for col in (0, 2, 3, 4, 5, 6, 7, 8):
-            header.setSectionResizeMode(col, QHeaderView.Fixed)
-        for col, w in ((0, 22), (2, 26), (3, 26), (4, 26), (5, 40),
-                       (6, 84), (7, 68), (8, 26)):
-            self.table.setColumnWidth(col, w)
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
+        # The two that can take any width: Name keeps whatever the user
+        # gives it (and remembers it), Description takes what is left.
+        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        header.setSectionResizeMode(9, QHeaderView.Stretch)
+        self.table.setColumnWidth(1, self._remembered_name_width())
+        self.table.setTextElideMode(Qt.ElideRight)
+        header.sectionResized.connect(self._remember_name_width_change)
+        # AutoCAD's Layer Properties Manager lets you right-click the header
+        # and turn columns off; in a sidebar barely 280 px wide that is the
+        # difference between scrolling sideways and reading the list.
+        header.setContextMenuPolicy(Qt.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._header_menu)
+        self._restore_hidden_columns()
 
         self.table.cellDoubleClicked.connect(self._on_double_click)
         self.table.cellChanged.connect(self._on_cell_changed)
@@ -276,6 +299,84 @@ class LayersPanel(QWidget):
     def document(self):
         return self.window.document
 
+    #: Default width of the Name column, in pixels: a real plan's layer
+    #: names ("_R_COLUMNAS_...", "0018 fondo") need about this much.
+    NAME_WIDTH = 150
+
+    def _remembered_name_width(self) -> int:
+        try:
+            width = int(QSettings().value("layers/name_width", self.NAME_WIDTH))
+        except (TypeError, ValueError):
+            width = self.NAME_WIDTH
+        return max(40, width)
+
+    def _remember_name_width_change(self, index: int, _old: int,
+                                    new: int) -> None:
+        """The user dragged a column edge: keep it.
+
+        Name is kept across sessions; the value columns are remembered for
+        the session, so that a width the user chose is not undone by the
+        next refresh's content sizing.
+        """
+        if self._auto_sizing or new <= 0:
+            return
+        self._user_sized.add(index)
+        if index == 1:
+            QSettings().setValue("layers/name_width", int(new))
+
+    def _size_columns(self) -> None:
+        """Content widths for the value columns, computed ONCE per refresh.
+
+        Columns the user has dragged keep the width they were given.
+        """
+        self._auto_sizing = True
+        try:
+            for col in (0, 2, 3, 4, 5, 6, 7, 8):
+                if col not in self._user_sized and not self.table.isColumnHidden(col):
+                    self.table.resizeColumnToContents(col)
+        finally:
+            self._auto_sizing = False
+
+    #: Columns the user can hide. Name is not one of them -- a layer list
+    #: without names is not a layer list.
+    HIDEABLE = (0, 2, 3, 4, 5, 6, 7, 8, 9)
+
+    def _restore_hidden_columns(self) -> None:
+        stored = QSettings().value("layers/hidden_columns", "")
+        hidden = {int(c) for c in str(stored or "").split(",") if c.strip().isdigit()}
+        for col in self.HIDEABLE:
+            self.table.setColumnHidden(col, col in hidden)
+
+    def _save_hidden_columns(self) -> None:
+        hidden = [str(c) for c in self.HIDEABLE if self.table.isColumnHidden(c)]
+        QSettings().setValue("layers/hidden_columns", ",".join(hidden))
+
+    def _header_menu(self, pos) -> None:
+        """Right-click on the header: which columns to show, and optimize."""
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        for col in self.HIDEABLE:
+            item = self.table.horizontalHeaderItem(col)
+            action = menu.addAction(item.toolTip() if item else str(col))
+            action.setCheckable(True)
+            action.setChecked(not self.table.isColumnHidden(col))
+            action.triggered.connect(
+                lambda checked, c=col: self._toggle_column(c, checked))
+        menu.addSeparator()
+        menu.addAction(tr("Optimize all columns"), self._optimize_columns)
+        menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
+
+    def _toggle_column(self, col: int, visible: bool) -> None:
+        self.table.setColumnHidden(col, not visible)
+        self._save_hidden_columns()
+
+    def _optimize_columns(self) -> None:
+        """Every column back to the width its content needs, Name included."""
+        self.table.resizeColumnToContents(1)
+        QSettings().setValue("layers/name_width",
+                             int(self.table.columnWidth(1)))
+
     def refresh(self) -> None:
         if self.document is None:
             self.table.setRowCount(0)
@@ -293,6 +394,7 @@ class LayersPanel(QWidget):
         for row, info in enumerate(infos):
             self._fill_row(row, info)
         self._loading = False
+        self._size_columns()
 
     def _fill_row(self, row: int, info: layer_ops.LayerInfo) -> None:
         # Status: current / in use / empty (the manager's official trio).
