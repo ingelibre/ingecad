@@ -419,6 +419,70 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🗓 Sesión 2026-08-29 (bis) — v0.4.7: lo que Marco encontró usándolo
+
+Una sesión entera de dogfooding suyo, comando por comando, y **de siete
+cosas que reportó, tres eran regresiones o bugs míos y cuatro eran huecos
+reales**. Lo que quedó, con sus números:
+
+| lo que reportó | causa | medido |
+|---|---|---|
+| «apago una capa y demora una eternidad, se cuelga» | **regresión mía de una hora antes**: `ResizeToContents` remide la columna entera en cada celda → O(filas²) | clic **16 110 → 110 ms** |
+| «el dibujo tarda en actualizarse» | apagar una capa reteselaba todo el dibujo | **7,7 s → 114-383 ms**, sin reconstrucción |
+| «cambiar grosor/color demora» | ídem | **209-686 ms** en la capa más pesada (139 692 vértices) |
+| «algunas columnas no se ven bien» | anchos fijos **menores que su contenido** — se cortaban a cualquier ancho | Color 40→43, Tipo 84→99, Grosor 68→85 |
+| «la barra lateral no llega abajo» | Qt da las dos esquinas inferiores al área de abajo | barra 796 → **902 px** |
+| «el hatch no se selecciona» | sólo se picaba por su borde | clic dentro, con forma real e islas |
+| «los cuadraditos de color están chiquitos» | 16 px | **24 px** (1,5×) |
+
+**Y la recuperación automática**, que fue el pedido más grande: SAVETIME,
+`.sv$`, el administrador de recuperación. Lo que decidió el diseño fue la
+medición —**escribir uno de sus planos cuesta 2,2 s**— así que el guardado
+va en un hilo y **espera 15 s de quietud** para empezar; la app sólo puede
+esperar si editás justo durante la escritura, y esa es la ventana que la
+pausa elimina.
+
+⚠️ **Probarlo de verdad encontró tres fallos que "leer el código" no
+encontraba, todos de la misma familia: el guardia se lee bien y significa
+otra cosa.**
+1. `in_selection_mode()` es **verdadero cuando NO hay comando** (el estado
+   normal), así que mi condición de "está tranquilo" **nunca** dejaba
+   guardar: el archivo no se escribía jamás.
+2. El objeto del hilo de apertura **sobrevive** a la apertura, así que
+   preguntarle `is not None` bloqueaba el autoguardado de todo plano
+   abierto desde disco. Hay que preguntar `isRunning()`.
+3. La regeneración **sólo lee** el documento, igual que el autoguardado:
+   tratarla como conflicto significaba, otra vez, no guardar casi nunca.
+
+**Verificado matando el proceso:** plano de 88 897 entidades, una línea sin
+guardar, `SIGKILL`. Al reabrir: 1 dibujo recuperable con su nombre, edad y
+número de objetos; abierto, **10 528 objetos = los 10 527 del archivo + la
+línea que nunca se guardó**.
+
+**Sombreado y tipos de línea, investigados en el manual antes de tocar
+nada:** HATCHEDIT (p. 896) con sus tres accesos y el doble clic; la paleta
+dibujada **desde la definición** de cada patrón (antes era un abanico
+sacado sólo del ángulo, y medio catálogo se veía igual); y el diálogo
+*Seleccionar tipo de línea* con las columnas de AutoCAD —Tipo / **Aspecto**
+/ Descripción— más una biblioteca de 39 definiciones **leídas de 120 planos
+reales**, quedándome con la que varios coinciden.
+
+⚠️ **Dos bugs ajenos salieron de esas mediciones y están reportados:**
+`standards.linetypes()` de ezdxf no coincide con lo que traen los planos en
+**13 de 16** nombres ([ezdxf#1411](https://github.com/mozman/ezdxf/issues/1411)),
+y el escritor de **DXF binario se cae** con gráficos proxy
+([ezdxf#1412](https://github.com/mozman/ezdxf/issues/1412), repro de cuatro
+líneas). Y el PR de LibreDWG **se achicó a pedido de rurban** —«too large
+without CLA»— de 80 a 23 líneas, re-midiendo el corpus después de podarlo:
+1467 láminas revividas, 0 apagadas.
+
+⚠️ **La trampa de captura del día, dos veces:** el diálogo nuevo se veía
+bien en la suite y **mal en la pantalla** — los ISO salían en blanco (le
+cortaba el primer trazo a cada patrón) y seis `V_MASONRY…` mostraban la
+misma diagonal (los nombres con minúscula no se encontraban). Ninguna
+prueba de "¿hay un icono?" lo habría visto. **Mirar la captura es una
+prueba.**
+
 ## 🗓 Sesión 2026-08-29 — editar DENTRO de la ventana gráfica (MSPACE)
 
 **El tercer estado de una lámina, que la v0.4.6 dejó anotado como pendiente,

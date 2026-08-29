@@ -1,5 +1,90 @@
 # Changelog
 
+## v0.4.7 — 2026-08-29
+
+### Added — edit the model through a viewport (MSPACE)
+v0.4.6 made the sheet editable and left the third state of a layout tab
+written down but unbuilt: the model, reached **through** a floating
+viewport. It exists now. MSPACE — or a double-click inside a viewport —
+makes the modelspace current, and drawing, editing, snapping, picking and
+grips reach it through that viewport's projection while the canvas keeps
+showing the sheet.
+
+The projection lives in one place (scale, view centre and twist), and
+AutoCAD's rules come with it: a click only counts inside the active
+viewport, one in another viewport makes that one current (mid-command
+too), one on the bare paper does nothing; the crosshair is clipped to the
+viewport and the coordinate readout switches to model units; ZOOM Window
+and the wheel both zoom the viewport's view, ZOOM Extents fits the model
+in it, Ctrl+R cycles; and the sheet's own commands (MVIEW) still belong to
+paper space and say so.
+
+Verified on a real plan (13 viewports at 1:10): a click where the viewport
+draws a line selects that line, MOVE by 20 × 10 mm of paper moves the
+model by exactly 2 × 1, and undo returns it. First pick 1.9 s (it builds
+the model's index), every one after it 12 ms.
+
+### Added — automatic save and drawing recovery
+"What happens if I am drawing and it closes on me?" Now: SAVETIME (minutes,
+10 by default, 0 turns it off), an `.sv$` copy, and the Drawing Recovery
+Manager at the next start or in File ▸ Drawing Utilities — AutoCAD's model,
+with its Options ▸ Open and Save page.
+
+The part that is ours is the part that had to be measured: writing a real
+plan takes 2.2 s, so the copy is written on a worker thread and only starts
+after the drawing has been still for 15 seconds. The app can wait exactly
+once — if an edit lands while the file is being written — and that is the
+case the pause rule removes.
+
+Tested by crashing it: a plan of 88 897 entities, a line drawn and not
+saved, SIGKILL. The restart offered the drawing back with its name, age
+and object count, and opening it returned every object plus the line that
+was never saved — as unsaved work, so a reflex Ctrl+S cannot overwrite the
+good file.
+
+### Added — hatches select and edit like AutoCAD's
+A hatch is picked by **clicking on it** (its real shape, islands excluded),
+not only by hitting its boundary, and it is the last candidate for a click
+so a line drawn over it still wins. HATCHEDIT (alias HE, Modify ▸ Object ▸
+Hatch, or a double-click) changes pattern, scale, angle and colour while
+keeping the hatch's boundaries, handle and island style.
+
+The pattern palette is drawn from the definitions themselves — each line
+family with its offset and dashes — so ANSI31, ANSI37, BRICK and HONEY look
+like themselves, in a grid with categories (ANSI / ISO / Other) instead of
+a ragged list. Ten of the 172 predefined patterns were unreachable because
+their names carry a lowercase letter and the lookup upper-cased them:
+their hatches were created without a definition.
+
+### Added — linetypes with their pattern drawn
+The Select Linetype dialog lists what the drawing has loaded as Linetype /
+Appearance / Description, with the dashes **drawn**, and a Load button for
+a library of 39 standard definitions (25 classic families + 14 ACAD_ISO).
+The definitions were read out of 120 real plans, keeping what several agree
+on; ezdxf's own table disagrees with them for 13 of 16 names and that was
+reported upstream.
+
+### Changed — the Layers panel answers at once
+Turning a layer off used to rebuild the whole drawing: 7.7 s on a plan of
+88 897 entities against AutoCAD's instant. The vertices are already on the
+GPU, so visibility is now a change of alpha (114-383 ms, no rebuild) and
+colour / linetype / lineweight re-tessellate **that layer only** (209-686
+ms on a layer of 139 692 vertices). A layer that also lives inside a block
+still rebuilds, because its geometry belongs to the INSERT.
+
+The panel's columns were narrower than their own content, so Color,
+Linetype and Lineweight were cut at every width of the sidebar; they size
+themselves to what they hold now, a width you drag is kept, and the header
+has AutoCAD's right-click menu to turn columns off. The right sidebar
+itself runs to the bottom of the window: the command line used to own that
+corner and cut it short.
+
+### Fixed
+- Four of five layouts of a real plan opened with an empty sheet — a
+  LibreDWG read bug (viewport status), worked around here and sent
+  upstream as LibreDWG#1406.
+- The Select Color swatches are 1.5× bigger, as asked.
+
 ## v0.4.6 — 2026-08-27
 
 ### Added — the layout sheet is editable, like AutoCAD

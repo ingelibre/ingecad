@@ -373,7 +373,8 @@ def test_options_dialog_persists_what_it_offers(qapp, clean_settings):
         win.new_document("mm")
         dlg = OptionsDialog(win)
         assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == [
-            "Files", "Display", "Drafting", "User Preferences", "Selection"]
+            "Files", "Open and Save", "Display", "Drafting",
+            "User Preferences", "Selection"]
 
         # the Files tab offers the three template units and shows the
         # current one; applying it is left alone (see above)
@@ -388,6 +389,9 @@ def test_options_dialog_persists_what_it_offers(qapp, clean_settings):
         # Selection: GRIPOBJLIMIT (p.2339), the object count past which grips
         # stop being drawn
         dlg.gripobjlimit.setValue(250)
+        # Open and Save: SAVETIME, the automatic save's interval
+        dlg.autosave_on.setChecked(True)
+        dlg.autosave_minutes.setValue(4)
         dlg.apply()
 
         assert win.viewport.lwt_on == wanted_lwt
@@ -395,6 +399,12 @@ def test_options_dialog_persists_what_it_offers(qapp, clean_settings):
         from views.tool_controller import gripobjlimit
 
         assert gripobjlimit() == 250
+        from core import autosave
+
+        assert autosave.savetime() == 4
+        dlg.autosave_on.setChecked(False)
+        dlg.apply()
+        assert autosave.savetime() == 0, "unchecking it must turn it off"
 
         # a fresh window comes up with the display setting restored
         other = MainWindow()
