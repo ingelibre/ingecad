@@ -73,6 +73,37 @@ def layers_in_use(document) -> set[str]:
     return used
 
 
+def layers_inside_blocks(document) -> set[str]:
+    """Layer names carried by entities INSIDE block definitions.
+
+    Turning a layer off can be shown without a regen -- zero the alpha of
+    the vertices that belong to that layer's entities -- but only for
+    geometry the scene attributes to those entities. What an INSERT draws
+    belongs to the INSERT's handle (that is how block content is owned
+    since v0.1.3), so a layer that also lives inside a block needs the real
+    rebuild to vanish. One cached walk answers which case a layer is.
+    """
+    from ezdxf.entities import DXFGraphic
+
+    cached = getattr(document, "_layers_in_blocks_cache", None)
+    if cached is not None and cached[0] == document.revision:
+        return cached[1]
+    inside: set[str] = set()
+    for block in document.doc.blocks:
+        if block.name.lower().startswith(("*model_space", "*paper_space")):
+            continue        # a layout's own entities, not block content
+        for e in block:
+            if e.is_alive and isinstance(e, DXFGraphic):
+                name = e.dxf.get("layer", None)
+                if name:
+                    inside.add(name)
+    try:
+        document._layers_in_blocks_cache = (document.revision, inside)
+    except Exception:
+        pass
+    return inside
+
+
 def layer_names_and_colors(document) -> list[tuple[str, int]]:
     """(name, ACI) of every layer, in ``layer_list`` order, WITHOUT the
     in-use scan. The properties toolbar rebuilds its layer control on every

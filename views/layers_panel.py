@@ -12,7 +12,6 @@ from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QColorDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -157,15 +156,6 @@ def fill_color_combo(combo, include_bylayer: bool = True) -> None:
         combo.activated.emit(found)
 
     combo.activated.connect(on_activated)
-
-
-def nearest_aci(color: QColor) -> int:
-    best, best_d = 7, 1e18
-    for idx, (r, g, b) in ACI_RGB.items():
-        d = (r - color.red()) ** 2 + (g - color.green()) ** 2 + (b - color.blue()) ** 2
-        if d < best_d:
-            best, best_d = idx, d
-    return best
 
 
 COLLAPSED_WIDTH = 22
@@ -460,9 +450,29 @@ class LayersPanel(QWidget):
         return item.text() if item else ""
 
     # -- edits ----------------------------------------------------------------
-    def _execute(self, command) -> None:
+    def _execute(self, command, visibility=None, appearance=None) -> None:
+        """Run a layer command and put the drawing back in agreement.
+
+        Three kinds of change, three costs:
+
+        * ``visibility`` (the bulb, freeze) -- zero the alpha of that
+          layer's vertices on the GPU: instant, nothing is re-tessellated;
+        * ``appearance`` (colour, linetype, lineweight) -- re-tessellate
+          THAT LAYER's entities and swap them in: the cost is the layer;
+        * anything else (a new layer, a rename, a delete) -- the rebuild.
+
+        Each path answers False when it cannot be exact -- a layer that also
+        lives inside a block, geometry the scene does not carry -- and then
+        the rebuild runs after all.
+        """
         self.window.history.execute(command)
-        self.window.regen_in_memory()
+        done = False
+        if visibility is not None:
+            done = self.window.apply_layer_visibility(*visibility)
+        elif appearance is not None:
+            done = self.window.apply_layer_appearance(appearance)
+        if not done:
+            self.window.regen_in_memory()
         self.refresh()
         self.changed.emit()
 
@@ -524,19 +534,31 @@ class LayersPanel(QWidget):
             active = glyph in ("💡", "☀", "🔓")
             # toggling: on->off, thawed->frozen, unlocked->locked
             if prop == "on":
-                self._execute(layer_ops.LayerPropertyCommand(name, "on", not active))
+                self._execute(
+                    layer_ops.LayerPropertyCommand(name, "on", not active),
+                    visibility=(name, not active))
             elif prop == "frozen":
-                self._execute(layer_ops.LayerPropertyCommand(name, "frozen", active))
+                self._execute(
+                    layer_ops.LayerPropertyCommand(name, "frozen", active),
+                    visibility=(name, active))
             else:
                 self._execute(layer_ops.LayerPropertyCommand(name, "locked", active))
         elif col == 5:
+            # AutoCAD's Select Color, the 255-colour index palette -- a
+            # layer's colour IS an ACI, and picking from a generic RGB
+            # wheel could only guess the nearest one. ByLayer/ByBlock are
+            # not offered: a layer cannot take its colour from itself.
+            from views.color_dialog import SelectColorDialog
+
             info = next((i for i in layer_ops.layer_list(self.document)
                          if i.name == name), None)
-            start = aci_to_qcolor(info.color) if info else QColor("white")
-            chosen = QColorDialog.getColor(start, self, tr("Layer color"))
-            if chosen.isValid():
-                self._execute(layer_ops.LayerPropertyCommand(
-                    name, "color", nearest_aci(chosen)))
+            dialog = SelectColorDialog(self, current=info.color if info else 7,
+                                       include_bylayer=False)
+            if dialog.exec() and info is not None:
+                aci = dialog.result_aci()
+                if aci != info.color:
+                    self._execute(layer_ops.LayerPropertyCommand(
+                        name, "color", aci), appearance=name)
         elif col == 6:
             self._pick_linetype(name)
         elif col == 7:
@@ -549,14 +571,21 @@ class LayersPanel(QWidget):
                     name, "plot", not info.plot))
 
     def _pick_linetype(self, name: str) -> None:
-        from PySide6.QtGui import QCursor
-        from PySide6.QtWidgets import QMenu
+        """AutoCAD's Select Linetype: the loaded ones with their samples,
+        and a Load button for the rest of the library."""
+        from views.linetype_dialog import SelectLinetypeDialog
 
-        menu = QMenu(self)
-        for lt in layer_ops.available_linetypes(self.document):
-            menu.addAction(lt, lambda lt=lt: self._execute(
-                layer_ops.LayerPropertyCommand(name, "linetype", lt)))
-        menu.exec(QCursor.pos())
+        info = next((i for i in layer_ops.layer_list(self.document)
+                     if i.name == name), None)
+        dialog = SelectLinetypeDialog(self, self.document,
+                                      current=info.linetype if info else None)
+        if not dialog.exec():
+            return
+        chosen = dialog.result_name()
+        if chosen and (info is None or chosen != info.linetype):
+            self._execute(
+                layer_ops.LayerPropertyCommand(name, "linetype", chosen),
+                appearance=name)
 
     def _pick_lineweight(self, name: str) -> None:
         from PySide6.QtGui import QCursor
@@ -565,7 +594,8 @@ class LayersPanel(QWidget):
         menu = QMenu(self)
         for lw in layer_ops.LINEWEIGHTS:
             menu.addAction(layer_ops.lineweight_label(lw), lambda lw=lw: self._execute(
-                layer_ops.LayerPropertyCommand(name, "lineweight", lw)))
+                layer_ops.LayerPropertyCommand(name, "lineweight", lw),
+                appearance=name))
         menu.exec(QCursor.pos())
 
     def _on_cell_changed(self, row: int, col: int) -> None:
