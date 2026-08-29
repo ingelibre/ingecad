@@ -39,7 +39,14 @@ def aci_qcolor(aci: int) -> QColor:
 class SelectColorDialog(QDialog):
     """Returns the picked ACI via ``result_aci()`` (256=ByLayer, 0=ByBlock)."""
 
-    SWATCH = 16
+    #: Side of one swatch of the 10-249 grid, in pixels. It was 16 and
+    #: Marco asked for "un poco más grande, como 1.5x": aiming at a colour
+    #: is the whole job of this dialog, and 24 px is about the size
+    #: AutoCAD's Index Color tab gives them on a normal screen.
+    SWATCH = 24
+    #: The nine standard colours and the six greys, which get their own
+    #: rows, keep their proportion to the grid.
+    SWATCH_ROW = 32
 
     def __init__(self, parent=None, current: int | None = None,
                  include_bylayer: bool = True) -> None:
@@ -51,7 +58,7 @@ class SelectColorDialog(QDialog):
 
         # The 10-249 grid, 24 columns like AutoCAD's Index Color tab.
         grid = QGridLayout()
-        grid.setSpacing(1)
+        grid.setSpacing(2)
         for i, aci in enumerate(range(10, 250)):
             grid.addWidget(self._swatch(aci), i % 10, i // 10)
         layout.addLayout(grid)
@@ -60,11 +67,11 @@ class SelectColorDialog(QDialog):
         row.setSpacing(2)
         row.addWidget(QLabel(tr("Standard:")))
         for aci in range(1, 10):
-            row.addWidget(self._swatch(aci, size=22))
+            row.addWidget(self._swatch(aci, size=self.SWATCH_ROW))
         row.addSpacing(10)
         row.addWidget(QLabel(tr("Grays:")))
         for aci in range(250, 256):
-            row.addWidget(self._swatch(aci, size=22))
+            row.addWidget(self._swatch(aci, size=self.SWATCH_ROW))
         row.addStretch(1)
         layout.addLayout(row)
 
