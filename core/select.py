@@ -958,6 +958,69 @@ def _mleader_vertices(entity):
                 yield li, ni, vi
 
 
+def _hatch_vertices(entity):
+    """(path index, x, y) of a hatch's boundary corners, in one fixed order.
+
+    ``entity_grips`` and ``apply_grip_edit`` must walk this identically --
+    the grip index IS the position in the walk, exactly as for a
+    MULTILEADER. Straight boundaries only: an arc or spline edge has no
+    corner to drag, and offering one would have to invent a shape.
+    """
+    from ezdxf.entities.boundary_paths import LineEdge
+
+    for pi, path in enumerate(getattr(entity, "paths", ()) or ()):
+        vertices = getattr(path, "vertices", None)
+        if vertices is not None:                      # PolylinePath
+            for v in vertices:
+                yield pi, float(v[0]), float(v[1])
+            continue
+        for edge in getattr(path, "edges", ()) or ():  # EdgePath
+            if isinstance(edge, LineEdge):
+                yield pi, float(edge.start[0]), float(edge.start[1])
+
+
+def _hatch_move_vertex(entity, path_index: int, old, new) -> bool:
+    """Drag one boundary corner, keeping the boundary closed.
+
+    EVERY endpoint of that path sitting on the dragged corner moves with
+    it: in an edge path a corner belongs to two edges, and moving only one
+    of them tears the boundary open -- the fill then leaks or vanishes.
+    """
+    from ezdxf.entities.boundary_paths import LineEdge
+
+    try:
+        path = entity.paths[path_index]
+    except (IndexError, TypeError, AttributeError):
+        return False
+    ox, oy = old
+    # Shared corners are written bit-identical by the CAD that saved them;
+    # the epsilon rides the magnitude so UTM coordinates behave too.
+    eps = 1e-9 * max(1.0, abs(ox), abs(oy))
+
+    def same(x, y) -> bool:
+        return abs(x - ox) <= eps and abs(y - oy) <= eps
+
+    moved = False
+    vertices = getattr(path, "vertices", None)
+    if vertices is not None:
+        for i, v in enumerate(vertices):
+            if same(float(v[0]), float(v[1])):
+                bulge = v[2] if len(v) > 2 else 0.0
+                vertices[i] = (new[0], new[1], bulge)
+                moved = True
+        return moved
+    for edge in getattr(path, "edges", ()) or ():
+        if not isinstance(edge, LineEdge):
+            continue
+        if same(float(edge.start[0]), float(edge.start[1])):
+            edge.start = (new[0], new[1])
+            moved = True
+        if same(float(edge.end[0]), float(edge.end[1])):
+            edge.end = (new[0], new[1])
+            moved = True
+    return moved
+
+
 def entity_grips(entity) -> list[tuple[float, float, str]]:
     """Grip points of an entity: (x, y, role).
 
@@ -1023,6 +1086,14 @@ def entity_grips(entity) -> list[tuple[float, float, str]]:
             grips.append((c.x, c.y, "center"))
         except Exception:
             pass
+        # p. 873: "when you select a nonassociative hatch, both the control
+        # grip and the boundary grips are displayed". An associative hatch
+        # gets the control grip alone -- its shape follows the objects it
+        # was built from, so a corner of its own would be a lie you could
+        # drag. The control grip stays first either way.
+        if not int(entity.dxf.get("associative", 0) or 0):
+            for _pi, x, y in _hatch_vertices(entity):
+                grips.append((x, y, "vertex"))
     elif t == "DIMENSION":
         # AutoCAD's set for linear/aligned: the two extension-line origins
         # (re-measure), the dimension-line point (relocates it) and the
@@ -1167,6 +1238,16 @@ def apply_grip_edit(entity, grip_index: int, role: str, new_point):
         setattr(entity.dxf, f"vtx{grip_index}", (nx, ny, 0))
         return True
     if t == "HATCH":
+        if role == "vertex":
+            walk = list(_hatch_vertices(entity))
+            # The offset is measured, not assumed: the control grip is
+            # absent when the bounding box cannot be computed.
+            offset = len(entity_grips(entity)) - len(walk)
+            i = grip_index - offset
+            if not 0 <= i < len(walk):
+                return False
+            pi, ox, oy = walk[i]
+            return _hatch_move_vertex(entity, pi, (ox, oy), (nx, ny))
         try:
             import ezdxf.bbox as _bbox
 

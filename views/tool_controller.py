@@ -666,7 +666,11 @@ class ToolController(QObject):
             document=document, style=style, allow_justify=True)
 
     def open_text_editor_for(self, entity) -> bool:
-        """Double-click on a TEXT/MTEXT: edit it in place. True if handled.
+        """Double-click on a text object: edit it in place. True if handled.
+
+        The kinds are DDEDIT's (p. 521): single-line text, multiline text and
+        attribute definitions -- plus ATTRIB, which the shortcut menu offers
+        alongside them. Everything but MTEXT edits as one line.
 
         The anchor is the entity's insert point; for MTEXT attachment points
         other than top-left the editor sits close to, not exactly on, the
@@ -675,7 +679,7 @@ class ToolController(QObject):
         from views.mtext_editor import MTextInPlaceEditor
 
         kind = entity.dxftype()
-        if kind not in ("MTEXT", "TEXT"):
+        if kind not in ("MTEXT", "TEXT", "ATTRIB", "ATTDEF"):
             return False
         insert = entity.dxf.insert
         if kind == "MTEXT":
@@ -685,14 +689,18 @@ class ToolController(QObject):
                 width = 40.0 * char_height    # unwrapped: a workable box
             text = entity.text
             single = False
+            # MTEXT-only: asking a single-line entity for it raises.
+            line_spacing = float(
+                entity.dxf.get("line_spacing_factor", 1.0) or 1.0)
         else:
             char_height = float(entity.dxf.height or 2.5)
             width = max(len(entity.dxf.text), 8) * char_height
             text = entity.dxf.text
             single = True
+            line_spacing = 1.0
 
         def commit(content: str, extras: dict) -> None:
-            if kind == "TEXT":
+            if single:
                 new = content.replace("\\P", " ")
             else:
                 new = content
@@ -731,8 +739,7 @@ class ToolController(QObject):
             on_commit=commit, single_line=single,
             document=self.window.document,
             style=str(entity.dxf.get("style", "Standard")),
-            line_spacing=float(entity.dxf.get("line_spacing_factor", 1.0)
-                               or 1.0))
+            line_spacing=line_spacing)
         if kind == "MTEXT":
             fill = int(entity.dxf.get("bg_fill", 0) or 0)
             if fill & 1:

@@ -1769,14 +1769,20 @@ class SnapshotCommand(Command):
 def _restore_entity(entity, snapshot) -> None:
     """Copy snapshot's DXF attributes back onto entity (keeps its handle)."""
     wanted = snapshot.dxf.all_existing_dxf_attribs()
+    # Identity, not edited state: a snapshot is an ezdxf copy, which carries
+    # neither. Discarding owner along with the rest left the restored entity
+    # parentless, and the surgical post-undo path skips those -- the object
+    # went on hiding until a full regen caught up (the same trap the IMAGE
+    # quad hit). The layout still holds it, so only the screen suffered.
+    keep = ("handle", "owner")
     # Attributes the edit ADDED have no entry in the snapshot; copying alone
     # would leave them behind (setting style on an entity that used the
     # default survived its own undo this way).
     for key in list(entity.dxf.all_existing_dxf_attribs()):
-        if key not in wanted and key != "handle":
+        if key not in wanted and key not in keep:
             entity.dxf.discard(key)
     for key, value in wanted.items():
-        if key == "handle":
+        if key in keep:
             continue
         entity.dxf.set(key, value)
     # Geometry that is NOT a DXF attribute has to be restored by hand, or

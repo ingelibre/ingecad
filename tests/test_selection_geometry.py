@@ -338,10 +338,17 @@ def test_hatch_grip_moves_the_whole_hatch():
     hatch = msp.add_hatch()
     hatch.paths.add_polyline_path([(0, 0), (4, 0), (4, 4), (0, 4)],
                                   is_closed=True)
-    (gx, gy, role), = entity_grips(hatch)
+    grips = entity_grips(hatch)
+    # The control grip comes first and still moves the whole hatch; the
+    # boundary corners follow it (p. 873, covered in test_grip_undo.py).
+    gx, gy, role = grips[0]
     assert (gx, gy) == (2.0, 2.0) and role == "center"
+    assert [r for _x, _y, r in grips[1:]] == ["vertex"] * 4
     assert apply_grip_edit(hatch, 0, "center", (12.0, 2.0))
     assert bbox_mod.extents([hatch]).center.x == 12.0
+    # the whole thing travelled: the corners moved with it, keeping shape
+    assert [(x, y) for x, y, _r in entity_grips(hatch)[1:]] \
+        == [(10.0, 0.0), (14.0, 0.0), (14.0, 4.0), (10.0, 4.0)]
 
 
 def test_linear_dimension_grips_match_autocads_set():

@@ -347,6 +347,74 @@ def test_double_click_edits_sheet_text_before_entering_a_viewport(qapp):
         win.close()
 
 
+def test_the_in_place_editor_opens_for_every_text_kind_on_the_sheet(qapp):
+    """The editor itself, not the routing to it.
+
+    The routing test above stubs ``open_text_editor_for`` out, so nothing
+    ever ran it on a real entity — and it asked every one of them for
+    ``line_spacing_factor``, which only MTEXT has: double-clicking a
+    single-line TEXT raised DXFAttributeError and no editor appeared. A
+    title block is mostly single-line text, so on a colleague's sheet the
+    text was the one thing that would not edit.
+    """
+    win, t, _vp = _window(qapp)
+    try:
+        psp = win.document.doc.layouts.get("Layout1")
+        block = win.document.doc.blocks.new("TB")
+        block.add_attdef("SHEET", insert=(0, 0), text="A01",
+                         dxfattribs={"height": 5})
+        insert = psp.add_blockref("TB", (700, 40))
+        insert.add_auto_attribs({"SHEET": "A01"})
+        attrib = insert.attribs[0]
+        attdef = block.query("ATTDEF")[0]
+        mtext = psp.add_mtext("PLANIMETRIA", dxfattribs={
+            "char_height": 5, "insert": (620, 60)})
+        text = psp.query("TEXT")[0]
+        win.switch_layout("Layout1")
+        _wait_regen(qapp, win)
+
+        for entity in (text, mtext, attrib, attdef):
+            t._mtext_editor = None
+            assert t.open_text_editor_for(entity), entity.dxftype()
+            editor = t._mtext_editor
+            assert editor is not None, entity.dxftype()
+            # it opens ON the text, carrying what the text says
+            assert editor.edit.toPlainText().startswith(
+                "PLANIMETRIA" if entity.dxftype() == "MTEXT"
+                else ("PLANO" if entity is text else "A01")), entity.dxftype()
+            editor.cancel(ask=False)
+
+        # and the inverse: a kind DDEDIT does not edit is declined, so the
+        # double-click falls through to the layout's enter/leave rule
+        t._mtext_editor = None
+        assert not t.open_text_editor_for(psp.query("LWPOLYLINE")[0])
+        assert t._mtext_editor is None
+    finally:
+        win.close()
+
+
+def test_editing_a_sheet_text_writes_it_and_undo_puts_it_back(qapp):
+    """Single-line text edits end to end, on the sheet, through history."""
+    win, t, _vp = _window(qapp)
+    try:
+        win.switch_layout("Layout1")
+        _wait_regen(qapp, win)
+        text = win.document.doc.layouts.get("Layout1").query("TEXT")[0]
+        assert text.dxf.text == "PLANO"
+
+        assert t.open_text_editor_for(text)
+        t._mtext_editor.edit.setPlainText("PLANTA GENERAL")
+        t._mtext_editor.commit()
+        qapp.processEvents()
+        assert text.dxf.text == "PLANTA GENERAL"
+
+        win.history.undo()
+        qapp.processEvents()
+        assert text.dxf.text == "PLANO"
+    finally:
+        win.close()
+
+
 # -- a viewport is an object you can move and scale ----------------------------
 
 def _viewport(document):
