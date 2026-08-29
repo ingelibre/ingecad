@@ -132,6 +132,12 @@ class GeometryIndex:
         # turns into selection garbage.
         self._pick_boxes = np.empty((0, 4))
         self._pick_box_oidx = np.empty(0, dtype=np.int32)
+        # Filled areas that answer a CLICK inside them: a hatch. Kept as
+        # polygons rather than a rectangle because an L-shaped hatch would
+        # otherwise swallow the clicks in the corner it does not cover, and
+        # out of window/crossing because its boundary already answers those.
+        # [(owner id, polygon Nx2, (minx, miny, maxx, maxy))]
+        self._areas: list = []
 
     def invalidate(self) -> None:
         self._dirty = True
@@ -156,7 +162,7 @@ class GeometryIndex:
     # -- extraction -------------------------------------------------------------
     @staticmethod
     def _extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
-                 pboxes=None, pbox_o=None) -> None:
+                 pboxes=None, pbox_o=None, areas=None) -> None:
         t = e.dxftype()
         try:
             if t == "LINE":
@@ -237,6 +243,8 @@ class GeometryIndex:
             elif t == "HATCH":
                 if not GeometryIndex._hatch(e, oid, segs, seg_o):
                     GeometryIndex._box(e, oid, boxes, box_o)
+                elif areas is not None:
+                    GeometryIndex._hatch_area(e, oid, areas)
             elif t == "VIEWPORT":
                 # "AutoCAD selects viewports by their frame, not their
                 # interior" — the same rule viewport_border_hit codes, said
@@ -408,6 +416,55 @@ class GeometryIndex:
         return emitted
 
     @staticmethod
+    def _hatch_area(e, oid, areas) -> None:
+        """Remember a hatch's filled area so a click inside it selects it.
+
+        Marco, dogfooding: "apliqué hatch a un dibujo, quiero editarlo o
+        eliminarlo, trato de seleccionar con el mouse y no se selecciona; en
+        AutoCAD selecciono un área pequeña donde está el hatch, se selecciona
+        y lo elimino". Tracing only the boundary -- what this used to do --
+        means the only way in is to hit an edge within a pixel or two.
+
+        Islands are honoured by counting how many rings contain the point
+        (even-odd), the same rule the renderer fills with, so a click in a
+        hole selects nothing.
+        """
+        from ezdxf import path as ezpath
+
+        try:
+            paths = list(ezpath.from_hatch(e))
+        except Exception:
+            return
+        rings = []
+        for path in paths:
+            try:
+                pts = [(v.x, v.y) for v in path.flattening(distance=0.0,
+                                                           segments=16)]
+            except Exception:
+                continue
+            if len(pts) >= 3:
+                rings.append(np.asarray(pts, dtype=np.float64))
+        if not rings:
+            return
+        every = np.vstack(rings)
+        bounds = (float(every[:, 0].min()), float(every[:, 1].min()),
+                  float(every[:, 0].max()), float(every[:, 1].max()))
+        areas.append((oid, rings, bounds))
+
+    def _area_hits(self, cx: float, cy: float) -> list:
+        """Owner ids of the filled areas that contain (cx, cy), smallest
+        first -- a small hatch drawn over a big one is the one you meant."""
+        hits = []
+        for oid, rings, (x0, y0, x1, y1) in self._areas:
+            if not (x0 <= cx <= x1 and y0 <= cy <= y1):
+                continue
+            inside = sum(1 for ring in rings if _point_in_ring(ring, cx, cy))
+            if inside % 2 == 1:
+                hits.append(((x1 - x0) * (y1 - y0), oid))
+        hits.sort()
+        return [oid for _area, oid in hits]
+
+    @staticmethod
     def _box(e, oid, boxes, box_o) -> None:
         """The last-resort bounding box (see BOXED_TYPES)."""
         extents = GeometryIndex._text_extents(e)
@@ -429,6 +486,7 @@ class GeometryIndex:
     def _build(self) -> None:
         self._owners = []
         self._owner_ids = {}
+        self._areas = []
         segs: list = []
         seg_o: list = []
         circles: list = []
@@ -455,7 +513,7 @@ class GeometryIndex:
                     and e.dxf.handle not in pickable_vps):
                 continue    # the sheet's own "main" viewport is not an object
             self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
-                          pboxes, pbox_o)
+                          pboxes, pbox_o, self._areas)
         self._segs = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
         self._seg_oidx = np.asarray(seg_o, dtype=np.int32)
         self._seg_bounds = self._seg_bounds_of(self._segs)
@@ -492,7 +550,7 @@ class GeometryIndex:
             except Exception:
                 continue
             self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
-                          pboxes, pbox_o)
+                          pboxes, pbox_o, self._areas)
         if segs:
             new = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
             self._segs = np.vstack([self._segs, new])
@@ -532,6 +590,9 @@ class GeometryIndex:
         ids = self._ids_of(handles)
         if not len(ids):
             return
+        if self._areas:
+            drop = set(int(i) for i in ids)
+            self._areas = [a for a in self._areas if a[0] not in drop]
         for arr_name, oidx_name, bounds_name in (
                 ("_segs", "_seg_oidx", "_seg_bounds"),
                 ("_circles", "_circle_oidx", None),
@@ -682,6 +743,11 @@ class GeometryIndex:
                 areas = ((b[hits, 2] - b[hits, 0]) * (b[hits, 3] - b[hits, 1]))
                 best = (tolerance, self._owners[
                     self._pick_box_oidx[hits[int(np.argmin(areas))]]])
+        if self._areas and best is None:
+            # Inside a hatch: last of all, so a line drawn over one still
+            # wins the click, exactly as the hatch's own edges already do.
+            for oid in self._area_hits(cx, cy):
+                return self._owners[oid]
         return best[1] if best else None
 
     def pick_all(self, cursor: tuple[float, float],
@@ -745,6 +811,10 @@ class GeometryIndex:
                 # tolerance + a hair keeps them behind every real hit while
                 # preserving smallest-box-first among themselves
                 offer(self._owners[oidx[k]], tolerance * (1.0 + 1e-6 * (rank + 1)))
+        # And last, the inside of a hatch, so cycling can reach the fill
+        # under whatever was drawn on top of it.
+        for rank, oid in enumerate(self._area_hits(cx, cy)):
+            offer(self._owners[oid], tolerance * (1.0 + 1e-3 * (rank + 1)))
         return [h for h, _ in sorted(best.items(), key=lambda kv: kv[1])]
 
     def window(self, rect: tuple[float, float, float, float]) -> list[str]:
@@ -956,6 +1026,19 @@ def _mleader_vertices(entity):
         for ni, line in enumerate(getattr(leader, "lines", ()) or ()):
             for vi in range(len(getattr(line, "vertices", ()) or ())):
                 yield li, ni, vi
+
+
+def _point_in_ring(ring: np.ndarray, x: float, y: float) -> bool:
+    """Even-odd ray test, vectorised: is (x, y) inside this closed ring?"""
+    px, py = ring[:, 0], ring[:, 1]
+    qx, qy = np.roll(px, -1), np.roll(py, -1)
+    straddles = (py > y) != (qy > y)
+    if not straddles.any():
+        return False
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cross = (qx - px) * (y - py) / np.where(qy - py == 0, np.nan, qy - py)
+    left = x < px + cross
+    return bool(np.count_nonzero(straddles & left) % 2 == 1)
 
 
 def _hatch_vertices(entity):

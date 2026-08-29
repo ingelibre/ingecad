@@ -901,6 +901,83 @@ def _std_patterns():
         return _STD_PATTERNS
 
 
+def pattern_definition(name: str):
+    """The line families of a predefined pattern, or None.
+
+    Case-insensitive on purpose: 21 of the 172 predefined names carry a
+    lowercase letter (V_MASONRY200x100, V_MASONRY300x150...), and looking
+    them up as ``name.upper()`` found nothing -- their hatches were created
+    without a definition and their swatches drew the "unknown pattern"
+    diagonal. AutoCAD does not care about the case of a pattern name either.
+    """
+    patterns = _std_patterns()
+    if name in patterns:
+        return patterns[name]
+    upper = str(name).upper()
+    if upper in patterns:
+        return patterns[upper]
+    for key, definition in patterns.items():
+        if key.upper() == upper:
+            return definition
+    return None
+
+
+def canonical_pattern_name(name: str) -> str:
+    """The library's own spelling of a pattern name (case-insensitive)."""
+    patterns = _std_patterns()
+    if name in patterns:
+        return name
+    upper = str(name).upper()
+    if upper in patterns:
+        return upper
+    for key in patterns:
+        if key.upper() == upper:
+            return key
+    return str(name)
+
+
+def hatch_settings(hatch) -> dict:
+    """What the Hatch dialog needs to show an EXISTING hatch (HATCHEDIT).
+
+    The four things the dialog edits, read back from the entity: a solid
+    fill answers "SOLID", which is the name the gallery selects.
+    """
+    solid = bool(int(hatch.dxf.get("solid_fill", 0) or 0))
+    return {
+        "pattern": "SOLID" if solid else str(
+            hatch.dxf.get("pattern_name", "SOLID") or "SOLID").upper(),
+        "angle": float(hatch.dxf.get("pattern_angle", 0.0) or 0.0),
+        "scale": float(hatch.dxf.get("pattern_scale", 1.0) or 1.0),
+        "color": int(hatch.dxf.get("color", 256)),
+    }
+
+
+def apply_hatch_settings(hatch, settings: dict) -> None:
+    """HATCHEDIT: give an existing hatch a new pattern, scale, angle, colour.
+
+    Mutates in place -- the boundaries, the island style and the handle stay
+    exactly as they are, which is what makes it an EDIT of that hatch and
+    not a new one. The caller wraps it in a SnapshotCommand for undo.
+    """
+    name = str(settings.get("pattern", "SOLID") or "SOLID").upper()
+    color = int(settings.get("color", 256))
+    aci = 7 if color in (256, 0) else color
+    style = int(hatch.dxf.get("hatch_style", HATCH_STYLE_NORMAL))
+    if name == "SOLID":
+        hatch.set_solid_fill(color=aci)
+    else:
+        hatch.set_pattern_fill(
+            canonical_pattern_name(name), color=aci,
+            angle=float(settings.get("angle", 0.0)),
+            scale=float(settings.get("scale", 1.0)),
+            definition=pattern_definition(name))
+    # ezdxf's fill helpers reset these two on the way out, exactly as they
+    # do when a hatch is created -- put them back, or an edit would quietly
+    # change the island style and turn ByLayer into colour 7.
+    hatch.dxf.hatch_style = style
+    hatch.dxf.color = color
+
+
 def hatch_pattern_names() -> list:
     """Sorted predefined pattern names (for the hatch style picker)."""
     return sorted(_std_patterns().keys())
@@ -986,9 +1063,9 @@ def add_hatch(boundaries, pattern="SOLID", scale=1.0, angle=0.0,
         elif name == "SOLID":
             h.set_solid_fill(color=aci)
         else:
-            defn = _std_patterns().get(name)
-            h.set_pattern_fill(name, color=aci, angle=angle, scale=scale,
-                               definition=defn)
+            h.set_pattern_fill(canonical_pattern_name(name), color=aci,
+                               angle=angle, scale=scale,
+                               definition=pattern_definition(name))
         for b in boundaries:
             _add_boundary(h, b, BOUNDARY_PATH_EXTERNAL)
         if style != HATCH_STYLE_IGNORE:

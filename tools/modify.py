@@ -1015,7 +1015,45 @@ class AddSelectedTool(Tool):
         window._invoke_command(command)
 
 
+class HatchEditTool(Tool):
+    """HATCHEDIT — "Modifies an existing hatch or fill" (reference p. 896).
+
+    Access, as the manual lists it: the command, Modify > Object > Hatch,
+    the shortcut menu on a selected hatch, and -- the way anyone actually
+    reaches it -- a double-click on the hatch.
+    """
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "HATCHEDIT"
+        services = self.ctx.services
+        selection = services._selection_entities() if services else []
+        hatches = [e for e in selection if e.dxftype() == "HATCH"]
+        if len(hatches) == 1:
+            # noun-verb: a hatch was already selected, edit that one
+            self._edit(hatches[0])
+            return
+        self.prompt("Select hatch object:")
+
+    def _edit(self, entity) -> None:
+        services = self.ctx.services
+        if services is not None:
+            services.edit_hatch(entity)
+        self.ctx.finish()
+
+    def on_point(self, point: Point) -> None:
+        services = self.ctx.services
+        entity = services.pick_entity(point) if services else None
+        if entity is None or entity.dxftype() != "HATCH":
+            self.ctx.echo(tr("That is not a hatch."))
+            self.prompt("Select hatch object:")
+            return
+        self._edit(entity)
+
+
 MODIFY_TOOL_CLASSES = {
+    "HATCHEDIT": HatchEditTool,
     "STRETCH": StretchTool,
     "BREAK": BreakTool,
     "JOIN": JoinTool,
