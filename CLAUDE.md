@@ -419,6 +419,57 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🎯 LO PRIMERO DE LA PRÓXIMA SESIÓN (pedido de Marco, 2026-08-29)
+
+**Reducir conceptos duplicados. Antes que cualquier feature nueva.**
+
+Marco lo pidió después de ver que el PR de LibreDWG se achicaba a pedido de
+rurban: *«¿en IngeCAD no habrá código que esté demás? ¿No sería bueno
+reducir el código al mínimo sin perder nada de lo que hemos avanzado?»*.
+La respuesta medida a la pregunta literal es **no hay grasa**: 40 929
+líneas de app, **6 funciones de módulo sin ninguna otra mención**, y el
+tamaño no cuesta velocidad (importar la ventana entera son 506 ms, de los
+cuales 231 son de ezdxf; el código que no corre cuesta **cero por cuadro**).
+
+Pero la pregunta de fondo es buena y apunta a otra cosa: **la misma pregunta
+contestada en dos lugares**. De ahí salieron casi todos los bugs de esta
+sesión y de las anteriores:
+
+- el mismo comentario obsoleto («el overlay no puede dibujar una cota»)
+  escrito en `tool_controller` **y** en `core/modify.py`: se arregló uno y
+  el otro siguió costando segundos;
+- **dos** constantes de PICKBOX que valían 8 —una el ancho total, otra la
+  media— así que el cuadrito dibujado medía la mitad de lo que atrapaba;
+- `_vp_placement` (ventana) y la proyección de `core/layouts` calculando lo
+  mismo con distinto criterio (unificado el 2026-08-29);
+- el mismo `102 {…}` mal leído en tres escáneres de mi arnés a la vez.
+
+**La regla, para que no vuelva a pasar: una pregunta, un lugar.** Si dos
+sitios responden «¿cuál es el espacio actual?», «¿qué color es este ACI?»,
+«¿qué tan fino aplano esta curva?», tarde o temprano responden distinto.
+
+**Candidatos concretos ya vistos, para empezar por ahí** (no es una lista
+cerrada; el trabajo es buscarlos):
+
+1. **El color de un ACI**: `views/layers_panel.aci_to_qcolor` lleva su
+   propia tabla de los 9 estándar y cae a `views/color_dialog.aci_qcolor`,
+   que se lo pregunta a ezdxf. Dos respuestas para el mismo índice, y no
+   coinciden en el 7 (blanco fijo contra lo que resuelva el lienzo).
+2. **La apertura de picado**: `PICK_PX`/`SNAP_PX` en `tool_controller` y
+   `GRIP_PICK_PX` en `viewport`, cada una convertida a mundo por su cuenta
+   —y desde el MSPACE hay que dividir por la escala de la ventana, que es
+   justo el tipo de cosa que se olvida en la copia que uno no vio.
+3. **La distancia de aplanado**: `_flatten_distance` se llama desde tres
+   sitios con reglas propias de cuándo recalcularla.
+4. **Qué es «el espacio actual»**: `Document.current_space`, el `_active_vp`
+   de la ventana y el `is_any_paperspace` suelto de `core/select`.
+
+**Cómo hacerlo sin romper nada** (es la parte que importa): por cada
+concepto, primero una prueba que **fije la conducta actual** en los dos
+sitios, después unificar, y medir que la salida no cambió —el mismo método
+del culling de ventanas: *0 píxeles distintos de 3 177 096*. Sin esa prueba
+previa, unificar es adivinar.
+
 ## 🗓 Sesión 2026-08-29 (bis) — v0.4.7: lo que Marco encontró usándolo
 
 Una sesión entera de dogfooding suyo, comando por comando, y **de siete
