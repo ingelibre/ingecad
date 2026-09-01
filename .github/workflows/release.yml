@@ -113,3 +113,89 @@ jobs:
           gh release upload "${GITHUB_REF_NAME}" \
             dist/IngeCAD-*-x86_64.AppImage \
             dist/IngeCAD-*-linux-x86_64.tar.gz --clobber
+
+  snap:
+    name: Snap (x86_64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: System packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential file libegl1 libgl1 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
+            libxcb-render-util0
+
+      - name: Python dependencies
+        run: |
+          python -m venv venv
+          ./venv/bin/python -m pip install --quiet --upgrade pip
+          ./venv/bin/python -m pip install --quiet -r requirements.txt pyinstaller
+
+      - name: Build vendor/libredwg
+        run: tools/libredwg-patches/build-vendor.sh
+
+      - name: Build the PyInstaller bundle
+        run: |
+          INGECAD_ROOT="$PWD" ./venv/bin/python -m PyInstaller --noconfirm \
+            --distpath dist-pyi --workpath build-pyi packaging/ingecad.spec
+          dist-pyi/ingecad/ingecad --check
+
+      - name: Stage the snap tree
+        run: |
+          VERSION=$(./venv/bin/python -c 'from core.version import __version__; print(__version__)')
+          mkdir -p build/snap-stage/snap/gui build/snap-stage/payload
+          sed "s/@VERSION@/$VERSION/" packaging/snap/snapcraft.yaml.in \
+            > build/snap-stage/snap/snapcraft.yaml
+          cp -a dist-pyi/ingecad/. build/snap-stage/payload/
+          cp resources/icons/ingecad_256.png build/snap-stage/snap/gui/ingecad.png
+          sed -e 's|^Exec=.*|Exec=ingecad %f|' \
+              -e 's|^Icon=.*|Icon=${SNAP}/meta/gui/ingecad.png|' \
+              packaging/flatpak/org.ingecad.IngeCAD.desktop \
+              > build/snap-stage/snap/gui/ingecad.desktop
+
+      - name: Build the snap
+        id: snapbuild
+        uses: snapcore/action-build@v1
+        with:
+          path: build/snap-stage
+
+      - name: Smoke test the snap
+        run: |
+          sudo snap install --dangerous "${{ steps.snapbuild.outputs.snap }}"
+          snap run ingecad --check
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IngeCAD-snap-x86_64
+          path: ${{ steps.snapbuild.outputs.snap }}
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "IngeCAD ${GITHUB_REF_NAME#v}" \
+              --notes "See CHANGELOG.md for this release's details."
+          gh release upload "${GITHUB_REF_NAME}" "${{ steps.snapbuild.outputs.snap }}" --clobber
+
+      - name: Publish to the Snap Store (if credentials exist)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [ -z "$SNAPCRAFT_STORE_CREDENTIALS" ]; then
+            echo "Sin SNAPCRAFT_STORE_CREDENTIALS — se omite la publicación."
+            exit 0
+          fi
+          sudo snap install snapcraft --classic
+          snapcraft upload "${{ steps.snapbuild.outputs.snap }}" --release=stable

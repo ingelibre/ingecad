@@ -1,0 +1,85 @@
+# IngeCAD snap — strict confinement, wrapping the PyInstaller bundle.
+# Staged by the CI (release.yml, job "snap"): @VERSION@ substituted, the
+# onedir bundle in ./payload, desktop entry in snap/gui/. The bundle
+# carries its own Qt AND the LibreDWG converters (vendor/libredwg/bin,
+# rebuilt from source in CI); stage-packages cover GL dispatch, the xcb
+# chain and fonts that a bare core22 lacks.
+name: ingecad
+base: core22
+version: "@VERSION@"
+title: IngeCAD
+summary: CAD 2D libre con DWG nativo — el espíritu del AutoCAD clásico
+description: |
+  IngeCAD es un CAD 2D libre (GPL-3.0) para ingenieros civiles y
+  arquitectos que migran de AutoCAD: los mismos alias de comandos (M para
+  mover, TR para recortar), la interfaz clásica pre-ribbon — menús, barras
+  y una línea de comandos de verdad — y DWG/DXF NATIVOS de ida y vuelta
+  con GNU LibreDWG: los planos que te manda tu colega abren, se editan y
+  se devuelven en su formato.
+
+  Lo que trae:
+
+  - Dibujo 2D con inferencias, referencias a objetos y medidas exactas por
+    línea de comandos.
+  - DWG y DXF de fábrica, sin conversores externos ni peajes.
+  - Capas, bloques, cotas y textos al estilo clásico.
+  - Interfaz en español, pensada para el flujo de obra.
+
+  Parte del ecosistema Inge, junto a IngeTrazo (modelado 3D/BIM) e
+  IngePresupuestos (presupuestos de obra): terreno → trazo → BIM →
+  presupuesto.
+
+  IngeCAD is a free, open-source 2D CAD in the spirit of classic AutoCAD,
+  with native DWG/DXF round-tripping powered by GNU LibreDWG, the classic
+  pre-ribbon interface and the command aliases your muscle memory expects.
+  Spanish-first UI, English available.
+
+  AutoCAD is a trademark of Autodesk, Inc.; IngeCAD is an independent
+  project, not affiliated with or endorsed by Autodesk.
+license: GPL-3.0-or-later
+website: https://ingecad.org
+contact: https://github.com/ingelibre/ingecad/issues
+source-code: https://github.com/ingelibre/ingecad
+issues: https://github.com/ingelibre/ingecad/issues
+grade: stable
+confinement: strict
+
+apps:
+  ingecad:
+    command: opt/ingecad/ingecad
+    plugs:
+      - opengl
+      - x11
+      - wayland
+      - desktop
+      - desktop-legacy
+      - home
+      - network
+      - removable-media
+    environment:
+      QT_QPA_PLATFORM: xcb
+      FONTCONFIG_PATH: $SNAP/etc/fonts
+
+parts:
+  bundle:
+    plugin: dump
+    source: payload
+    override-build: |
+      mkdir -p "$CRAFT_PART_INSTALL/opt/ingecad"
+      cp -a "$CRAFT_PART_SRC/." "$CRAFT_PART_INSTALL/opt/ingecad/"
+    stage-packages:
+      - libgl1
+      - libegl1
+      - libopengl0
+      - libx11-6
+      - libx11-xcb1
+      - libxcb-glx0
+      - libxkbcommon-x11-0
+      - libxcb-cursor0
+      - libxcb-icccm4
+      - libxcb-keysyms1
+      - libxcb-shape0
+      - libxcb-render-util0
+      - libfontconfig1
+      - fontconfig-config
+      - fonts-dejavu-core
