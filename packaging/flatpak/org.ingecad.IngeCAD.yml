@@ -68,6 +68,23 @@ modules:
       - install -Dm644 packaging/flatpak/${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
       - install -Dm644 resources/icons/ingecad_256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
       - install -Dm644 packaging/flatpak/${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
+      # 4. MIME types (.dwg / .dxf) so double-click opens IngeCAD, with the
+      #    branded document icons. Flatpak only exports icons whose file
+      #    name starts with the app id, so the mimetype icons go in under
+      #    that prefix and the exported XML points at those names — a plain
+      #    "image-vnd.dwg" never leaves the sandbox (the file manager then
+      #    paints the generic sheet). Same fix as IngeTrazo 7e86f29.
+      - |
+        mkdir -p "${FLATPAK_DEST}/share/mime/packages"
+        sed -e 's|<icon name="\([^"]*\)"/>|<icon name="'"${FLATPAK_ID}"'.\1"/>|' \
+          resources/mime/ingecad.xml > "${FLATPAK_DEST}/share/mime/packages/${FLATPAK_ID}.xml"
+        grep -q "${FLATPAK_ID}.image-vnd.dwg" "${FLATPAK_DEST}/share/mime/packages/${FLATPAK_ID}.xml"
+        for d in resources/icons/hicolor/*/mimetypes; do
+          size=$(basename "$(dirname "$d")")
+          for f in "$d"/*.png; do
+            install -Dm644 "$f" "${FLATPAK_DEST}/share/icons/hicolor/${size}/mimetypes/${FLATPAK_ID}.$(basename "$f")"
+          done
+        done
       # 5. Trim PySide6 to the seven Qt modules IngeCAD imports (QtCore,
       #    QtGui, QtWidgets, QtOpenGL(+Widgets), QtPdf, QtPrintSupport).
       #    The full wheel installs 771 MB, 195 of them a WebEngine no line
