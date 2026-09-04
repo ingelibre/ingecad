@@ -24,7 +24,7 @@
 ## 📐 Principios arquitectónicos (NO negociables)
 
 1. **El documento ezdxf ES el modelo.** No inventar un modelo de datos propio: se editan las entidades ezdxf directamente (envueltas en Commands) y se guarda con ezdxf. Esto garantiza la propiedad más valiosa del producto: **round-trip conservador** — todo lo que IngeCAD no entiende (proxies de Civil 3D, XDATA, diccionarios, 3DSOLID) se preserva **intacto** al reescribir. "Le devolví el plano sano al colega" es la promesa central.
-2. **DWG jamás se parsea dentro del app.** Dos satélites como procesos externos (patrón skp2dae de IngeTrazo): **LibreDWG** (GPL-3, embebible y EMBEBIDO — lectura hasta r2018 de fábrica, escritura r2000) y **ODA File Converter** (freeware propietario, instalación opcional de un clic, NUNCA bundlear — da export r2013/r2018). El usuario abre `.dwg` con doble clic y nunca ve el DXF intermedio.
+2. **DWG jamás se parsea dentro del app.** Tres satélites como procesos externos (patrón skp2dae de IngeTrazo): **LibreDWG** (GPL-3, embebible y EMBEBIDO — lectura hasta r2018 de fábrica, escritura r2000), **Open CAD Studio** (MIT, Rust, de César/acadrust; `OpenCADStudio --export src dst`; detectado si está instalado — export r2018 y lector/escritor de respaldo donde no hay LibreDWG, p. ej. Windows; conserva la versión DXF de origen, por eso `_upgrade_dxf` sube a AC1032 antes de pedir r2018) y **ODA File Converter** (freeware propietario, instalación opcional de un clic, NUNCA bundlear — da export r2013/r2018). El usuario abre `.dwg` con doble clic y nunca ve el DXF intermedio.
 3. **Coordenadas verdaderas float64 en el modelo; float32 solo en el render.** Los planos reales vienen en UTM (~500 000 Este). DXF/ezdxf guardan doubles — el archivo nunca pierde precisión. El viewport resta un **origen de vista** (centro del dibujo) antes de subir a GPU y lo suma al leer el mouse. El gotcha ya se sufrió en IngeTrazo (`SceneDatum`); acá el fix vive solo en el render.
 4. **Toda mutación pasa por Command** (undo/redo exacto) y **todo comando es una acción headless** (`actions.move(...)`, no lógica pegada al evento de teclado/mouse). Es el invariante AI-native del ecosistema, y de paso da macros/scripts gratis — a los usuarios de AutoCAD (LISP) les importa.
 5. **2D con Z latente.** DXF es 3D nativo: toda entidad tiene Z y OCS (que un visor correcto debe manejar igual — círculos con extrusión invertida existen en planos reales). El modelo conserva Z siempre; la cámara es ortográfica en planta. Agregar vista isométrica después = solo display (la `OrbitCamera` de IngeTrazo está a un copy de distancia). **3DSOLID (ACIS) jamás se interpreta** — se preserva intacto en el round-trip.
@@ -43,7 +43,7 @@
 | Render | QOpenGLWidget + VBOs batcheados por capa/color (patrón IngeTrazo, versión 2D) |
 | Kernel de documento | **ezdxf** (MIT) — parsing, modelo, escritura DXF |
 | Motor de "regen" | **`ezdxf.addons.drawing`** frontend (resuelve bloques/MTEXT/linetypes/hatches/cotas) → backend GL propio que emite arrays de vértices |
-| DWG | LibreDWG (`dwg2dxf`/`dxf2dwg`, embebido) + ODA File Converter (satélite opcional) |
+| DWG | LibreDWG (`dwg2dxf`/`dxf2dwg`, embebido) + Open CAD Studio (`--export`, satélite opcional: r2018 y lector/escritor de respaldo sin LibreDWG) + ODA File Converter (satélite opcional) |
 | Math/lotes | NumPy |
 | Tests | pytest + banco de DWG reales |
 
@@ -75,7 +75,7 @@ ingecad/
 │   ├── backend.py             ← backend GL para ezdxf.addons.drawing (emite vértices)
 │   └── batches.py             ← VBOs por capa/color, culling por rect de vista
 ├── formats/
-│   ├── dwg_bridge.py          ← satélites LibreDWG / ODA (detección, conversión, instalador)
+│   ├── dwg_bridge.py          ← satélites LibreDWG / Open CAD Studio / ODA (detección, conversión, instalador)
 │   └── pdf_out.py             ← imprimir/PDF a escala
 ├── tools/                     ← tools interactivas (line, circle, trim…) sobre actions
 ├── resources/ (shaders, iconos, linetypes, patrones de hatch)

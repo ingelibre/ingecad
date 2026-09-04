@@ -226,8 +226,6 @@
   "Cycling: {n} of {total} ({kind}) — click again for the next.": "Ciclando: {n} de {total} ({kind}) — vuelva a hacer clic para el siguiente.",
   "DIMCEN is 0 — no center mark drawn.": "DIMCEN es 0 — no se dibuja marca de centro.",
   "DPI:": "PPP:",
-  "DWG (*.dwg);;DXF (*.dxf)": "DWG (*.dwg);;DXF (*.dxf)",
-  "DWG support needs the LibreDWG converter (dwg2dxf), which was not found.": "El soporte DWG necesita el conversor LibreDWG (dwg2dxf), que no se encontró.",
   "Dark gray": "Gris oscuro",
   "Data rows:": "Filas de datos:",
   "Decimal": "Decimal",
@@ -1338,5 +1336,10 @@
   "{n} exploded.": "{n} descompuesto(s).",
   "{n} h ago": "hace {n} h",
   "{n} min ago": "hace {n} min",
-  "{n} placed.": "{n} colocados."
+  "{n} placed.": "{n} colocados.",
+  "DWG (*.dwg)": "DWG (*.dwg)",
+  "DWG 2018 — Open CAD Studio (*.dwg)": "DWG 2018 — Open CAD Studio (*.dwg)",
+  "DXF (*.dxf)": "DXF (*.dxf)",
+  "Saved {name} (DWG 2018 via Open CAD Studio)": "Guardado {name} (DWG 2018 vía Open CAD Studio)",
+  "DWG support needs a converter — LibreDWG (dwg2dxf) or Open CAD Studio — and neither was found.": "El soporte DWG necesita un conversor —LibreDWG (dwg2dxf) u Open CAD Studio— y no se encontró ninguno."
 }

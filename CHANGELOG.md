@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added — Open CAD Studio as a second DWG satellite
+[Open CAD Studio](https://github.com/acadrust/opencadstudio) (MIT, Rust)
+is found automatically when installed — an AppImage under `~/Aplicaciones`
+or `~/Applications`, `Program Files\Open CAD Studio` on Windows, anything
+on `PATH`, or `INGECAD_OPENCADSTUDIO` — and IngeCAD drives it as a
+converter, the way it drives LibreDWG: the document never parses DWG.
+It brings **DWG r2018 export** ("Save as ▸ DWG 2018 — Open CAD Studio",
+offered only when the tool is present), and on a machine without LibreDWG
+it reads and writes DWG on its own, so the Windows build no longer depends
+on the LibreDWG binaries for `.dwg`. LibreDWG stays first for reading and
+for r2000 writes; Open CAD Studio keeps the source DXF version, so the
+bridge upgrades the intermediate DXF to AC1032 before asking for r2018.
+`ingecad --check` lists the converters it found.
+
 ## v0.4.7 — 2026-08-29
 
 ### Added — edit the model through a viewport (MSPACE)

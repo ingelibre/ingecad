@@ -163,10 +163,13 @@ class Document:
             return self.edit_block
         return self.active_layout or "Model"
 
-    def save_as(self, path: Path) -> str:
-        """Save as DXF directly, or as DWG via the bundled LibreDWG.
+    def save_as(self, path: Path, version: str = "r2000") -> str:
+        """Save as DXF directly, or as DWG via a satellite: LibreDWG for
+        r2000 (bundled), Open CAD Studio for r2018 (native writer) — see
+        ``formats.dwg_bridge.dwg_write_engine``.
 
-        Returns ``(engine, warnings)``: engine is "dxf" or "libredwg" (r2000);
+        Returns ``(engine, warnings)``: engine is "dxf", "libredwg" or
+        "opencadstudio";
         warnings is a list of human-readable strings from the verified save
         (empty when the DWG checked out clean). DXF saves never warn.
         """
@@ -174,13 +177,13 @@ class Document:
         warnings: list[str] = []
         if path.suffix.lower() == ".dwg":
             from core.encoding import write_dwg_intermediate
-            from formats.dwg_bridge import write_dwg
+            from formats.dwg_bridge import dwg_write_engine, write_dwg
 
+            engine = dwg_write_engine(version) or "libredwg"
             with tempfile.TemporaryDirectory(prefix="ingecad-save-") as tmp:
                 tmp_dxf = Path(tmp) / "out.dxf"
                 write_dwg_intermediate(self.doc, tmp_dxf)
-                warnings = write_dwg(tmp_dxf, path)
-            engine = "libredwg"
+                warnings = write_dwg(tmp_dxf, path, version)
         else:
             self.doc.saveas(path)
             engine = "dxf"

@@ -120,12 +120,14 @@ def _self_check() -> int:
     misbehaves.
     """
     from core.paths import app_root, is_frozen
-    from formats.dwg_bridge import find_dwg2dxf, find_dxf2dwg
+    from formats.dwg_bridge import converters_status, find_dwg2dxf, find_dxf2dwg
 
     root = app_root()
     print(f"IngeCAD {__version__}")
     print(f"  packaged   : {'yes' if is_frozen() else 'no (running from the repo)'}")
     print(f"  app root   : {root}")
+    for label, found in converters_status():
+        print(f"  {label:16}: {found or 'not found'}")
 
     problems: list[str] = []
     # Only files something actually reads. resources/linetypes and

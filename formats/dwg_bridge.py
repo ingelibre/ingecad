@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
-"""DWG <-> DXF bridge through LibreDWG satellite processes.
+"""DWG <-> DXF bridge through satellite processes: LibreDWG and Open CAD Studio.
 
 DWG is never parsed inside the app (architectural principle #2): the
 LibreDWG command-line tools run as external converters, the same satellite
@@ -51,8 +51,120 @@ def converter_path(name: str) -> Optional[Path]:
     return _find_tool(name)
 
 
+# ---- Open CAD Studio, the second satellite ---------------------------------
+# https://github.com/HakanSeven12/OpenCADStudio (GPL-3, Rust): native DWG
+# R14–2018 read AND write through its ``--export in out`` command line. It
+# covers what LibreDWG cannot — writing r2018, and Windows, where no
+# dwg2dxf.exe ships yet — and doubles as a fallback reader. Same rule as
+# always: an external process, the DWG is never parsed inside IngeCAD.
+_OCS_ENV = "INGECAD_OPENCADSTUDIO"
+
+
+def _ocs_candidates() -> list[Path]:
+    import os
+    import sys
+    out: list[Path] = []
+    env = os.environ.get(_OCS_ENV)
+    if env:
+        out.append(Path(env))
+    for name in ("OpenCADStudio", "opencadstudio", "open-cad-studio"):
+        found = shutil.which(name)
+        if found:
+            out.append(Path(found))
+    home = Path.home()
+    if sys.platform.startswith("win"):
+        for base in (os.environ.get("ProgramFiles"),
+                     os.environ.get("ProgramW6432"),
+                     os.environ.get("LOCALAPPDATA")):
+            if base:
+                out.append(Path(base) / "Open CAD Studio" / "OpenCADStudio.exe")
+                out.append(Path(base) / "Programs" / "Open CAD Studio"
+                           / "OpenCADStudio.exe")
+    elif sys.platform == "darwin":
+        out.append(Path("/Applications/OpenCADStudio.app/Contents/MacOS/OpenCADStudio"))
+    else:
+        for folder in (home / "Aplicaciones", home / "Applications",
+                       home / ".local" / "bin", home / "Descargas",
+                       home / "Downloads", Path("/opt/opencadstudio")):
+            try:
+                images = sorted(folder.glob("OpenCADStudio-*.AppImage"))
+            except OSError:
+                images = []
+            out.extend(reversed(images))        # the newest version first
+            out.append(folder / "OpenCADStudio.AppImage")
+    return out
+
+
+def find_opencadstudio() -> Optional[Path]:
+    """The Open CAD Studio executable, or None. Looked up in this order:
+    the ``INGECAD_OPENCADSTUDIO`` environment variable, the PATH, the
+    platform's usual install folders (Program Files, /Applications, the
+    user's Aplicaciones / Downloads for the AppImage)."""
+    import os
+    for cand in _ocs_candidates():
+        try:
+            if cand.is_file() and os.access(cand, os.X_OK):
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+_DXF_VERSIONS = {"r2004": "AC1018", "r2007": "AC1021", "r2010": "AC1024",
+                 "r2013": "AC1027", "r2018": "AC1032"}
+
+
+def _upgrade_dxf(dxf_path: Path, version: str) -> Path:
+    """A copy of *dxf_path* saved as DXF *version* (ezdxf upgrades in
+    place; a failure leaves the original to go through as it is)."""
+    target = _DXF_VERSIONS.get(version.lower())
+    if target is None:
+        return dxf_path
+    try:
+        import ezdxf
+        doc = ezdxf.readfile(str(dxf_path))
+        if doc.dxfversion >= target:
+            return dxf_path
+        doc.dxfversion = target
+        out = dxf_path.with_name(dxf_path.stem + f"-{version.lower()}.dxf")
+        doc.saveas(str(out))
+        return out
+    except Exception:  # noqa: BLE001 — the upgrade is best effort
+        return dxf_path
+
+
+def _ocs_export(src: Path, dst: Path) -> str:
+    """``OpenCADStudio --export src dst``: the extension decides the format."""
+    tool = find_opencadstudio()
+    if tool is None:
+        raise DwgBridgeError("Open CAD Studio is not available")
+    return _run([str(tool), "--export", str(src), str(dst)], dst)
+
+
 def have_dwg_support() -> bool:
-    return find_dwg2dxf() is not None
+    """Can we read a DWG at all — LibreDWG, or Open CAD Studio as fallback."""
+    return find_dwg2dxf() is not None or find_opencadstudio() is not None
+
+
+def dwg_write_engine(version: str = "r2000") -> str:
+    """Which satellite writes DWG *version*: ``"libredwg"`` (r2000, bundled),
+    ``"opencadstudio"`` (r2018 native, or r2000 when LibreDWG is missing),
+    or ``""`` when nothing can."""
+    version = (version or "r2000").lower()
+    if version == "r2000" and find_dxf2dwg() is not None:
+        return "libredwg"
+    if find_opencadstudio() is not None:
+        return "opencadstudio"
+    if find_dxf2dwg() is not None:
+        return "libredwg"
+    return ""
+
+
+def converters_status() -> list[tuple[str, Optional[Path]]]:
+    """Every DWG satellite and where it was found (``--check``, About)."""
+    return [("LibreDWG dwg2dxf", find_dwg2dxf()),
+            ("LibreDWG dxf2dwg", find_dxf2dwg()),
+            ("Open CAD Studio", find_opencadstudio())]
 
 
 def _run(cmd: list[str], out_path: Path) -> str:
@@ -219,13 +331,26 @@ def dwg_to_dxf(dwg_path: Path) -> Path:
     plain even when the input drawing name carries accents.
     """
     tool = find_dwg2dxf()
-    if tool is None:
-        raise DwgBridgeError("LibreDWG (dwg2dxf) is not available")
     dwg_path = Path(dwg_path)
     out_dir = Path(tempfile.mkdtemp(prefix="ingecad-dwg-"))
     out_dxf = out_dir / "converted.dxf"
-    _run([str(tool), "-y", "-o", str(out_dxf), str(dwg_path)], out_dxf)
-    _strip_null_handles(out_dxf)
+    if tool is not None:
+        try:
+            _run([str(tool), "-y", "-o", str(out_dxf), str(dwg_path)], out_dxf)
+            _strip_null_handles(out_dxf)
+            _dedupe_handles(out_dxf)
+            return out_dxf
+        except DwgBridgeError:
+            # LibreDWG could not read it: Open CAD Studio gets a turn before
+            # the user sees an error (a drawing BricsCAD writes that trips the
+            # r2018 AcDs walker, for one).
+            if find_opencadstudio() is None:
+                raise
+            out_dxf.unlink(missing_ok=True)
+    if find_opencadstudio() is None:
+        raise DwgBridgeError(
+            "no DWG converter available (LibreDWG dwg2dxf or Open CAD Studio)")
+    _ocs_export(dwg_path, out_dxf)
     _dedupe_handles(out_dxf)
     return out_dxf
 
@@ -361,8 +486,10 @@ def verify_dwg(source_dxf: Path, dwg_path: Path, stderr: str = "") -> list[str]:
     return warnings
 
 
-def write_dwg(dxf_path: Path, dwg_path: Path) -> list[str]:
-    """Write a DWG from a DXF via LibreDWG (r2000), then verify it.
+def write_dwg(dxf_path: Path, dwg_path: Path, version: str = "r2000") -> list[str]:
+    """Write a DWG from a DXF, then verify it. ``version`` r2000 goes through
+    LibreDWG (bundled); r2018 through Open CAD Studio (native writer), which
+    also stands in for r2000 when LibreDWG is missing (Windows).
 
     IngeCAD ships a patched LibreDWG and writes AutoCAD r2000 (opens in every
     AutoCAD/BricsCAD since 2000). r2000 is an older container, so paper-space
@@ -370,17 +497,29 @@ def write_dwg(dxf_path: Path, dwg_path: Path) -> list[str]:
     way out; the geometry, layers, blocks, text and hatches round-trip
     faithfully. Returns verification warnings (empty list = clean save).
     """
-    stderr = dxf_to_dwg(dxf_path, dwg_path)
+    stderr = dxf_to_dwg(dxf_path, dwg_path, version)
     return verify_dwg(Path(dxf_path), Path(dwg_path), stderr)
 
 
 def dxf_to_dwg(dxf_path: Path, dwg_path: Path, version: str = "r2000") -> str:
-    """Convert a DXF to DWG; return the converter's stderr."""
-    tool = find_dxf2dwg()
-    if tool is None:
-        raise DwgBridgeError("LibreDWG (dxf2dwg) is not available")
+    """Convert a DXF to DWG; return the converter's stderr. The engine is
+    :func:`dwg_write_engine`'s pick for *version*; Open CAD Studio writes
+    its native r2018 container whatever *version* says."""
+    engine = dwg_write_engine(version)
     dwg_path = Path(dwg_path)
-    return _run(
-        [str(tool), "-y", "--as", version, "-o", str(dwg_path), str(Path(dxf_path))],
-        dwg_path,
-    )
+    if engine == "libredwg":
+        tool = find_dxf2dwg()
+        return _run(
+            [str(tool), "-y", "--as", version, "-o", str(dwg_path), str(Path(dxf_path))],
+            dwg_path,
+        )
+    if engine == "opencadstudio":
+        src = Path(dxf_path)
+        if version.lower() in ("r2018", "r2013", "r2010", "r2007", "r2004"):
+            # Open CAD Studio keeps the source DXF's version: an r2000 DXF
+            # comes back as an r2000 DWG. "DWG 2018" means a 2018 DWG, so
+            # the intermediate is lifted to that version first.
+            src = _upgrade_dxf(src, version)
+        return _ocs_export(src, dwg_path)
+    raise DwgBridgeError(
+        "no DWG writer available (LibreDWG dxf2dwg or Open CAD Studio)")

@@ -39,8 +39,9 @@ What works today:
   (patterns + solids), linetypes, dimensions, OCS, paperspace layouts —
   smooth pan/zoom even on cadastre-scale drawings (90k+ entities).
 - **DWG in and out**: open `.dwg` transparently via GNU LibreDWG; save as
-  DWG r2000 (LibreDWG) or r2018 (ODA File Converter, if installed), with a
-  silent verified-save check.
+  DWG r2000 (LibreDWG) or r2018 (Open CAD Studio or the ODA File Converter,
+  if installed), with a silent verified-save check. Open CAD Studio also
+  stands in as reader and writer wherever LibreDWG is missing (Windows).
 - **Classic interface**: command line at the bottom with AutoCAD aliases
   (`L`, `C`, `M`, `TR`, `Z`+`E` …), dark model space, dockable Layers /
   Properties / Styles panels.
@@ -177,8 +178,17 @@ tools/libredwg-patches/build-vendor.sh    # downloads, patches, builds into vend
 That build is not stock: it is LibreDWG 0.14.8556 plus thirteen fixes, all of
 them open as pull requests upstream, without which several real-world drawings
 do not open at all. See `tools/libredwg-patches/README.md`. DXF works out of the
-box either way, and installing the freeware ODA File Converter additionally
-enables DWG r2018 export.
+box either way.
+
+A second satellite, [Open CAD Studio](https://github.com/acadrust/opencadstudio)
+(MIT, Rust), is picked up automatically when installed — an AppImage under
+`~/Aplicaciones` or `~/Applications`, the Windows installer in
+`Program Files\Open CAD Studio`, anything on `PATH`, or the path in the
+`INGECAD_OPENCADSTUDIO` environment variable. It adds **DWG r2018 export**
+("Save as ▸ DWG 2018 — Open CAD Studio") and, on a machine without LibreDWG,
+reads and writes DWG on its own. The freeware ODA File Converter remains the
+third option for r2018 export. `ingecad --check` lists which converters were
+found.
 
 ## Building the AppImage yourself
 

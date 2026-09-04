@@ -3468,7 +3468,7 @@ class MainWindow(QMainWindow):
             self,
             tr("Save Drawing As"),
             self.document.name,
-            tr("DWG (*.dwg);;DXF (*.dxf)"),
+            self._save_filters(),
             preferred=self.document.path,
         )
         if not filename:
@@ -3476,7 +3476,18 @@ class MainWindow(QMainWindow):
         path = Path(filename)
         if path.suffix.lower() not in (".dwg", ".dxf"):
             path = path.with_suffix(".dwg" if "dwg" in selected.lower() else ".dxf")
-        return self._write_document(path)
+        version = "r2018" if "2018" in (selected or "") else "r2000"
+        return self._write_document(path, version)
+
+    def _save_filters(self) -> str:
+        """DWG r2000 always (LibreDWG, bundled); DWG 2018 when Open CAD
+        Studio is installed (its native writer); DXF, always exact."""
+        from formats.dwg_bridge import find_opencadstudio
+        filters = [tr("DWG (*.dwg)")]
+        if find_opencadstudio() is not None:
+            filters.append(tr("DWG 2018 — Open CAD Studio (*.dwg)"))
+        filters.append(tr("DXF (*.dxf)"))
+        return ";;".join(filters)
 
     def save_document(self) -> bool:
         """SAVE / QSAVE / Ctrl+S — write over the file that is open.
@@ -3699,13 +3710,13 @@ class MainWindow(QMainWindow):
                 for w in list(getattr(tools, attr, ()) or ()):
                     w.wait()
 
-    def _write_document(self, path: Path) -> bool:
+    def _write_document(self, path: Path, version: str = "r2000") -> bool:
         """The shared tail of SAVE and SAVEAS: write, report, warn."""
         if self.document is None:
             return False
         self._autosave_gate()      # never write while the .sv$ is being made
         try:
-            engine, warnings = self.document.save_as(path)
+            engine, warnings = self.document.save_as(path, version)
         except Exception as exc:
             QMessageBox.warning(
                 self,
@@ -3723,6 +3734,9 @@ class MainWindow(QMainWindow):
             # layout settings are simplified on the way out (older container).
             self.command_line.echo(
                 tr("Saved {name} (DWG r2000)", name=path.name))
+        elif engine == "opencadstudio":
+            self.command_line.echo(
+                tr("Saved {name} (DWG 2018 via Open CAD Studio)", name=path.name))
         else:
             self.command_line.echo(tr("Saved {name}", name=path.name))
         # Verified save: the file is written either way, but if the DWG did not
@@ -3760,8 +3774,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(
                     self,
                     tr("Open Drawing"),
-                    tr("DWG support needs the LibreDWG converter (dwg2dxf), "
-                       "which was not found."),
+                    tr("DWG support needs a converter — LibreDWG (dwg2dxf) "
+                       "or Open CAD Studio — and neither was found."),
                 )
                 return
         if self._open_thread is not None:
