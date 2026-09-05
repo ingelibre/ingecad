@@ -542,11 +542,11 @@ class MainWindow(QMainWindow):
         otherwise a curve drawn after the change would not match the ones
         already on screen.
         """
-        from render.backend import _flatten_distance
-
         if self.document is None:
             return
-        self.tools._flatten = _flatten_distance(self.document.modelspace())
+        # The overlay's tolerance follows VIEWRES by itself (it is part of
+        # the key ToolController._flatten caches under); only the ghost
+        # built at the old distance has to go.
         self.tools._ghost_cache = None
         self.invalidate_vp_model_cache()
         self.regen_in_memory()
@@ -587,10 +587,10 @@ class MainWindow(QMainWindow):
 
     def _cmd_pickbox(self, *args) -> None:
         """PICKBOX (p. 2452): the object selection target, in pixels."""
-        from views import viewport as vp_prefs
+        from views import apertures
 
-        self._set_int_pref(args, vp_prefs.SETTING_PICKBOX, 1, 50,
-                           "PICKBOX", vp_prefs.pickbox())
+        self._set_int_pref(args, apertures.SETTING_PICKBOX, 1, 50,
+                           "PICKBOX", apertures.pickbox())
 
     def _set_int_pref(self, args, key: str, low: int, high: int,
                       name: str, current: int) -> None:
@@ -1872,7 +1872,8 @@ class MainWindow(QMainWindow):
 
     def _refresh_props_toolbar(self) -> None:
         from core import layers as layer_ops
-        from views.layers_panel import fill_color_combo, swatch_icon
+        from views.color_dialog import swatch_icon
+        from views.layers_panel import fill_color_combo
 
         self._props_loading = True
         # This runs on EVERY selection change, but the four lists only change
@@ -2036,9 +2037,9 @@ class MainWindow(QMainWindow):
         if prop == "lineweight":
             return tr(layer_ops.lineweight_label(value))
         if prop == "color":
-            from views.layers_panel import ACI_NAMES
+            from views.color_dialog import aci_label
 
-            return tr(ACI_NAMES.get(value, str(value)))
+            return aci_label(value)
         return str(value)
 
     def _sync_panels(self) -> None:

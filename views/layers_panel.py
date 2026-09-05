@@ -25,43 +25,8 @@ from PySide6.QtWidgets import (
 
 from core import layers as layer_ops
 from core.i18n import tr
-
-# ACI 1-9 to RGB (the classic AutoCAD standard colors), enough for the
-# swatch + picker; higher indices fall back to a neutral grey chip.
-ACI_RGB = {
-    1: (255, 0, 0), 2: (255, 255, 0), 3: (0, 255, 0), 4: (0, 255, 255),
-    5: (0, 0, 255), 6: (255, 0, 255), 7: (255, 255, 255), 8: (128, 128, 128),
-    9: (192, 192, 192),
-}
-
-
-# Standard AutoCAD color names for indices 1-9.
-ACI_NAMES = {
-    1: "Red", 2: "Yellow", 3: "Green", 4: "Cyan", 5: "Blue",
-    6: "Magenta", 7: "White", 8: "Gray", 9: "Light gray",
-}
-
-
-def aci_to_qcolor(index: int) -> QColor:
-    rgb = ACI_RGB.get(index)
-    if rgb is None:
-        # the full 255-color ACI palette, ezdxf's table
-        from views.color_dialog import aci_qcolor
-
-        return aci_qcolor(index)
-    return QColor(*rgb)
-
-
-def swatch_icon(index: int, size: int = 13):
-    pm = QPixmap(size, size)
-    pm.fill(Qt.transparent)
-    from PySide6.QtGui import QPainter, QPen
-    p = QPainter(pm)
-    p.fillRect(1, 1, size - 2, size - 2, aci_to_qcolor(index))
-    p.setPen(QPen(QColor(70, 70, 70)))
-    p.drawRect(1, 1, size - 3, size - 3)
-    p.end()
-    return QIcon(pm)
+from views.color_dialog import (BYBLOCK, BYLAYER, STANDARD_ACIS, aci_label,
+                                aci_qcolor, swatch_icon)
 
 
 # Dash patterns for the previews, by the family a standard linetype's name
@@ -124,13 +89,11 @@ def fill_color_combo(combo, include_bylayer: bool = True) -> None:
     activated/currentIndexChanged flow fires as if it had been listed all
     along — so every color combo in the app gains the palette for free.
     """
-    from views.properties_panel import BYLAYER_COLOR
     if include_bylayer:
-        combo.addItem(tr("ByLayer"), BYLAYER_COLOR)
-        combo.addItem(tr("ByBlock"), 0)
-    for aci in sorted(ACI_RGB):
-        name = tr(ACI_NAMES[aci]) if aci in ACI_NAMES else str(aci)
-        combo.addItem(swatch_icon(aci), name, aci)
+        combo.addItem(tr("ByLayer"), BYLAYER)
+        combo.addItem(tr("ByBlock"), BYBLOCK)
+    for aci in STANDARD_ACIS:
+        combo.addItem(swatch_icon(aci), aci_label(aci), aci)
     combo.addItem(tr("Select Color..."), _PICK_COLOR)
 
     state = {"last": 0}
@@ -150,8 +113,7 @@ def fill_color_combo(combo, include_bylayer: bool = True) -> None:
         found = combo.findData(aci)
         if found < 0:
             found = combo.count() - 1     # insert before "Select Color..."
-            combo.insertItem(found, swatch_icon(aci), tr("Color {n}", n=aci),
-                             aci)
+            combo.insertItem(found, swatch_icon(aci), aci_label(aci), aci)
         combo.setCurrentIndex(found)
         combo.activated.emit(found)
 
@@ -411,7 +373,7 @@ class LayersPanel(QWidget):
         swatch = QTableWidgetItem(str(info.color))
         swatch.setTextAlignment(Qt.AlignCenter)
         pm = QPixmap(12, 12)
-        pm.fill(aci_to_qcolor(info.color))
+        pm.fill(aci_qcolor(info.color))
         swatch.setIcon(QIcon(pm))
         swatch.setToolTip(tr("ACI color {n}", n=info.color))
         swatch.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)

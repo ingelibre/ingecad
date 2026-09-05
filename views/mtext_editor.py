@@ -678,10 +678,10 @@ class MTextInPlaceEditor(QWidget):
         if run.font:
             fmt.setFontFamilies([run.font])
         if run.aci is not None:
-            from views.layers_panel import aci_to_qcolor
+            from views.color_dialog import aci_qcolor
 
             fmt.setProperty(PROP_ACI, int(run.aci))
-            fmt.setForeground(aci_to_qcolor(run.aci))
+            fmt.setForeground(aci_qcolor(run.aci))
         elif run.rgb is not None:
             fmt.setForeground(QColor(*run.rgb))
             fmt.setProperty(PROP_ACI, -1)     # marker: keep rgb via brush
@@ -701,8 +701,6 @@ class MTextInPlaceEditor(QWidget):
         cursor.endEditBlock()
 
     def _runs_from_document(self):
-        from views.layers_panel import ACI_RGB
-
         paragraphs = []
         block = self.edit.document().begin()
         while block.isValid():
@@ -784,17 +782,16 @@ class MTextInPlaceEditor(QWidget):
     def _apply_color(self, index: int) -> None:
         if self._loading or not self.rich:
             return
-        from views.layers_panel import aci_to_qcolor
-        from views.properties_panel import BYLAYER_COLOR
+        from views.color_dialog import BYLAYER, aci_qcolor
 
         aci = self.color_combo.itemData(index)
         fmt = QTextCharFormat()
-        if aci in (None, BYLAYER_COLOR):
+        if aci in (None, BYLAYER):
             fmt.setProperty(PROP_ACI, None)
             fmt.setForeground(QColor("#e8e8e8"))
         else:
             fmt.setProperty(PROP_ACI, int(aci))
-            fmt.setForeground(aci_to_qcolor(int(aci)))
+            fmt.setForeground(aci_qcolor(int(aci)))
         self.edit.mergeCurrentCharFormat(fmt)
         self.edit.setFocus()
 

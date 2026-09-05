@@ -696,18 +696,31 @@ def test_diagonal_origins_follow_the_side_the_cursor_leaves():
 # -- chained-dimension alignment (the green square) ----------------------------
 
 class _AlignServices(Services):
-    """Services with a window exposing the document, like the real app."""
+    """Services with a window exposing the document and a view at scale 1,
+    like the real app -- and the controller's REAL pixel conversion bound
+    to that fake window, because the magnet reaches the mouse through
+    ``ToolController.px_to_space`` like everything else (a copy of the
+    formula here would be the second answer this module exists to avoid).
+    """
 
     def __init__(self, document):
         super().__init__(document)
+        from views.tool_controller import ToolController
+
         class _View:
             scale = 1.0
         class _Viewport:
             view = _View()
         class _Window:
             viewport = _Viewport()
+        class _Tools:
+            px_to_space = ToolController.px_to_space
+            space_factor = ToolController.space_factor
+            space_vp = ToolController.space_vp
         self.window = _Window()
         self.window.document = document
+        self.window.tools = _Tools()
+        self.window.tools.window = self.window
 
 
 def _align_harness():

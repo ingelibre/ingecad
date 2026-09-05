@@ -39,15 +39,15 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QRubberBand
 
 from core.paths import app_root
+from core.prefs import int_pref
 from render.batches import THICK_DTYPE, VERTEX_DTYPE, Batch, Scene
 from render.view import ViewTransform2D
+from views.apertures import PICKBOX_DEFAULT, pickbox
 
 # OpenGL constants — kept as literals so we don't depend on PyOpenGL.
 GL_FLOAT = 0x1406
 GL_UNSIGNED_BYTE = 0x1401
 
-GRIP_PICK_PX = 7.0  # grip hit aperture, logical pixels
-SNAP_PX_HOVER = 12.0  # osnap aperture while a hot grip follows the cursor
 GL_POINTS = 0x0000
 GL_LINES = 0x0001
 GL_TRIANGLES = 0x0004
@@ -65,7 +65,6 @@ BACKGROUND = (0.129, 0.149, 0.169)
 AXIS_LEN = 1.0e6  # world units; clipped by GL, cheap to keep "infinite"
 CROSSHAIR_COLOR = QColor(215, 215, 215, 210)        # over the dark canvas
 CROSSHAIR_COLOR_LIGHT = QColor(40, 40, 40, 210)     # over paper-white layouts
-PICKBOX_PX = 8
 
 #: AutoCAD's CURSORSIZE (p. 2202): crosshair length as a percentage of the
 #: screen, 1-100, where 100 means full-screen arms. AutoCAD ships 5; IngeCAD
@@ -76,29 +75,10 @@ CURSORSIZE_DEFAULT = 100
 #: Crosshair colour. Empty means "follow the background", which is what the
 #: canvas did before there was a choice: light over dark, dark over paper.
 SETTING_CROSSHAIR_COLOR = "display/crosshair_color"
-#: AutoCAD's PICKBOX (p. 2452): the selection target, in pixels. It drives
-#: the drawn box AND the aperture that actually picks, which is the point --
-#: they used to be set independently, so the box on screen was half the size
-#: of what it caught.
-SETTING_PICKBOX = "selection/pickbox"
-
-
-def _int_pref(key: str, default: int, low: int, high: int) -> int:
-    try:
-        from PySide6.QtCore import QSettings
-
-        value = int(QSettings().value(key, default))
-    except (TypeError, ValueError, Exception):
-        return default
-    return value if low <= value <= high else default
 
 
 def cursorsize() -> int:
-    return _int_pref(SETTING_CURSORSIZE, CURSORSIZE_DEFAULT, 1, 100)
-
-
-def pickbox() -> int:
-    return _int_pref(SETTING_PICKBOX, PICKBOX_PX, 1, 50)
+    return int_pref(SETTING_CURSORSIZE, CURSORSIZE_DEFAULT, 1, 100)
 
 
 def crosshair_color():
@@ -262,7 +242,7 @@ class Viewport(QOpenGLWidget):
         # is drawn on every single paint).
         self._cursorsize = CURSORSIZE_DEFAULT
         self._crosshair_color = None
-        self._pickbox_px = PICKBOX_PX
+        self._pickbox_px = PICKBOX_DEFAULT
         self.refresh_cursor_prefs()
         self._grip_hover = None  # grip under the cursor, if any
         self._pan_mode = False   # interactive PAN command (open-hand cursor)
@@ -1810,8 +1790,7 @@ class Viewport(QOpenGLWidget):
                     self.tool_delegate.finish_grip_drag(tx, ty)
                     self.update()
                     return
-                grip = self.tool_delegate.grip_at(
-                    wx, wy, GRIP_PICK_PX / self.view.scale)
+                grip = self.tool_delegate.grip_at(wx, wy)
                 if grip is not None:
                     # click to grab; the point then follows the cursor freely
                     self.tool_delegate.begin_grip_drag(grip)
@@ -1918,7 +1897,7 @@ class Viewport(QOpenGLWidget):
             # (AutoCAD click-move-click), snapping like a drawing point
             self._cursor = pos
             wx, wy = self.view.screen_to_world(pos.x(), pos.y())
-            self.tool_delegate.on_hover(wx, wy, SNAP_PX_HOVER / self.view.scale)
+            self.tool_delegate.on_hover(wx, wy)
             self.tool_delegate.update_grip_drag(*self.tool_delegate.grip_target(wx, wy))
             self.cursorMoved.emit(wx, wy)
             self.update()
@@ -1938,16 +1917,13 @@ class Viewport(QOpenGLWidget):
             self._cursor = pos
             wx, wy = self.view.screen_to_world(pos.x(), pos.y())
             if self.tool_delegate is not None:
-                self._grip_hover = self.tool_delegate.grip_at(
-                    wx, wy, GRIP_PICK_PX / self.view.scale)
-                from views.tool_controller import SNAP_PX
-
+                self._grip_hover = self.tool_delegate.grip_at(wx, wy)
                 if (self._sel_press is not None
                         and (abs(pos.x() - self._sel_press[0].x()) > 4
                              or abs(pos.y() - self._sel_press[0].y()) > 4)):
                     # live drag-window rectangle while the button is held
                     self.tool_delegate.start_window(*self._sel_press[1])
-                self.tool_delegate.on_hover(wx, wy, SNAP_PX / self.view.scale)
+                self.tool_delegate.on_hover(wx, wy)
             self.cursorMoved.emit(wx, wy)
         self.update()
 

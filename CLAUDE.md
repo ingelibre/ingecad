@@ -419,56 +419,52 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
-## 🎯 LO PRIMERO DE LA PRÓXIMA SESIÓN (pedido de Marco, 2026-08-29)
+## 🗓 Sesión 2026-09-05 — una pregunta, un lugar (el pedido de Marco, hecho)
 
-**Reducir conceptos duplicados. Antes que cualquier feature nueva.**
+**Lo que Marco pidió el 2026-08-29 —reducir conceptos duplicados antes que
+cualquier feature— está hecho para los cuatro candidatos, con el método
+que se había fijado: primero una prueba que fija la conducta actual POR EL
+CAMINO REAL (un movimiento de mouse, un cambio de pestaña, un comando),
+después unificar, después medir.** `tests/test_one_question_one_place.py`
+tiene esas ocho pruebas; cuatro fallaban sobre el código de ese día, y dos
+de las cuatro no eran estructura sino **respuestas ya divergentes**:
 
-Marco lo pidió después de ver que el PR de LibreDWG se achicaba a pedido de
-rurban: *«¿en IngeCAD no habrá código que esté demás? ¿No sería bueno
-reducir el código al mínimo sin perder nada de lo que hemos avanzado?»*.
-La respuesta medida a la pregunta literal es **no hay grasa**: 40 929
-líneas de app, **6 funciones de módulo sin ninguna otra mención**, y el
-tamaño no cuesta velocidad (importar la ventana entera son 506 ms, de los
-cuales 231 son de ezdxf; el código que no corre cuesta **cero por cuadro**).
+| pregunta | dónde se contestaba | qué había divergido |
+|---|---|---|
+| ¿cuántas unidades son N píxeles? | `SNAP_PX`/`PICK_PX` en el controlador, `GRIP_PICK_PX`/`SNAP_PX_HOVER`/`PICKBOX_PX` en el lienzo, un `12.0` suelto en `tools/dimension.py` | el imán de cotas medía sus 12 px sin la escala de la ventana: **dentro de una ventana 1:5 alcanzaba 5× menos** (8,8 contra 43,9 unidades) |
+| ¿qué tan fino aplano una curva? | tres sitios recalculaban `_flatten` con tres reglas; el Editor de bloques usaba una cuarta fórmula | en BEDIT el overlay pedía la tolerancia con la **cabecera del dibujo entero**: medido en el plano de pavimentos, 0,285 contra 0,000136 de la escena (**2 087×**); los arcos del bloque `escudo` salían con 560 vértices en el overlay contra 1 664 en la escena — un arco movido en el editor se veía poligonal hasta la regen |
+| ¿qué color es el ACI n? | tabla propia de 9 colores en `layers_panel` + fallback al diálogo | los RGB coincidían, pero **la etiqueta no**: Propiedades decía «Red» sin traducir mientras la barra decía «Rojo», y un 25 era «Color 25» en un combo y «25» en la línea de estado |
+| ¿cuál es el espacio actual? | ya estaba unificado por las properties de la sesión MSPACE | sólo quedaba `in_paper_space()` muerto y dos lecturas de «qué lámina hay en el lienzo» |
 
-Pero la pregunta de fondo es buena y apunta a otra cosa: **la misma pregunta
-contestada en dos lugares**. De ahí salieron casi todos los bugs de esta
-sesión y de las anteriores:
+**Dónde vive cada respuesta ahora:** `views/color_dialog.py` (`aci_qcolor`,
+`aci_label`, `ACI_NAMES`, `swatch_icon`, `BYLAYER`/`BYBLOCK`);
+`views/apertures.py` (SNAP_PX, GRIP_PX, `pickbox()`) más **la única
+conversión** `ToolController.px_to_space` —el lienzo ya no divide por su
+escala, llama `on_hover(wx, wy)` y `grip_at(wx, wy)` a secas—;
+`ToolController._flatten` es una property cacheada bajo (documento,
+espacio, VIEWRES), así que **nadie tiene que acordarse de recalcular** y
+`_header_diagonal` rechaza los bloques; `core/prefs.int_pref` para las
+cuatro preferencias enteras acotadas; `ToolController.sheet()`.
 
-- el mismo comentario obsoleto («el overlay no puede dibujar una cota»)
-  escrito en `tool_controller` **y** en `core/modify.py`: se arregló uno y
-  el otro siguió costando segundos;
-- **dos** constantes de PICKBOX que valían 8 —una el ancho total, otra la
-  media— así que el cuadrito dibujado medía la mitad de lo que atrapaba;
-- `_vp_placement` (ventana) y la proyección de `core/layouts` calculando lo
-  mismo con distinto criterio (unificado el 2026-08-29);
-- el mismo `102 {…}` mal leído en tres escáneres de mi arnés a la vez.
+**Medido como manda la casa, sobre `PD-01 Detalle Pavimentos.dxf`:** los
+triángulos del modelo (571 971) y la lámina entera **idénticos bit a bit**
+antes y después. ⚠️ Las líneas del modelo NO son comparables entre
+procesos: tres corridas del árbol viejo dan 82 684 / 82 688 / 82 702 y
+tres del nuevo 82 692 / 82 700 / 82 700 —bandas solapadas, ruido de
+resolución de fuentes—. El «±2» anotado en la sesión del 2026-08-22 es
+**±18** en un plano con mucho texto: **medir tres veces por árbol** antes
+de culpar a un cambio.
 
-**La regla, para que no vuelva a pasar: una pregunta, un lugar.** Si dos
-sitios responden «¿cuál es el espacio actual?», «¿qué color es este ACI?»,
-«¿qué tan fino aplano esta curva?», tarde o temprano responden distinto.
+⚠️ **Dos lecciones del método:** (1) un candidato de la lista puede estar
+ya resuelto —el cuarto lo estaba— y sólo la prueba lo dice; (2) al darle a
+la ventana falsa del arnés de cotas lo que le faltaba (`tools`), copiar la
+fórmula en el test habría sido **la segunda respuesta** que esta sesión
+existe para borrar: el fake se lleva la `px_to_space` real, ligada a su
+ventana falsa.
 
-**Candidatos concretos ya vistos, para empezar por ahí** (no es una lista
-cerrada; el trabajo es buscarlos):
-
-1. **El color de un ACI**: `views/layers_panel.aci_to_qcolor` lleva su
-   propia tabla de los 9 estándar y cae a `views/color_dialog.aci_qcolor`,
-   que se lo pregunta a ezdxf. Dos respuestas para el mismo índice, y no
-   coinciden en el 7 (blanco fijo contra lo que resuelva el lienzo).
-2. **La apertura de picado**: `PICK_PX`/`SNAP_PX` en `tool_controller` y
-   `GRIP_PICK_PX` en `viewport`, cada una convertida a mundo por su cuenta
-   —y desde el MSPACE hay que dividir por la escala de la ventana, que es
-   justo el tipo de cosa que se olvida en la copia que uno no vio.
-3. **La distancia de aplanado**: `_flatten_distance` se llama desde tres
-   sitios con reglas propias de cuándo recalcularla.
-4. **Qué es «el espacio actual»**: `Document.current_space`, el `_active_vp`
-   de la ventana y el `is_any_paperspace` suelto de `core/select`.
-
-**Cómo hacerlo sin romper nada** (es la parte que importa): por cada
-concepto, primero una prueba que **fije la conducta actual** en los dos
-sitios, después unificar, y medir que la salida no cambió —el mismo método
-del culling de ventanas: *0 píxeles distintos de 3 177 096*. Sin esa prueba
-previa, unificar es adivinar.
+**La regla queda, y es para todo lo que sigue: si dos sitios contestan la
+misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
+cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
 ## 🗓 Sesión 2026-08-29 (bis) — v0.4.7: lo que Marco encontró usándolo
 

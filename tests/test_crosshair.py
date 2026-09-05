@@ -18,13 +18,14 @@ import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QColor
 
+from views import apertures
 from views import viewport as vp
 
 
 @pytest.fixture
 def prefs():
     settings = QSettings()
-    keys = (vp.SETTING_CURSORSIZE, vp.SETTING_PICKBOX,
+    keys = (vp.SETTING_CURSORSIZE, apertures.SETTING_PICKBOX,
             vp.SETTING_CROSSHAIR_COLOR)
     saved = {k: settings.value(k, None) for k in keys}
     yield settings
@@ -85,9 +86,9 @@ def test_the_pickbox_sets_what_you_see_and_what_it_catches(qapp, prefs):
         base = win.tools._pick_tolerance
         assert base > 0
 
-        prefs.setValue(vp.SETTING_PICKBOX, vp.PICKBOX_PX * 2)
+        prefs.setValue(apertures.SETTING_PICKBOX, apertures.PICKBOX_DEFAULT * 2)
         win.viewport.refresh_cursor_prefs()
-        assert win.viewport._pickbox_px == vp.PICKBOX_PX * 2
+        assert win.viewport._pickbox_px == apertures.PICKBOX_DEFAULT * 2
         win.tools.on_hover(0.0, 0.0, 1.0)
         assert win.tools._pick_tolerance == pytest.approx(base * 2)
     finally:
@@ -97,15 +98,14 @@ def test_the_pickbox_sets_what_you_see_and_what_it_catches(qapp, prefs):
 def test_the_default_pickbox_changes_nothing(qapp, prefs):
     """A new setting must not move behaviour on its default value."""
     from views.main_window import MainWindow
-    from views.tool_controller import PICK_PX, SNAP_PX
-
-    prefs.remove(vp.SETTING_PICKBOX)
+    prefs.remove(apertures.SETTING_PICKBOX)
     win = MainWindow()
     try:
         win.new_document("mm")
         win.viewport.refresh_cursor_prefs()
         win.tools.on_hover(0.0, 0.0, 1.0)
-        assert win.tools._pick_tolerance == pytest.approx(PICK_PX / SNAP_PX)
+        assert win.tools._pick_tolerance == pytest.approx(
+            apertures.PICKBOX_DEFAULT / win.viewport.view.scale)
     finally:
         win.close()
 
@@ -113,7 +113,7 @@ def test_the_default_pickbox_changes_nothing(qapp, prefs):
 # -- the commands --------------------------------------------------------------
 @pytest.mark.parametrize("command,key,ok,bad", [
     ("_cmd_cursorsize", vp.SETTING_CURSORSIZE, "30", "0"),
-    ("_cmd_pickbox", vp.SETTING_PICKBOX, "20", "99"),
+    ("_cmd_pickbox", apertures.SETTING_PICKBOX, "20", "99"),
 ])
 def test_the_system_variables_are_typable(qapp, prefs, command, key, ok, bad):
     from views.main_window import MainWindow

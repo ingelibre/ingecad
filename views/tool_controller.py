@@ -20,7 +20,8 @@ from core.coords import CoordinateError, parse_point
 from core.i18n import tr
 from core.select import GeometryIndex, apply_grip_edit, entity_grips
 from core.snap import SnapEngine, SnapHit
-from render.backend import _flatten_distance, build_scene_for_entities
+from render.backend import (_flatten_distance, build_scene_for_entities,
+                            curve_quality)
 from tools.base import Tool, ToolContext
 from tools.blocks import BLOCK_TOOL_CLASSES
 from tools.dimension import DIM_TOOL_CLASSES
@@ -30,13 +31,8 @@ from tools.construct import CONSTRUCT_TOOL_CLASSES
 from tools.inquiry import INQUIRY_TOOL_CLASSES
 from tools.modify import MODIFY_TOOL_CLASSES
 from tools.layout_tools import LAYOUT_TOOL_CLASSES
+from views.apertures import GRIP_PX, PICKBOX_DEFAULT, SNAP_PX
 
-SNAP_PX = 12.0   # aperture in logical pixels
-#: Pick aperture, half-size in logical pixels. It tracks AutoCAD's PICKBOX
-#: (Options > Selection), so a bigger box on screen really does catch more:
-#: the two used to be independent constants that happened to read 8, and the
-#: drawn box was therefore half the size of what it picked.
-PICK_PX = 8.0
 # Overlay entities beyond this schedule an idle merge into the base scene
 # (the overlay is re-tessellated per edit, so it must not grow unbounded).
 MERGE_THRESHOLD = 50
@@ -53,14 +49,9 @@ SETTING_GRIPOBJLIMIT = "selection/gripobjlimit"
 def gripobjlimit() -> int:
     """The live GRIPOBJLIMIT (Options > Selection). Saved in the registry,
     as the reference says it is."""
-    from PySide6.QtCore import QSettings
+    from core.prefs import int_pref
 
-    try:
-        value = int(QSettings().value(SETTING_GRIPOBJLIMIT,
-                                      GRIPOBJLIMIT_DEFAULT))
-    except (TypeError, ValueError):
-        return GRIPOBJLIMIT_DEFAULT
-    return value if 0 <= value <= 32767 else GRIPOBJLIMIT_DEFAULT
+    return int_pref(SETTING_GRIPOBJLIMIT, GRIPOBJLIMIT_DEFAULT, 0, 32767)
 
 
 class _CacheWarmer(QThread):
@@ -254,7 +245,10 @@ class ToolController(QObject):
         self.snap_engine: Optional[SnapEngine] = None
         self.snap_hit: Optional[SnapHit] = None
         self._cursor: Optional[tuple[float, float]] = None
-        self._flatten = 0.01
+        # The overlay's curve tolerance: cached by the _flatten property
+        # under (document, space, VIEWRES).
+        self._flatten_key = None
+        self._flatten_value = 0.01
         self._base_handles: set[str] = set()
         self._clipboard = None   # (list[entity copies], base point) for paste
         self._clipboard_src: list = []   # source handles aligned w/ clipboard
@@ -318,8 +312,12 @@ class ToolController(QObject):
         self.selection = set()
         self._selecting_for = None
         self._window_anchor = None
-        self._flatten = flatten if flatten else _flatten_distance(
-            document.modelspace())
+        self._flatten_key = None
+        if flatten:
+            # the open path already derived the scene's tolerance: adopt it
+            # rather than derive the same number a second time
+            self._flatten_key = self._flatten_key_for(document)
+            self._flatten_value = flatten
         self._base_handles = set()
         self.window.history.document = document
         self.window.history.clear()
@@ -1432,19 +1430,22 @@ class ToolController(QObject):
         self.changed.emit()
 
     # -- pointer input ---------------------------------------------------------
-    def on_hover(self, wx: float, wy: float, threshold_world: float) -> None:
+    def on_hover(self, wx: float, wy: float,
+                 threshold_world: Optional[float] = None) -> None:
+        """The cursor moved to this CANVAS point.
+
+        ``threshold_world`` is the snap aperture in canvas units. The app
+        never passes one -- SNAP_PX goes through px_to_space -- tests do,
+        to stay independent of the window's zoom.
+        """
         inside = self.in_active_viewport(wx, wy)
         wx, wy = self.to_space(wx, wy)
-        threshold_world = threshold_world / self.space_factor()
+        if threshold_world is None:
+            threshold_world = self.px_to_space(SNAP_PX)
+        else:
+            threshold_world = threshold_world / self.space_factor()
         self._cursor = (wx, wy)
-        from views.viewport import PICKBOX_PX
-
-        # From the viewport's CACHED pickbox, not from QSettings: this runs
-        # on every mouse move, and the whole point of this release was to
-        # stop doing per-event work that does not change per event.
-        box = getattr(self.window.viewport, "_pickbox_px", PICKBOX_PX)
-        self._pick_tolerance = threshold_world * (
-            PICK_PX * (box / PICKBOX_PX) / SNAP_PX)
+        self._pick_tolerance = self.px_to_space(self.pickbox_px())
         self.snap_hit = None
         grip_hot = self._grip_drag is not None
         needs_snap = grip_hot or (
@@ -1638,10 +1639,8 @@ class ToolController(QObject):
         x0, y0, x1, y1 = layout_ops.viewport_rect(vp)
         if x0 <= wx <= x1 and y0 <= wy <= y1:
             return True
-        document = self.window.document
-        name = getattr(self.window, "_active_layout", "Model")
-        if document is not None and name != "Model":
-            layout = document.doc.layouts.get(name)
+        layout = self.sheet()
+        if layout is not None:
             other = layout_ops.viewport_hit(layout, wx, wy)
             if other is not None and other is not vp:
                 self.window._activate_viewport(other)
@@ -1659,16 +1658,7 @@ class ToolController(QObject):
         """The space whose CANVAS is on screen, when it is not the one being
         edited: the sheet, while a viewport of it is active. None otherwise,
         which means "the current space draws on its own canvas"."""
-        if self.space_vp is None:
-            return None
-        document = self.window.document
-        name = getattr(self.window, "_active_layout", "Model")
-        if document is None or name == "Model":
-            return None
-        try:
-            return document.doc.layouts.get(name)
-        except Exception:
-            return None
+        return self.sheet() if self.space_vp is not None else None
 
     def to_space(self, wx: float, wy: float) -> tuple[float, float]:
         """A canvas (paper) point -> the current space."""
@@ -1691,11 +1681,61 @@ class ToolController(QObject):
         view = layout_ops.viewport_view(vp)
         return view[2] if view is not None else 1.0
 
-    def in_paper_space(self) -> bool:
-        """On a layout tab with the SHEET current (not inside MSPACE)."""
-        return (getattr(self.window, "_active_layout", "Model") != "Model"
-                and getattr(self.window, "_active_vp", None) is None
-                and self.window.document is not None)
+    def px_to_space(self, px: float) -> float:
+        """A screen distance in logical pixels as a distance of the current
+        space -- THE conversion (views.apertures says why there is one).
+
+        The view's scale takes pixels to the canvas; inside MSPACE the
+        viewport's scale takes the canvas's paper to the model. A headless
+        controller with no canvas counts a pixel as a unit.
+        """
+        view = getattr(getattr(self.window, "viewport", None), "view", None)
+        scale = getattr(view, "scale", 0.0) or 0.0
+        canvas = px / scale if scale > 0 else px
+        return canvas / self.space_factor()
+
+    def pickbox_px(self) -> float:
+        """The live PICKBOX, from the canvas's cache -- not from QSettings:
+        this runs on every mouse move, and reading a setting per event is
+        exactly the per-event work v0.4.2 removed."""
+        return getattr(self.window.viewport, "_pickbox_px", PICKBOX_DEFAULT)
+
+    def sheet(self):
+        """The layout whose paper the canvas shows, or None on the Model
+        tab -- the same answer on the sheet and inside one of its
+        viewports."""
+        document = self.window.document
+        name = getattr(self.window, "_active_layout", "Model")
+        if document is None or name == "Model":
+            return None
+        try:
+            return document.doc.layouts.get(name)
+        except Exception:
+            return None
+
+    def _flatten_key_for(self, document):
+        return (id(document), document.space_name, curve_quality())
+
+    @property
+    def _flatten(self) -> float:
+        """The overlay's curve tolerance for the CURRENT space: the number
+        build_scene derives for the base scene, so an arc drawn now matches
+        the arcs already on screen.
+
+        Answered here and nowhere else, cached under (document, space,
+        VIEWRES). A tab switch, MSPACE, the block editor and a VIEWRES
+        change each move the key, so no caller has to remember to recompute
+        -- three used to, with three spellings, and inside the block editor
+        the answer was the drawing's header instead of the block's extents.
+        """
+        document = self.window.document
+        if document is None:
+            return self._flatten_value
+        key = self._flatten_key_for(document)
+        if key != self._flatten_key:
+            self._flatten_value = _flatten_distance(document.current_space())
+            self._flatten_key = key
+        return self._flatten_value
 
     def space_changed(self) -> None:
         """The current space changed under us (tab switch, MSPACE/PSPACE).
@@ -1712,10 +1752,10 @@ class ToolController(QObject):
         self._grips_cache = None
         self._sel_entities_cache = None
         self._invalidate_geometry()
-        document = self.window.document
-        if document is not None:
-            self._flatten = _flatten_distance(document.current_space())
-            self._ghost_cache = None
+        # the overlay's curve tolerance follows the space by itself (the
+        # space is part of _flatten's cache key); the ghost built at the old
+        # one goes
+        self._ghost_cache = None
         self.changed.emit()
 
     def _selection_click(self, wx: float, wy: float, shift: bool) -> None:
@@ -1934,9 +1974,12 @@ class ToolController(QObject):
         self._grips_cache = (key, out)
         return out
 
-    def grip_at(self, wx: float, wy: float, tol: float):
+    def grip_at(self, wx: float, wy: float, tol: Optional[float] = None):
+        """The grip under this CANVAS point, within GRIP_PX -- or within
+        ``tol`` canvas units, which only tests pass."""
         wx, wy = self.to_space(wx, wy)
-        tol = tol / self.space_factor()
+        tol = (self.px_to_space(GRIP_PX) if tol is None
+               else tol / self.space_factor())
         for x, y, role, h, i in self.grip_points():
             if abs(x - wx) <= tol and abs(y - wy) <= tol:
                 return (x, y, role, h, i)

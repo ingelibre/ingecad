@@ -409,10 +409,11 @@ def _header_diagonal(layout) -> Optional[float]:
 
     Returns None whenever the header cannot be trusted -- absent, infinite,
     degenerate, or carrying the +-1e20 sentinel a never-regenerated drawing
-    keeps -- and the caller then pays for the walk.
+    keeps -- or does not describe this layout at all: a block definition is
+    not the drawing. The caller then pays for the walk.
     """
     doc = getattr(layout, "doc", None)
-    if doc is None:
+    if doc is None or getattr(layout, "is_block_layout", False):
         return None
     paper = getattr(layout, "is_any_paperspace", False)
     lo_key, hi_key = ("$PEXTMIN", "$PEXTMAX") if paper else ("$EXTMIN", "$EXTMAX")
@@ -442,13 +443,9 @@ SETTING_VIEWRES = "display/viewres"
 
 def viewres() -> int:
     """The current VIEWRES, from Options > Display or the VIEWRES command."""
-    try:
-        from PySide6.QtCore import QSettings
+    from core.prefs import int_pref
 
-        value = int(QSettings().value(SETTING_VIEWRES, VIEWRES_DEFAULT))
-    except (TypeError, ValueError, Exception):
-        return VIEWRES_DEFAULT
-    return value if VIEWRES_MIN <= value <= VIEWRES_MAX else VIEWRES_DEFAULT
+    return int_pref(SETTING_VIEWRES, VIEWRES_DEFAULT, VIEWRES_MIN, VIEWRES_MAX)
 
 
 def curve_quality() -> float:
@@ -471,7 +468,7 @@ def _flatten_distance(layout) -> float:
             return 0.01
         dx = extents.extmax.x - extents.extmin.x
         dy = extents.extmax.y - extents.extmin.y
-        diagonal = (dx * dx + dy * dy) ** 0.5
+        diagonal = math.hypot(dx, dy)
     return max(diagonal * FLATTEN_REL * curve_quality(), MIN_FLATTEN)
 
 
@@ -958,14 +955,7 @@ def _build_block_scene(document: Document) -> Scene:
     from core.isolate import hidden_handles
 
     block = document.modelspace()
-    extents = _layout_extents(block)
-    if extents.has_data:
-        dx = extents.extmax.x - extents.extmin.x
-        dy = extents.extmax.y - extents.extmin.y
-        flatten = max(math.hypot(dx, dy) * FLATTEN_REL * curve_quality(),
-                      MIN_FLATTEN)
-    else:
-        flatten = 0.01                     # a brand-new, still-empty block
+    flatten = _flatten_distance(block)     # its own extents, never the header
     from core import window_colors
 
     backend = VertexBackend(flatten, order_groups(block))

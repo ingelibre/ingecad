@@ -29,8 +29,7 @@ from PySide6.QtWidgets import (
 from core import actions, layers as layer_ops
 from core.i18n import tr
 
-BYLAYER_COLOR = 256      # AutoCAD sentinels
-BYLAYER_LW = -1
+BYLAYER_LW = -1          # AutoCAD's ByLayer lineweight sentinel
 
 _STYLE = """
 PropertiesPanel { background: #26262a; }
@@ -520,10 +519,10 @@ def _polyline_area(e) -> float:
 
 def _color_items():
     """(label, aci) pairs — mirror the layers panel's swatch combo data."""
-    from views.layers_panel import ACI_NAMES
-    items = [(tr("ByLayer"), 256), (tr("ByBlock"), 0)]
-    for aci in (1, 2, 3, 4, 5, 6, 7, 8, 9):
-        items.append((ACI_NAMES.get(aci, f"Color {aci}"), aci))
+    from views.color_dialog import BYBLOCK, BYLAYER, STANDARD_ACIS, aci_label
+    items = [(tr("ByLayer"), BYLAYER), (tr("ByBlock"), BYBLOCK)]
+    for aci in STANDARD_ACIS:
+        items.append((aci_label(aci), aci))
     return items
 
 

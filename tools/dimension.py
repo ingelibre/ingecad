@@ -225,13 +225,20 @@ class _TwoPointDim(_DimTextMixin, Tool):
         return tuple(adjusted)
 
     def _align_threshold(self) -> float | None:
-        """SNAP_PX in world units, or None when no view is around."""
-        services = self.ctx.services
-        window = getattr(services, "window", None)
-        view = getattr(getattr(window, "viewport", None), "view", None)
-        if view is None or not getattr(view, "scale", 0):
+        """The snap aperture in units of the current space, or None with no
+        canvas around (headless: no magnet).
+
+        Through the controller's px_to_space like every other reach of the
+        mouse: measuring its own twelve pixels here forgot the viewport's
+        scale inside MSPACE, and reached five times too little at 1:5.
+        """
+        from views.apertures import SNAP_PX
+
+        tools = getattr(getattr(self.ctx.services, "window", None),
+                        "tools", None)
+        if tools is None:
             return None
-        return 12.0 / view.scale
+        return tools.px_to_space(SNAP_PX)
 
     def _align_angle(self, point: Point):
         """0/90 when this tool draws an axis-parallel dimension line."""

@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 
 from core.i18n import tr
 from render import backend
+from views import apertures
 from views import viewport as viewport_prefs
 
 #: Right-click in the drawing area with nothing selected and no command
@@ -380,7 +381,7 @@ class OptionsDialog(QDialog):
                     self.gripobjlimit)
         self.pickbox = QSpinBox(box)
         self.pickbox.setRange(1, 50)
-        self.pickbox.setValue(viewport_prefs.pickbox())
+        self.pickbox.setValue(apertures.pickbox())
         self.pickbox.setSuffix(" px")
         self.pickbox.setToolTip(
             tr("AutoCAD's PICKBOX: the little square at the cursor that "
@@ -419,7 +420,7 @@ class OptionsDialog(QDialog):
         settings.setValue(viewport_prefs.SETTING_CROSSHAIR_COLOR,
                           "" if self._crosshair_color is None
                           else self._crosshair_color.name())
-        settings.setValue(viewport_prefs.SETTING_PICKBOX, self.pickbox.value())
+        settings.setValue(apertures.SETTING_PICKBOX, self.pickbox.value())
         from core import autosave
 
         autosave.set_savetime(self.autosave_minutes.value()
