@@ -38,5 +38,26 @@
   },
   "TINCHECK": {
     "name": "REVISARTIN"
+  },
+  "CONTOUR": {
+    "name": "CURVAS"
+  },
+  "CONTOURLABEL": {
+    "name": "ROTULARCURVAS"
+  },
+  "SLOPEZONES": {
+    "name": "PENDIENTES"
+  },
+  "PROFILE": {
+    "name": "PERFIL"
+  },
+  "GRADELINE": {
+    "name": "RASANTE"
+  },
+  "SECTIONS": {
+    "name": "SECCIONES"
+  },
+  "VOLUMES": {
+    "name": "VOLUMENES"
   }
 }

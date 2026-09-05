@@ -290,6 +290,25 @@ def test_every_bundled_plugin_leaves_no_trace(qapp):
         win.close()
 
 
+def test_no_bundled_plugin_defines_a_top_level_name_twice():
+    """A module that grows section by section can define the same helper
+    twice, and Python keeps the last one silently: a contour-label factory
+    named like the point-label factory broke point import until a test
+    tripped on it. One name, one definition, per file."""
+    import ast
+
+    root = Path(__file__).resolve().parent.parent
+    for path in sorted((root / "plugins").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        seen: dict[str, int] = {}
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                assert node.name not in seen, (
+                    f"{path.relative_to(root)}: {node.name} defined at lines "
+                    f"{seen[node.name]} and {node.lineno}")
+                seen[node.name] = node.lineno
+
+
 # -- the packages carry plugins/ --------------------------------------------------
 
 def test_every_package_ships_the_plugins_folder():

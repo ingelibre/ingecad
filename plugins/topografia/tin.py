@@ -168,6 +168,20 @@ class Delaunay:
         # the cavity: every triangle whose circumcircle holds p
         cavity: set[int] = set()
         stack = [start]
+        # A point ON an edge of the start triangle belongs to the neighbour
+        # across it as well; the neighbour's circle test can miss it by a
+        # rounding hair, and the result is a zero-area triangle of three
+        # collinear points (32 of them on a 21 x 11 grid, measured).
+        a, b, c = self.tri[start]
+        pts = self.pts
+        for i, (u, v) in enumerate(((b, c), (c, a), (a, b))):
+            pu, pv = pts[u], pts[v]
+            edge2 = (pv[0] - pu[0]) ** 2 + (pv[1] - pu[1]) ** 2
+            if abs(orient(pu, pv, p)) <= 1e-12 * max(edge2, 1e-12):
+                other = self.nbr[start][i]
+                if other >= 0:
+                    cavity.add(other)
+                    stack.extend(self.nbr[other])
         while stack:
             t = stack.pop()
             if t in cavity or t < 0 or not self.alive[t]:

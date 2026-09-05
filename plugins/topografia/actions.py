@@ -34,6 +34,17 @@ LAYERS = {
     "grid": ("TOPO-RETICULA", 8),
     "subdivision": ("TOPO-SUBDIV", 1),
     "tin": ("TOPO-TIN", 8),
+    "contour_minor": ("TOPO-CN-FINA", 32),      # dark orange, brown on paper
+    "contour_major": ("TOPO-CN-GRUESA", 30),    # orange; the TIN stays grey
+    "contour_label": ("TOPO-CN-TEXTO", 7),
+    "slopes": ("TOPO-PENDIENTES", 7),
+    "profile": ("TOPO-PERFIL", 3),
+    "profile_grid": ("TOPO-PERFIL-GRILLA", 8),
+    "profile_text": ("TOPO-PERFIL-TEXTO", 7),
+    "grade": ("TOPO-RASANTE", 1),
+    "sections": ("TOPO-SECCIONES", 3),
+    "sections_grid": ("TOPO-SECCIONES-GRILLA", 8),
+    "earthworks": ("TOPO-VOLUMENES", 7),
 }
 ALL_LABELS = ("number", "elevation", "description")
 
@@ -533,7 +544,9 @@ def area_of(entity) -> float | None:
     if entity.dxftype() == "LWPOLYLINE" and any(abs(b) > 1e-12 for b in
                                                 (p[4] for p in entity.get_points())):
         # arcs in the boundary: measure the flattened outline
-        flat = [(v.x, v.y) for v in entity.flattening(0.01)]
+        from ezdxf import path as _path
+
+        flat = [(v.x, v.y) for v in _path.make_path(entity).flattening(0.01)]
         if flat and geometry._close(flat[0], flat[-1]):
             flat = flat[:-1]
         return geometry.area(flat)
@@ -836,3 +849,539 @@ def surface_report(tin: _tin.Tin) -> str:
                name=tin.name, t=st["triangles"], p=st["points"], e=st["edges"],
                b=st["boundary_edges"], zmin=st["z_min"], zmax=st["z_max"],
                a2=st["area_2d"], a3=st["area_3d"])
+
+
+# ======================================================================
+# T4: contour lines, their labels, slope zones
+# ======================================================================
+
+from . import contours as _contours
+
+CONTOUR_TAG = "TOPO-CONTOUR"
+SLOPES_TAG = "TOPO-SLOPES"
+SLOPE_COLORS = (3, 2, 30, 1, 6, 5, 4)     # green, yellow, orange, red, magenta...
+
+
+def _contour_factory(contour: _contours.Contour, name: str):
+    def make(msp):
+        ensure_appid(msp.doc)
+        entity = msp.add_lwpolyline(contour.points, close=contour.closed,
+                                    dxfattribs={"elevation": float(contour.level)})
+        entity.set_xdata(APPID, [(1000, CONTOUR_TAG), (1000, name), (1040, float(contour.level))])
+        return entity
+    return make
+
+
+def draw_contours(document, tin: _tin.Tin, interval: float, major_every: int = 5,
+                  smoothing: int = 0, base: float = 0.0) -> CompositeCommand:
+    """Every contour as an LWPOLYLINE at its elevation, minor and major on
+    their own layers; ``smoothing`` is the number of Chaikin passes."""
+    commands = layer_commands(document, ("contour_minor", "contour_major"))
+    for contour in _contours.contours(tin, interval, major_every, base):
+        if smoothing > 0:
+            contour = _contours.Contour(contour.level,
+                                        _contours.smooth(contour.points, contour.closed, smoothing),
+                                        contour.closed, contour.major)
+        layer = LAYERS["contour_major" if contour.major else "contour_minor"][0]
+        commands.append(AddEntityCommand("TOPO-CONTOUR", _contour_factory(contour, tin.name),
+                                         layer=layer))
+    return CompositeCommand("contours", commands)
+
+
+def is_contour(entity) -> bool:
+    if entity.dxftype() != "LWPOLYLINE":
+        return False
+    data = _xdata(entity)
+    return bool(data) and data[0] == CONTOUR_TAG
+
+
+def contour_entities(document, name: str | None = None) -> list:
+    out = []
+    for entity in document.current_space():
+        if is_contour(entity):
+            data = _xdata(entity)
+            if name is None or (len(data) > 1 and str(data[1]) == name):
+                out.append(entity)
+    return out
+
+
+def contour_level(entity) -> float:
+    data = _xdata(entity) or []
+    if len(data) > 2:
+        try:
+            return float(data[2])
+        except (TypeError, ValueError):
+            pass
+    return float(entity.dxf.elevation)
+
+
+def contour_chain(entity):
+    return [(float(x), float(y)) for x, y in entity.get_points("xy")], bool(entity.closed)
+
+
+def _contour_label_factory(text: str, pos, height: float, rotation: float, link: str | None):
+    def make(msp):
+        ensure_appid(msp.doc)
+        entity = msp.add_mtext(text, dxfattribs={
+            "char_height": height, "rotation": rotation,
+            "width": max(len(text), 1) * height * 1.1})
+        entity.set_location((pos[0], pos[1]), attachment_point=5)     # middle centre
+        entity.set_bg_color("canvas", scale=1.15)                       # hides the curve under it
+        if link is not None:
+            entity.set_xdata(APPID, [(1000, "TOPO-CONTOUR-LABEL"), (1005, link)])
+        return entity
+    return make
+
+
+def label_contours(document, entities, text_height: float = 1.0, spacing: float | None = 50.0,
+                   at=None, decimals: int = 0) -> CompositeCommand:
+    """Elevation labels on the contours: every ``spacing`` along each, or
+    at the point of the chain nearest to ``at``. Readable, masked."""
+    commands = layer_commands(document, ("contour_label",))
+    for entity in entities:
+        points, closed = contour_chain(entity)
+        if len(points) < 2:
+            continue
+        level = contour_level(entity)
+        text = f"{level:.{decimals}f}"
+        if at is not None:
+            spots = [_contours.nearest_on_chain(points, closed, at)]
+        else:
+            spots = _contours.positions_along(points, closed, spacing or 50.0)
+        for x, y, angle in spots:
+            commands.append(AddEntityCommand("TOPO-CONTOUR-LABEL", _contour_label_factory(
+                text, (x, y), text_height, readable_rotation(angle), entity.dxf.handle),
+                layer=LAYERS["contour_label"][0]))
+    return CompositeCommand("contour labels", commands)
+
+
+def slope_report(tin: _tin.Tin, breaks=(5.0, 10.0, 20.0, 30.0)) -> list[tuple[str, float, int]]:
+    """(label, area 2D, triangles) per class, first class first."""
+    breaks = [float(b) for b in breaks]
+    rows = [[_contours.slope_label(i, breaks), 0.0, 0] for i in range(len(breaks) + 1)]
+    for t in tin.triangles:
+        i = _contours.slope_class(_contours.triangle_slope(tin, t), breaks)
+        a, b, c = (tin.points[k] for k in t)
+        rows[i][1] += abs(_tin.orient(a, b, c)) / 2.0
+        rows[i][2] += 1
+    return [tuple(r) for r in rows]
+
+
+def slope_zones(document, tin: _tin.Tin, breaks=(5.0, 10.0, 20.0, 30.0),
+                legend_at=None, text_height: float = 1.0) -> CompositeCommand:
+    """One solid HATCH per slope class (all its triangles as paths) and,
+    at ``legend_at``, a legend of swatches and ranges."""
+    breaks = [float(b) for b in breaks]
+    classes: dict[int, list] = {}
+    for t in tin.triangles:
+        i = _contours.slope_class(_contours.triangle_slope(tin, t), breaks)
+        classes.setdefault(i, []).append([(tin.points[k][0], tin.points[k][1]) for k in t])
+    commands = layer_commands(document, ("slopes",))
+    layer = LAYERS["slopes"][0]
+    for i in sorted(classes):
+        aci = SLOPE_COLORS[i % len(SLOPE_COLORS)]
+
+        def make(msp, tris=classes[i], aci=aci, label=_contours.slope_label(i, breaks)):
+            from ezdxf.lldxf.const import BOUNDARY_PATH_EXTERNAL
+
+            ensure_appid(msp.doc)
+            h = msp.add_hatch(color=aci)
+            h.set_solid_fill(color=aci)
+            for tri in tris:
+                h.paths.add_polyline_path(tri, is_closed=True, flags=BOUNDARY_PATH_EXTERNAL)
+            h.set_xdata(APPID, [(1000, SLOPES_TAG), (1000, tin.name), (1000, label)])
+            return h
+        commands.append(AddEntityCommand("TOPO-SLOPES", make, layer=layer))
+    if legend_at is not None:
+        x0, y0 = legend_at
+        h = text_height
+        report = slope_report(tin, breaks)
+        for row, (label, area, count) in enumerate(report):
+            if count == 0:
+                continue
+            y = y0 - row * 2.0 * h
+            aci = SLOPE_COLORS[row % len(SLOPE_COLORS)]
+
+            def swatch(msp, x=x0, y=y, aci=aci):
+                return msp.add_solid([(x, y), (x + 1.5 * h, y), (x, y - 1.2 * h), (x + 1.5 * h, y - 1.2 * h)],
+                                     dxfattribs={"color": aci})
+            commands.append(AddEntityCommand("TOPO-SLOPES", swatch, layer=layer))
+            commands.append(AddEntityCommand("TOPO-SLOPES", _text_factory(
+                f"{label}   {geometry.format_area(area)}", (x0 + 2.0 * h, y - 0.6 * h), h,
+                align="MIDDLE_LEFT", tag=SLOPES_TAG), layer=layer))
+    return CompositeCommand("slope zones", commands)
+
+
+# ======================================================================
+# T5: profile, grade line, cross sections, earthworks
+# ======================================================================
+
+from . import alignment as _alignment
+from . import profile as _profile
+
+PROFILE_TAG = "TOPO-PROFILE"
+GRADE_TAG = "TOPO-GRADE"
+SECTION_TAG = "TOPO-SECTION"
+
+
+def axis_points(entity) -> list:
+    """The axis as a flat polyline (arcs flattened to 1 cm)."""
+    kind = entity.dxftype()
+    if kind == "LINE":
+        s, e = entity.dxf.start, entity.dxf.end
+        return [(s.x, s.y), (e.x, e.y)]
+    if kind in ("LWPOLYLINE", "POLYLINE"):
+        from ezdxf import path as _path
+
+        return [(v.x, v.y) for v in _path.make_path(entity).flattening(0.01)]
+    raise ValueError("the axis must be a line or a polyline")
+
+
+@dataclass
+class ProfileFrame:
+    """Where a profile drawing sits and how it maps chainage and elevation
+    to drawing coordinates."""
+
+    name: str
+    x0: float                 # bottom-left of the grid (above the bands)
+    y0: float
+    hscale: float = 1.0       # drawing units per metre of chainage
+    vscale: float = 10.0      # drawing units per metre of elevation
+    datum: float = 0.0
+    band_height: float = 0.0  # height of the label bands under the grid
+    axis_handle: str = ""
+    step: float = 20.0
+
+    def to_drawing(self, s: float, z: float) -> tuple[float, float]:
+        return (self.x0 + s * self.hscale, self.y0 + (z - self.datum) * self.vscale)
+
+    def to_chainage(self, x: float, y: float) -> tuple[float, float]:
+        return ((x - self.x0) / self.hscale, self.datum + (y - self.y0) / self.vscale)
+
+    def xdata(self) -> list:
+        return [(1000, PROFILE_TAG), (1000, self.name), (1040, self.x0), (1040, self.y0),
+                (1040, self.hscale), (1040, self.vscale), (1040, self.datum),
+                (1040, self.band_height), (1005, self.axis_handle or "0"), (1040, self.step)]
+
+    @classmethod
+    def from_entity(cls, entity):
+        data = _xdata(entity) or []
+        if not data or data[0] != PROFILE_TAG or len(data) < 10:
+            return None
+        return cls(str(data[1]), float(data[2]), float(data[3]), float(data[4]), float(data[5]),
+                   float(data[6]), float(data[7]), str(data[8]), float(data[9]))
+
+
+def is_profile(entity) -> bool:
+    return entity.dxftype() == "LWPOLYLINE" and ProfileFrame.from_entity(entity) is not None
+
+
+def profile_entities(document) -> list:
+    return [e for e in document.current_space() if is_profile(e)]
+
+
+def _line_cmd(a, b, layer: str, tag: str = PROFILE_TAG) -> Command:
+    def make(msp):
+        ensure_appid(msp.doc)
+        entity = msp.add_line((a[0], a[1]), (b[0], b[1]))
+        entity.set_xdata(APPID, [(1000, tag)])
+        return entity
+    return AddEntityCommand("TOPO-PROFILE", make, layer=layer)
+
+
+def _text_cmd(text, pos, height, layer, rotation=0.0, align="MIDDLE_CENTER", tag=PROFILE_TAG) -> Command:
+    return AddEntityCommand("TOPO-PROFILE", _text_factory(text, pos, height, rotation, align, tag=tag),
+                            layer=layer)
+
+
+def draw_profile(document, tin: _tin.Tin, axis_entity, insert, step: float = 20.0,
+                 hscale: float = 1.0, vscale: float = 10.0, text_height: float = 1.0,
+                 name: str = "EJE", grade: list | None = None) -> CompositeCommand:
+    """The longitudinal profile of the axis over the surface, as a grid
+    with the station and elevation bands under it and the ground line on
+    top; ``grade`` (s, z) adds the design line and its band."""
+    axis = axis_points(axis_entity)
+    points = _profile.ground_profile(tin, axis, step)
+    zs = [p.z for p in points if p.z is not None]
+    if grade:
+        zs += [z for _s, z in grade]
+    if not zs:
+        raise ValueError("the axis does not cross the surface")
+    h = text_height
+    interval = 1.0 if (max(zs) - min(zs)) >= 3.0 else 0.5
+    datum = _math.floor(min(zs) / interval) * interval - interval
+    top = _math.ceil(max(zs) / interval) * interval + interval
+    bands = 2 + (1 if grade else 0)
+    band_h = 3.5 * h
+    frame = ProfileFrame(name, insert[0] + 8.0 * h, insert[1] + bands * band_h, hscale, vscale,
+                         datum, bands * band_h, axis_entity.dxf.handle, step)
+    grid, text = LAYERS["profile_grid"][0], LAYERS["profile_text"][0]
+    commands = layer_commands(document, ("profile", "profile_grid", "profile_text"))
+    length = _alignment.polyline_length(axis)
+    x_end = frame.to_drawing(length, datum)[0]
+    y_top = frame.to_drawing(0.0, top)[1]
+    # the grid: elevation lines with their labels, station lines
+    level = datum
+    while level <= top + 1e-9:
+        y = frame.to_drawing(0.0, level)[1]
+        commands.append(_line_cmd((frame.x0, y), (x_end, y), grid))
+        commands.append(_text_cmd(f"{level:.2f}", (frame.x0 - 0.8 * h, y), h, text,
+                                  align="MIDDLE_RIGHT"))
+        level += interval
+    bottom = insert[1]
+    for pt in points:
+        x = frame.to_drawing(pt.s, datum)[0]
+        commands.append(_line_cmd((x, bottom), (x, y_top), grid))
+        commands.append(_text_cmd(_alignment.format_station(pt.s), (x, bottom + 0.5 * band_h),
+                                  h, text, rotation=90.0))
+        if pt.z is not None:
+            commands.append(_text_cmd(f"{pt.z:.2f}", (x, bottom + 1.5 * band_h), h, text,
+                                      rotation=90.0))
+        if grade:
+            zd = _profile.grade_at(grade, pt.s)
+            if zd is not None:
+                commands.append(_text_cmd(f"{zd:.2f}", (x, bottom + 2.5 * band_h), h, text,
+                                          rotation=90.0))
+    # band frame and titles
+    for k in range(bands + 1):
+        y = bottom + k * band_h
+        commands.append(_line_cmd((insert[0], y), (x_end, y), grid))
+    commands.append(_line_cmd((insert[0], bottom), (insert[0], y_top), grid))
+    commands.append(_line_cmd((frame.x0, bottom), (frame.x0, y_top), grid))
+    commands.append(_line_cmd((x_end, bottom), (x_end, y_top), grid))
+    titles = [_tr("STATION"), _tr("GROUND")] + ([_tr("GRADE")] if grade else [])
+    for k, title in enumerate(titles):
+        commands.append(_text_cmd(title, (insert[0] + 0.5 * h, bottom + (k + 0.5) * band_h),
+                                  h * 0.8, text, align="MIDDLE_LEFT"))
+    commands.append(_text_cmd(
+        _tr("PROFILE {name}   H 1:{h:g}   V 1:{v:g}", name=name, h=1000.0 / hscale, v=1000.0 / vscale),
+        (frame.x0, y_top + 2.0 * h), 1.4 * h, text, align="MIDDLE_LEFT"))
+    # the ground line carries the frame
+    ground = [frame.to_drawing(pt.s, pt.z) for pt in points if pt.z is not None]
+
+    def make_ground(msp):
+        ensure_appid(msp.doc)
+        entity = msp.add_lwpolyline(ground)
+        entity.set_xdata(APPID, frame.xdata())
+        return entity
+    commands.append(AddEntityCommand("TOPO-PROFILE", make_ground, layer=LAYERS["profile"][0]))
+    if grade:
+        line = [frame.to_drawing(s_, z_) for s_, z_ in grade]
+        commands.extend(layer_commands(document, ("grade",)))
+        commands.append(AddEntityCommand("TOPO-PROFILE", lambda msp, pts=line: msp.add_lwpolyline(pts),
+                                         layer=LAYERS["grade"][0]))
+    return CompositeCommand("profile", commands)
+
+
+def profile_csv(tin: _tin.Tin, axis_entity, step: float, grade: list | None = None) -> str:
+    axis = axis_points(axis_entity)
+    lines = ["station,ground_z,design_z,cut,fill"]
+    for pt in _profile.ground_profile(tin, axis, step):
+        zd = _profile.grade_at(grade, pt.s) if grade else None
+        zg = "" if pt.z is None else f"{pt.z:.3f}"
+        zd_txt = "" if zd is None else f"{zd:.3f}"
+        diff = "" if (zd is None or pt.z is None) else f"{max(pt.z - zd, 0):.3f},{max(zd - pt.z, 0):.3f}"
+        lines.append(f"{pt.s:.2f},{zg},{zd_txt},{diff if diff else ','}")
+    return "\n".join(lines) + "\n"
+
+
+# -- the grade line -------------------------------------------------------------------------
+
+class TagEntityCommand(Command):
+    """Move an entity to a layer and give it XDATA, undoably."""
+
+    name = "tag entity"
+
+    def __init__(self, entity, layer: str, xdata: list) -> None:
+        self.entity = entity
+        self.layer = layer
+        self.xdata = xdata
+        self._old_layer = None
+        self._old_xdata = None
+
+    def do(self, document) -> None:
+        ensure_appid(document.doc)
+        self._old_layer = self.entity.dxf.layer
+        try:
+            self._old_xdata = list(self.entity.get_xdata(APPID))
+        except Exception:
+            self._old_xdata = None
+        if self.layer in document.doc.layers:
+            self.entity.dxf.layer = self.layer
+        self.entity.set_xdata(APPID, self.xdata)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        self.entity.dxf.layer = self._old_layer
+        if self._old_xdata is None:
+            self.entity.discard_xdata(APPID)
+        else:
+            self.entity.set_xdata(APPID, self._old_xdata)
+        document.dirty = True
+
+
+def frame_of(document, entity) -> tuple | None:
+    """(profile anchor, frame) of the profile the entity lies in."""
+    pts = axis_points(entity) if entity.dxftype() in ("LINE", "LWPOLYLINE", "POLYLINE") else []
+    if not pts:
+        return None
+    cx = sum(p[0] for p in pts) / len(pts)
+    for anchor in profile_entities(document):
+        frame = ProfileFrame.from_entity(anchor)
+        xs = [v.x for v in anchor.vertices_in_wcs()]
+        if xs and min(xs) - 1e-6 <= cx <= max(xs) + 1e-6:
+            return anchor, frame
+    return None
+
+
+def is_grade(entity) -> bool:
+    data = _xdata(entity)
+    return bool(data) and data[0] == GRADE_TAG
+
+
+def grade_of(entity, frame: ProfileFrame) -> list:
+    """The design line as (s, z), in chainage order."""
+    pts = [frame.to_chainage(x, y) for x, y in axis_points(entity)]
+    return sorted(pts, key=lambda p: p[0])
+
+
+def grade_profile_anchor(document, entity):
+    data = _xdata(entity) or []
+    handle = str(data[1]) if len(data) > 1 else ""
+    for anchor in profile_entities(document):
+        if anchor.dxf.handle == handle:
+            return anchor
+    return None
+
+
+def register_grade(document, entity, anchor, frame: ProfileFrame,
+                   text_height: float = 1.0) -> CompositeCommand:
+    """Adopt a polyline drawn on the profile as its design line: layer,
+    tag, a slope label on each segment and the elevation at each vertex."""
+    grade = grade_of(entity, frame)
+    commands = layer_commands(document, ("grade", "profile_text"))
+    commands.append(TagEntityCommand(entity, LAYERS["grade"][0],
+                                     [(1000, GRADE_TAG), (1005, anchor.dxf.handle)]))
+    h = text_height
+    text = LAYERS["profile_text"][0]
+    for (s0, z0), (s1, z1), slope in zip(grade, grade[1:], _profile.grade_slopes(grade)):
+        a, b = frame.to_drawing(s0, z0), frame.to_drawing(s1, z1)
+        mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0 + 1.2 * h)
+        angle = _math.degrees(_math.atan2(b[1] - a[1], b[0] - a[0]))
+        commands.append(_text_cmd(f"{slope:+.2f} %", mid, h, text, readable_rotation(angle),
+                                  tag=GRADE_TAG))
+    for s_, z_ in grade:
+        x, y = frame.to_drawing(s_, z_)
+        commands.append(_text_cmd(f"{_alignment.format_station(s_)}  {z_:.2f}",
+                                  (x, y - 1.6 * h), 0.8 * h, text, tag=GRADE_TAG))
+    return CompositeCommand("grade line", commands)
+
+
+# -- cross sections -----------------------------------------------------------------------
+
+def draw_sections(document, tin: _tin.Tin, axis_entity, insert, step: float = 20.0,
+                  half_width: float = 15.0, sample: float = 0.5, hscale: float = 1.0,
+                  vscale: float = 2.0, columns: int = 4, text_height: float = 1.0,
+                  grade: list | None = None, template: _profile.Template | None = None,
+                  name: str = "EJE") -> CompositeCommand:
+    """Every station's ground across the axis, one little plot each in a
+    grid of ``columns``; with a grade and a template the design section is
+    drawn over it and the cut and fill areas written."""
+    axis = axis_points(axis_entity)
+    h = text_height
+    grid, text = LAYERS["sections_grid"][0], LAYERS["profile_text"][0]
+    commands = layer_commands(document, ("sections", "sections_grid", "profile_text"))
+    cell_w = (2 * half_width) * hscale + 6.0 * h
+    cell_h = 0.0
+    plots = []
+    for st in _alignment.stations(axis, step):
+        ground = _profile.cross_section(tin, st, half_width, sample)
+        if len(ground) < 2:
+            continue
+        design = None
+        zd = _profile.grade_at(grade, st.s) if grade else None
+        if zd is not None and template is not None:
+            design = _profile.design_section(ground, zd, template)
+        zs = [z for _o, z in ground] + ([z for _o, z in design] if design else [])
+        datum = _math.floor(min(zs)) - 1.0
+        height = (_math.ceil(max(zs)) + 1.0 - datum) * vscale
+        cell_h = max(cell_h, height + 6.0 * h)
+        plots.append((st, ground, design, datum, height, zd))
+    for k, (st, ground, design, datum, height, zd) in enumerate(plots):
+        col, row = k % columns, k // columns
+        ox = insert[0] + col * cell_w + 3.0 * h + half_width * hscale        # the axis
+        oy = insert[1] - row * cell_h - height - 4.0 * h
+
+        def to_xy(o, z, ox=ox, oy=oy, datum=datum):
+            return (ox + o * hscale, oy + (z - datum) * vscale)
+        commands.append(_line_cmd(to_xy(-half_width, datum), to_xy(half_width, datum), grid, SECTION_TAG))
+        commands.append(_line_cmd(to_xy(0.0, datum), to_xy(0.0, datum + height / vscale), grid, SECTION_TAG))
+        commands.append(_text_cmd(_alignment.format_station(st.s), to_xy(0.0, datum + height / vscale + 1.5 * h / vscale),
+                                  h, text, tag=SECTION_TAG))
+        commands.append(_text_cmd(f"{datum:.2f}", to_xy(-half_width - 0.8 * h / hscale, datum), 0.8 * h, text,
+                                  align="MIDDLE_RIGHT", tag=SECTION_TAG))
+        pts = [to_xy(o, z) for o, z in ground]
+        commands.append(AddEntityCommand("TOPO-SECTION", lambda msp, pts=pts, s_=st.s: _section_polyline(
+            msp, pts, s_, name), layer=LAYERS["sections"][0]))
+        if design:
+            dpts = [to_xy(o, z) for o, z in design]
+            commands.extend(layer_commands(document, ("grade",)))
+            commands.append(AddEntityCommand("TOPO-SECTION", lambda msp, pts=dpts, s_=st.s: _section_polyline(
+                msp, pts, s_, name), layer=LAYERS["grade"][0]))
+            cut, fill = _profile.areas(ground, design)
+            commands.append(_text_cmd(_tr("cut {c:.2f}  fill {f:.2f}", c=cut, f=fill),
+                                      to_xy(0.0, datum - 1.5 * h / vscale), 0.8 * h, text, tag=SECTION_TAG))
+    return CompositeCommand("sections", commands)
+
+
+def _section_polyline(msp, pts, s: float, name: str):
+    ensure_appid(msp.doc)
+    entity = msp.add_lwpolyline(pts)
+    entity.set_xdata(APPID, [(1000, SECTION_TAG), (1000, name), (1040, float(s))])
+    return entity
+
+
+# -- earthworks ----------------------------------------------------------------------------
+
+def earthworks_rows(tin: _tin.Tin, axis_entity, grade: list, step: float,
+                    template: _profile.Template, half_width: float = 20.0,
+                    method: str = "prismoidal") -> list:
+    return _profile.earthworks(tin, axis_points(axis_entity), grade, step, template,
+                               half_width, method=method)
+
+
+def earthworks_table(document, rows, insert, text_height: float = 1.0,
+                     name: str = "EJE") -> CompositeCommand:
+    h = text_height
+    data = []
+    for r in rows:
+        data.append([_alignment.format_station(r.s),
+                     "" if r.z_ground is None else f"{r.z_ground:.2f}",
+                     "" if r.z_design is None else f"{r.z_design:.2f}",
+                     f"{r.cut_area:.2f}", f"{r.fill_area:.2f}",
+                     f"{r.cut_volume:.1f}", f"{r.fill_volume:.1f}",
+                     f"{r.cut_total:.1f}", f"{r.fill_total:.1f}", f"{r.mass:+.1f}"])
+    headers = [_tr("STATION"), _tr("GROUND"), _tr("GRADE"), _tr("CUT AREA"), _tr("FILL AREA"),
+               _tr("CUT VOL."), _tr("FILL VOL."), _tr("CUM. CUT"), _tr("CUM. FILL"), _tr("MASS")]
+    widths = [w * h for w in (11.0, 8.0, 8.0, 9.0, 9.0, 10.0, 10.0, 10.0, 10.0, 10.0)]
+    table = _tables.insert_table(insert, cols=10, col_width=10.0 * h, data_rows=len(data),
+                                 row_height=2.0 * h, text_height=h,
+                                 title=_tr("EARTHWORKS {name}", name=name), headers=headers,
+                                 data=data, col_widths=widths)
+    commands = layer_commands(document, ("earthworks",))
+    for command in table.commands:
+        command.layer = LAYERS["earthworks"][0]
+    commands.extend(table.commands)
+    return CompositeCommand("earthworks table", commands)
+
+
+def earthworks_csv(rows) -> str:
+    lines = ["station,ground_z,design_z,cut_area,fill_area,cut_volume,fill_volume,"
+             "cum_cut,cum_fill,mass"]
+    for r in rows:
+        lines.append(",".join([
+            f"{r.s:.2f}", "" if r.z_ground is None else f"{r.z_ground:.3f}",
+            "" if r.z_design is None else f"{r.z_design:.3f}",
+            f"{r.cut_area:.3f}", f"{r.fill_area:.3f}", f"{r.cut_volume:.2f}",
+            f"{r.fill_volume:.2f}", f"{r.cut_total:.2f}", f"{r.fill_total:.2f}", f"{r.mass:.2f}"]))
+    return "\n".join(lines) + "\n"

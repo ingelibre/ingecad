@@ -46,6 +46,17 @@ def test_a_regular_grid_is_cocircular_everywhere_and_still_triangulates():
     _check_delaunay(pts, triangles, samples=100)
 
 
+def test_a_rectangular_grid_with_collinear_rows_has_no_zero_area_triangle():
+    """A 21 x 11 grid: points land exactly on edges of the triangles already
+    there. Every triangle must have area, and the count follows Euler with
+    the 60 boundary points (collinear ones included)."""
+    pts = [(i * 5.0, j * 5.0) for i in range(21) for j in range(11)]
+    triangles = Delaunay(pts).triangles()
+    assert len(triangles) == 2 * len(pts) - 60 - 2
+    assert all(abs(orient(pts[a], pts[b], pts[c])) > 1e-9 for a, b, c in triangles)
+    _check_delaunay(pts, triangles, samples=80)
+
+
 def test_utm_sized_coordinates_do_not_lose_precision():
     pts = [(229140.0 + x, 8181320.0 + y) for x, y in _random_points(400, seed=5, size=60.0)]
     triangles = Delaunay(pts).triangles()

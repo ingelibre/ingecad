@@ -172,6 +172,12 @@ def test_areas_subdivision_and_the_grid():
     assert actions.area_of(poly) == 100.0
     assert actions.area_of(circle) == pytest.approx(math.pi * 4.0)
     assert actions.area_of(msp.add_line((0, 0), (1, 1))) is None
+    # a lot with an arc side: a 10 x 10 square whose top side bulges out
+    # as a semicircle of radius 5 adds pi * 25 / 2
+    arched = msp.add_lwpolyline([(0, 0, 0, 0, 0), (10, 0, 0, 0, 0), (10, 10, 0, 0, 1.0), (0, 10, 0, 0, 0)],
+                                format="xyseb", close=True)
+    assert actions.area_of(arched) == pytest.approx(100.0 + math.pi * 25.0 / 2.0, rel=1e-3)
+    msp.delete_entity(arched)                       # the polyline counts below are the square's
 
     cut = geometry.cut_parallel_to_side(SQUARE, 0, 40.0)
     history.execute(actions.subdivide(document, poly, cut, split=True))

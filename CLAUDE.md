@@ -466,6 +466,82 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-05 (septies) — T5: perfil, rasante, secciones y movimiento de tierras
+
+**Cuatro comandos en Topografía ▸ Perfiles, sobre la superficie dibujada:**
+PROFILE (el terreno a lo largo de un eje —línea o polilínea, arcos
+aplanados a 1 cm— como perfil con «guitarra»: banda de progresivas
+`0+020.00`, banda de cotas de terreno, grilla de cotas, escalas H y V
+independientes; la polilínea del terreno **lleva el marco en XDATA**:
+origen, escalas, plano de comparación, eje), GRADELINE (una polilínea que
+el usuario dibuja sobre el perfil con PLINE pasa a ser la rasante: capa,
+etiqueta, pendiente por tramo y cota en cada vértice; al volver a dibujar
+el perfil con ella, sale la banda RASANTE), SECTIONS (una sección del
+terreno por estación, en grilla de columnas; con rasante y plantilla, la
+sección de diseño encima y sus áreas de corte y relleno) y VOLUMES (áreas
+por estación entre terreno y plantilla —plataforma más taludes de corte y
+relleno hasta el terreno—, volumen **prismoidal con la sección media
+medida, no promediada**, o áreas extremas; tabla de 10 columnas y CSV).
+
+**La matemática es pura y se probó contra casos con solución cerrada**
+(`plugins/topografia/alignment.py`, `profile.py`): en terreno plano, 1 m de
+corte con plataforma de 6 m y taludes 1:1 son 7,00 m² exactos, y una
+rasante que va de 1 m de relleno a 1 m de corte en 100 m da los dos
+volúmenes iguales a la integral numérica al 0,2 % y ordenada de masa 0,00.
+
+⚠️ **Dos cosas que salieron de las pruebas:** (1) con la plataforma
+exactamente a la cota del terreno, el talud «no encontraba» el terreno y
+seguía hasta el borde de la sección, inventando 144,5 m² de corte: el punto
+de plataforma a nivel es su propio punto de intersección; (2)
+`LWPolyline.flattening` no existe en ezdxf 1.4 (es `ezdxf.path.make_path`),
+y el `area_of` de T2 lo llamaba en su rama de arcos sin que ningún test la
+pisara. Ahora hay un lote con arco en las pruebas.
+
+## 🗓 Sesión 2026-09-05 (sexies) — T4: curvas de nivel, rótulos y pendientes
+
+**Tres comandos en Topografía ▸ Superficie:** CONTOUR (marcha por
+triángulos sobre la TIN dibujada; intervalo, maestra cada N finas,
+suavizado opcional de Chaikin con la advertencia de que dos curvas
+suavizadas pueden tocarse; cada curva es una LWPOLYLINE **a su cota**
+(`elevation`), finas en `TOPO-CN-FINA` (32) y maestras en
+`TOPO-CN-GRUESA` (30), con la superficie y el nivel en XDATA),
+CONTOURLABEL (cotas cada N metros o donde se designa, como MTEXT con
+**fondo de lienzo** que tapa la curva debajo, legibles por la regla de
+(-90°, 90°], en `TOPO-CN-TEXTO`) y SLOPEZONES (un HATCH sólido por clase de
+pendiente con todos sus triángulos como contornos, más una leyenda de
+muestras, rangos y áreas).
+
+**La matemática vive en `plugins/topografia/contours.py` y se probó contra
+superficies de forma cerrada:** un plano da rectas paralelas exactas y un
+cono anillos cerrados cuyo largo coincide con 2πr al 3 %; niveles distintos
+**nunca se cruzan** (test segmento a segmento); los tramos barajados se
+enlazan en un solo anillo. Convención semiabierta —un vértice exactamente en
+la cota cuenta como «debajo»—, así que no hay que perturbar datos.
+
+⚠️ **Tres cosas que sólo salieron probando:**
+1. Un nivel igual al mínimo de la superficie **traza el borde** vértice a
+   vértice: 31 «curvas» donde había 9. Los niveles van estrictamente dentro
+   de (zmin, zmax).
+2. Un punto que cae **exactamente sobre una arista** de la triangulación
+   (todas las grillas) dejaba triángulos de área cero, 32 en una grilla de
+   21 × 11, porque el vecino del otro lado no entraba en la cavidad por un
+   pelo de redondeo. La cavidad incluye ahora ese vecino de oficio. El
+   conteo de Euler con puntos de borde colineales (h = 60) lo vigila.
+3. **Un nombre definido dos veces en el mismo archivo**: el factory de
+   rótulos de curvas se llamó igual que el de etiquetas de puntos, Python se
+   quedó con el último y la importación de puntos rompió. Es la familia de
+   «una pregunta, un lugar» en su forma más tonta, y ahora hay un test
+   estructural que prohíbe definir un nombre dos veces en cualquier archivo
+   de `plugins/`.
+
+**Verificado con captura sobre el levantamiento sintético:** 26 curvas cada
+0,10 m (4 maestras) en 2 ms, rótulos 2334.5 / 2335.0 / 2335.5 legibles
+sobre las maestras, y las zonas de pendiente con su leyenda (1 %, 2 %, 3 %,
+5 %: 81 / 734 / 567 / 295 / 177 m²). Nota de captura: apagar la capa por
+`layer.off()` NO oculta nada en pantalla —la visibilidad de capas la aplica
+la ventana por su propio camino, sin regen— así que en un script hay que
+pasar por el panel o el comando LAYER.
+
 ## 🗓 Sesión 2026-09-05 (quinquies) — T3: la triangulación, propia y medida
 
 **La decisión del plan se tomó con el número en la mano: Delaunay propia,

@@ -15,6 +15,7 @@ from core.i18n import tr
 from tools.base import Tool
 
 from . import actions, geometry
+from . import profile as profile_mod
 from . import tin as tin_mod
 from .points import (SurveyPoint, format_points, parse_bearing, parse_points,
                      point_from_bearing, sniff_order)
@@ -885,7 +886,639 @@ class TinCheckTool(Tool):
         self.ctx.finish()
 
 
+# ======================================================================
+# T4: contour lines, labels, slope zones
+# ======================================================================
+
+def _surface(ctx):
+    """The first surface of the current space, or None."""
+    document = _document(ctx)
+    names = actions.surface_names(document)
+    return actions.read_surface(document, names[0]) if names else None
+
+
+class ContourTool(Tool):
+    """CONTOUR: contour lines of the surface, minor and major, optionally
+    smoothed (which may let two levels touch -- the prompt says so)."""
+
+    def start(self) -> None:
+        self.name = "CONTOUR"
+        self._tin = _surface(self.ctx)
+        if self._tin is None:
+            self.ctx.echo(tr("There is no surface in this space."))
+            self.ctx.finish()
+            return
+        st = self._tin.stats()
+        span = st["z_max"] - st["z_min"]
+        self._interval = 1.0 if span >= 5.0 else (0.5 if span >= 2.0 else 0.25)
+        self._major = 5
+        self._smooth = 0
+        self._stage = "interval"
+        self.prompt("Contour interval <{i:g}>:", i=self._interval)
+
+    def on_option(self, text: str) -> bool:
+        if self._stage == "interval":
+            try:
+                value = _number(text)
+                if value <= 0:
+                    raise ValueError(text)
+            except ValueError:
+                self.ctx.echo(tr("Invalid interval: {text}", text=text))
+                return True
+            self._interval = value
+            self._ask_major()
+            return True
+        if self._stage == "major":
+            try:
+                self._major = max(0, int(text.strip()))
+            except ValueError:
+                self.ctx.echo(tr("Invalid number: {text}", text=text))
+                return True
+            self._ask_smooth()
+            return True
+        if self._stage == "smooth":
+            key = self.option(text)
+            if key not in ("N", "L", "S"):
+                return False
+            self._smooth = {"N": 0, "L": 1, "S": 3}[key]
+            self._run()
+            return True
+        return False
+
+    def _ask_major(self) -> None:
+        self._stage = "major"
+        self.prompt("Major contour every <{n}> minor:", n=self._major)
+
+    def _ask_smooth(self) -> None:
+        self._stage = "smooth"
+        self.prompt("Smoothing [None/Light/Strong] <None> (smoothed curves may touch):")
+
+    def on_enter(self) -> None:
+        if self._stage == "interval":
+            self._ask_major()
+        elif self._stage == "major":
+            self._ask_smooth()
+        elif self._stage == "smooth":
+            self._run()
+        else:
+            self.ctx.finish()
+
+    def _run(self) -> None:
+        command = actions.draw_contours(_document(self.ctx), self._tin, self._interval,
+                                        self._major, self._smooth)
+        drawn = [c for c in command.commands if c.name == "TOPO-CONTOUR"]
+        self.ctx.execute(command)
+        major = sum(1 for c in drawn if c.layer == actions.LAYERS["contour_major"][0])
+        self.ctx.echo(tr("{n} contours drawn from {name} ({m} major), every {i:g} m",
+                         n=len(drawn), name=self._tin.name, m=major, i=self._interval))
+        self.ctx.finish()
+
+
+class ContourLabelTool(Tool):
+    """CONTOURLABEL: elevations on the contours, every N metres or where
+    clicked."""
+
+    def start(self) -> None:
+        self.name = "CONTOURLABEL"
+        self._contours = actions.contour_entities(_document(self.ctx))
+        if not self._contours:
+            self.ctx.echo(tr("There are no contours in this space."))
+            self.ctx.finish()
+            return
+        self._spacing = 50.0
+        self._height = 1.0
+        self._major_only = True
+        self._stage = "mode"
+        self.prompt("Label contours [Auto/Pick] <Auto>:")
+
+    def _decimals(self) -> int:
+        levels = [actions.contour_level(e) for e in self._contours]
+        return 0 if all(abs(v - round(v)) < 1e-9 for v in levels) else 2
+
+    def on_option(self, text: str) -> bool:
+        if self._stage == "mode":
+            key = self.option(text)
+            if key == "A":
+                self._ask_spacing()
+            elif key == "P":
+                self._stage = "pick"
+                self.prompt("Pick a contour (Enter to finish):")
+            else:
+                return False
+            return True
+        if self._stage == "spacing":
+            try:
+                self._spacing = _number(text)
+            except ValueError:
+                self.ctx.echo(tr("Invalid spacing: {text}", text=text))
+                return True
+            self._ask_height()
+            return True
+        if self._stage == "height":
+            try:
+                self._height = _number(text)
+            except ValueError:
+                self.ctx.echo(tr("Invalid height: {text}", text=text))
+                return True
+            self._ask_which()
+            return True
+        if self._stage == "which":
+            key = self.option(text)
+            if key not in ("A", "M"):
+                return False
+            self._major_only = key == "M"
+            self._run_auto()
+            return True
+        return False
+
+    def _ask_spacing(self) -> None:
+        self._stage = "spacing"
+        self.prompt("Label spacing along the contour <{s:g}>:", s=self._spacing)
+
+    def _ask_height(self) -> None:
+        self._stage = "height"
+        self.prompt("Text height <{h:g}>:", h=self._height)
+
+    def _ask_which(self) -> None:
+        self._stage = "which"
+        self.prompt("Which contours [All/Major] <Major>:")
+
+    def on_enter(self) -> None:
+        if self._stage == "mode":
+            self._ask_spacing()
+        elif self._stage == "spacing":
+            self._ask_height()
+        elif self._stage == "height":
+            self._ask_which()
+        elif self._stage == "which":
+            self._run_auto()
+        else:
+            self.ctx.finish()
+
+    def _run_auto(self) -> None:
+        major = actions.LAYERS["contour_major"][0]
+        chosen = [e for e in self._contours if not self._major_only or e.dxf.layer == major]
+        if not chosen:
+            chosen = self._contours
+        command = actions.label_contours(_document(self.ctx), chosen, self._height,
+                                         spacing=self._spacing, decimals=self._decimals())
+        self.ctx.execute(command)
+        self.ctx.echo(tr("{n} labels placed on {m} contours",
+                         n=sum(1 for c in command.commands if c.name == "TOPO-CONTOUR-LABEL"),
+                         m=len(chosen)))
+        self.ctx.finish()
+
+    def on_point(self, point) -> None:
+        if self._stage != "pick":
+            return
+        pick = getattr(self.ctx.services, "pick_entity", None)
+        entity = pick(point) if pick else None
+        if entity is None or not actions.is_contour(entity):
+            self.ctx.echo(tr("That is not a contour."))
+            return
+        self.ctx.execute(actions.label_contours(_document(self.ctx), [entity], self._height,
+                                                at=point, decimals=self._decimals()))
+        self.prompt("Pick a contour (Enter to finish):")
+
+
+class SlopeZonesTool(Tool):
+    """SLOPEZONES: colour the surface by slope class, with a legend."""
+
+    def start(self) -> None:
+        self.name = "SLOPEZONES"
+        self._tin = _surface(self.ctx)
+        if self._tin is None:
+            self.ctx.echo(tr("There is no surface in this space."))
+            self.ctx.finish()
+            return
+        self._breaks = [5.0, 10.0, 20.0, 30.0]
+        self._stage = "breaks"
+        self.prompt("Slope breaks in % <{b}>:", b=", ".join(f"{b:g}" for b in self._breaks))
+
+    def on_option(self, text: str) -> bool:
+        if self._stage == "breaks":
+            try:
+                values = sorted(_number(v) for v in text.replace(";", ",").split(",") if v.strip())
+                if not values:
+                    raise ValueError(text)
+            except ValueError:
+                self.ctx.echo(tr("Invalid breaks: {text}", text=text))
+                return True
+            self._breaks = values
+            self._ask_legend()
+            return True
+        return False
+
+    def _ask_legend(self) -> None:
+        self._stage = "legend"
+        self.prompt("Specify legend point (Enter for none):")
+
+    def on_enter(self) -> None:
+        if self._stage == "breaks":
+            self._ask_legend()
+        elif self._stage == "legend":
+            self._run(None)
+        else:
+            self.ctx.finish()
+
+    def on_point(self, point) -> None:
+        if self._stage == "legend":
+            self._run(point)
+
+    def _run(self, legend_at) -> None:
+        self.ctx.execute(actions.slope_zones(_document(self.ctx), self._tin, self._breaks, legend_at))
+        for label, area, count in actions.slope_report(self._tin, self._breaks):
+            if count:
+                self.ctx.echo(tr("{label}: {area} ({n} triangles)",
+                                 label=label, area=geometry.format_area(area), n=count))
+        self.ctx.finish()
+
+
+# ======================================================================
+# T5: profile, grade line, cross sections, earthworks
+# ======================================================================
+
+def _axis_in(entities):
+    for entity in entities:
+        if entity.dxftype() in ("LINE", "LWPOLYLINE", "POLYLINE") and not actions.is_grade(entity) \
+                and not actions.is_profile(entity) and not actions.is_contour(entity):
+            return entity
+    return None
+
+
+def _grade_in(entities):
+    for entity in entities:
+        if actions.is_grade(entity):
+            return entity
+    return None
+
+
+class ProfileTool(Tool):
+    """PROFILE: the ground along a selected axis, drawn as a profile with
+    its bands at a clicked point; a selected grade line (of an earlier
+    profile) comes along as the design line."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "PROFILE"
+        self._axis = None
+        self._grade = None
+        self._tin = _surface(self.ctx)
+        self._step = 20.0
+        self._hscale = 1.0
+        self._vscale = 10.0
+        self._stage = "step"
+        if self._tin is None:
+            self.ctx.echo(tr("There is no surface in this space."))
+            self.ctx.finish()
+
+    def selection_prompt(self) -> str:
+        return tr("Select the axis (and a grade line, if any):")
+
+    def on_selection(self, entities: list) -> None:
+        self._axis = _axis_in(entities)
+        if self._axis is None:
+            self.ctx.echo(tr("The selection has no axis polyline."))
+            self.ctx.finish()
+            return
+        grade_entity = _grade_in(entities)
+        if grade_entity is not None:
+            anchor = actions.grade_profile_anchor(_document(self.ctx), grade_entity)
+            if anchor is not None:
+                self._grade = actions.grade_of(grade_entity, actions.ProfileFrame.from_entity(anchor))
+        self._stage = "step"
+        self.prompt("Station step <{s:g}>:", s=self._step)
+
+    def on_option(self, text: str) -> bool:
+        try:
+            value = _number(text)
+            if value <= 0:
+                raise ValueError(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        if self._stage == "step":
+            self._step = value
+            self._ask_scales()
+        elif self._stage == "hscale":
+            self._hscale = 1000.0 / value
+            self._stage = "vscale"
+            self.prompt("Vertical scale 1:<{v:g}>:", v=1000.0 / self._vscale)
+        elif self._stage == "vscale":
+            self._vscale = 1000.0 / value
+            self._ask_point()
+        else:
+            return False
+        return True
+
+    def _ask_scales(self) -> None:
+        self._stage = "hscale"
+        self.prompt("Horizontal scale 1:<{h:g}>:", h=1000.0 / self._hscale)
+
+    def _ask_point(self) -> None:
+        self._stage = "point"
+        self.prompt("Specify the bottom-left corner of the profile:")
+
+    def on_enter(self) -> None:
+        if self._stage == "step":
+            self._ask_scales()
+        elif self._stage == "hscale":
+            self._stage = "vscale"
+            self.prompt("Vertical scale 1:<{v:g}>:", v=1000.0 / self._vscale)
+        elif self._stage == "vscale":
+            self._ask_point()
+        else:
+            self.ctx.finish()
+
+    def on_point(self, point) -> None:
+        if self._stage != "point":
+            return
+        try:
+            command = actions.draw_profile(_document(self.ctx), self._tin, self._axis, point,
+                                           self._step, self._hscale, self._vscale, 1.0,
+                                           grade=self._grade)
+        except ValueError as exc:
+            self.ctx.echo(tr("Cannot draw the profile: {error}", error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.execute(command)
+        n = sum(1 for c in command.commands if isinstance(c, type(command.commands[-1])))
+        self.ctx.echo(tr("Profile drawn: {n} stations every {s:g} m", n=len(
+            profile_mod.ground_profile(self._tin, actions.axis_points(self._axis), self._step)), s=self._step))
+        self.ctx.finish()
+
+
+class GradeLineTool(Tool):
+    """GRADELINE: a polyline drawn over a profile becomes its design line,
+    with the slope of each segment and the elevation at each vertex."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "GRADELINE"
+
+    def selection_prompt(self) -> str:
+        return tr("Select the polyline drawn on the profile:")
+
+    def on_selection(self, entities: list) -> None:
+        document = _document(self.ctx)
+        for entity in entities:
+            if entity.dxftype() not in ("LINE", "LWPOLYLINE", "POLYLINE") or actions.is_profile(entity):
+                continue
+            found = actions.frame_of(document, entity)
+            if found is None:
+                continue
+            anchor, frame = found
+            self.ctx.execute(actions.register_grade(document, entity, anchor, frame))
+            grade = actions.grade_of(entity, frame)
+            slopes = profile_mod.grade_slopes(grade)
+            self.ctx.echo(tr("Grade line of {name}: {n} vertices, slopes {slopes}",
+                             name=frame.name, n=len(grade),
+                             slopes=", ".join(f"{v:+.2f} %" for v in slopes)))
+            self.ctx.finish()
+            return
+        self.ctx.echo(tr("The selection has no polyline drawn on a profile."))
+        self.ctx.finish()
+
+
+class SectionsTool(Tool):
+    """SECTIONS: the ground across the axis at every station, one small
+    plot each; with a grade line selected too, the design over it."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "SECTIONS"
+        self._tin = _surface(self.ctx)
+        self._axis = None
+        self._grade = None
+        self._step = 20.0
+        self._half = 15.0
+        self._template = profile_mod.Template()
+        self._stage = "step"
+        if self._tin is None:
+            self.ctx.echo(tr("There is no surface in this space."))
+            self.ctx.finish()
+
+    def selection_prompt(self) -> str:
+        return tr("Select the axis (and a grade line, if any):")
+
+    def on_selection(self, entities: list) -> None:
+        self._axis = _axis_in(entities)
+        if self._axis is None:
+            self.ctx.echo(tr("The selection has no axis polyline."))
+            self.ctx.finish()
+            return
+        grade_entity = _grade_in(entities)
+        if grade_entity is not None:
+            anchor = actions.grade_profile_anchor(_document(self.ctx), grade_entity)
+            if anchor is not None:
+                self._grade = actions.grade_of(grade_entity, actions.ProfileFrame.from_entity(anchor))
+        self._stage = "step"
+        self.prompt("Station step <{s:g}>:", s=self._step)
+
+    def on_option(self, text: str) -> bool:
+        try:
+            value = _number(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        if self._stage == "step":
+            self._step = max(value, 0.01)
+            self._ask_width()
+        elif self._stage == "width":
+            self._half = max(value, 0.1)
+            self._ask_template()
+        elif self._stage == "platform":
+            self._template.width = max(value, 0.0)
+            self._stage = "cut"
+            self.prompt("Cut slope H:V <{v:g}>:", v=self._template.cut_hv)
+        elif self._stage == "cut":
+            self._template.cut_hv = max(value, 0.01)
+            self._stage = "fill"
+            self.prompt("Fill slope H:V <{v:g}>:", v=self._template.fill_hv)
+        elif self._stage == "fill":
+            self._template.fill_hv = max(value, 0.01)
+            self._ask_point()
+        else:
+            return False
+        return True
+
+    def _ask_width(self) -> None:
+        self._stage = "width"
+        self.prompt("Width to each side <{w:g}>:", w=self._half)
+
+    def _ask_template(self) -> None:
+        if self._grade is None:
+            self._ask_point()
+            return
+        self._stage = "platform"
+        self.prompt("Platform width <{w:g}>:", w=self._template.width)
+
+    def _ask_point(self) -> None:
+        self._stage = "point"
+        self.prompt("Specify the top-left corner of the sections:")
+
+    def on_enter(self) -> None:
+        if self._stage == "step":
+            self._ask_width()
+        elif self._stage == "width":
+            self._ask_template()
+        elif self._stage == "platform":
+            self._stage = "cut"
+            self.prompt("Cut slope H:V <{v:g}>:", v=self._template.cut_hv)
+        elif self._stage == "cut":
+            self._stage = "fill"
+            self.prompt("Fill slope H:V <{v:g}>:", v=self._template.fill_hv)
+        elif self._stage == "fill":
+            self._ask_point()
+        else:
+            self.ctx.finish()
+
+    def on_point(self, point) -> None:
+        if self._stage != "point":
+            return
+        command = actions.draw_sections(_document(self.ctx), self._tin, self._axis, point,
+                                        self._step, self._half, grade=self._grade,
+                                        template=self._template if self._grade else None)
+        self.ctx.execute(command)
+        n = sum(1 for c in command.commands if c.name == "TOPO-SECTION" and c.layer == actions.LAYERS["sections"][0])
+        self.ctx.echo(tr("{n} sections drawn every {s:g} m", n=n, s=self._step))
+        self.ctx.finish()
+
+
+class VolumesTool(Tool):
+    """VOLUMES: cut and fill per station between the ground and the grade
+    line's template, as a table and a CSV."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "VOLUMES"
+        self._tin = _surface(self.ctx)
+        self._axis = None
+        self._grade = None
+        self._frame = None
+        self._template = profile_mod.Template()
+        self._method = "prismoidal"
+        self._rows = []
+        self._stage = "platform"
+        if self._tin is None:
+            self.ctx.echo(tr("There is no surface in this space."))
+            self.ctx.finish()
+
+    def selection_prompt(self) -> str:
+        return tr("Select the grade line:")
+
+    def on_selection(self, entities: list) -> None:
+        document = _document(self.ctx)
+        grade_entity = _grade_in(entities)
+        anchor = actions.grade_profile_anchor(document, grade_entity) if grade_entity else None
+        if grade_entity is None or anchor is None:
+            self.ctx.echo(tr("Select a grade line registered with GRADELINE."))
+            self.ctx.finish()
+            return
+        self._frame = actions.ProfileFrame.from_entity(anchor)
+        self._grade = actions.grade_of(grade_entity, self._frame)
+        self._axis = next((e for e in document.current_space()
+                           if e.dxf.handle == self._frame.axis_handle), None)
+        if self._axis is None:
+            self.ctx.echo(tr("The profile's axis is no longer in the drawing."))
+            self.ctx.finish()
+            return
+        self._stage = "platform"
+        self.prompt("Platform width <{w:g}>:", w=self._template.width)
+
+    def on_option(self, text: str) -> bool:
+        if self._stage == "method":
+            key = self.option(text)
+            if key not in ("P", "E"):
+                return False
+            self._method = "prismoidal" if key == "P" else "end-area"
+            self._compute()
+            return True
+        try:
+            value = _number(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        if self._stage == "platform":
+            self._template.width = max(value, 0.0)
+            self._stage = "cut"
+            self.prompt("Cut slope H:V <{v:g}>:", v=self._template.cut_hv)
+        elif self._stage == "cut":
+            self._template.cut_hv = max(value, 0.01)
+            self._stage = "fill"
+            self.prompt("Fill slope H:V <{v:g}>:", v=self._template.fill_hv)
+        elif self._stage == "fill":
+            self._template.fill_hv = max(value, 0.01)
+            self._ask_method()
+        else:
+            return False
+        return True
+
+    def _ask_method(self) -> None:
+        self._stage = "method"
+        self.prompt("Volume method [Prismoidal/End areas] <Prismoidal>:")
+
+    def on_enter(self) -> None:
+        if self._stage == "platform":
+            self._stage = "cut"
+            self.prompt("Cut slope H:V <{v:g}>:", v=self._template.cut_hv)
+        elif self._stage == "cut":
+            self._stage = "fill"
+            self.prompt("Fill slope H:V <{v:g}>:", v=self._template.fill_hv)
+        elif self._stage == "fill":
+            self._ask_method()
+        elif self._stage == "method":
+            self._compute()
+        elif self._stage == "point":
+            self._write_csv()
+        else:
+            self.ctx.finish()
+
+    def _compute(self) -> None:
+        self._rows = actions.earthworks_rows(self._tin, self._axis, self._grade, self._frame.step,
+                                             self._template, method=self._method)
+        last = self._rows[-1] if self._rows else None
+        if last is not None:
+            self.ctx.echo(tr("Cut {c:.1f} m³, fill {f:.1f} m³, mass {m:+.1f} m³ over {n} stations",
+                             c=last.cut_total, f=last.fill_total, m=last.mass, n=len(self._rows)))
+        self._stage = "point"
+        self.prompt("Specify the top-left corner of the table (Enter to skip):")
+
+    def on_point(self, point) -> None:
+        if self._stage != "point":
+            return
+        self.ctx.execute(actions.earthworks_table(_document(self.ctx), self._rows, point,
+                                                  name=self._frame.name))
+        self._write_csv()
+
+    def _write_csv(self) -> None:
+        window = _window(self.ctx)
+        if window is not None:
+            from views import file_dialogs
+
+            path, _selected = file_dialogs.get_save_file(
+                window, tr("Save earthworks CSV"), f"volumenes-{self._frame.name}.csv",
+                tr("CSV (*.csv);;All files (*)"))
+        else:
+            path = self.ctx.ask_text(tr("Earthworks CSV (Enter for none):"), "")
+        if path:
+            Path(path).write_text(actions.earthworks_csv(self._rows), encoding="utf-8")
+            self.ctx.echo(tr("Earthworks written to {path}", path=path))
+        self.ctx.finish()
+
+
 TOOL_CLASSES = {
+    "PROFILE": ProfileTool,
+    "GRADELINE": GradeLineTool,
+    "SECTIONS": SectionsTool,
+    "VOLUMES": VolumesTool,
+    "CONTOUR": ContourTool,
+    "CONTOURLABEL": ContourLabelTool,
+    "SLOPEZONES": SlopeZonesTool,
     "TIN": TinTool,
     "TINEDIT": TinEditTool,
     "TINCHECK": TinCheckTool,

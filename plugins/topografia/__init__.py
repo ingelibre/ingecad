@@ -6,6 +6,8 @@ T1, points: import a station's CSV, export, draw by bearing and distance,
 renumber, find. T2, polygons: bearings and distances annotated, the
 construction chart, sums of areas, subdivision by area, the UTM grid.
 T3, the surface: a Delaunay TIN of the points as 3DFACEs, edited and checked.
+T4: contour lines at their elevation, their labels, and slope zones.
+T5: the profile along an axis, its grade line, cross sections, earthworks.
 Everything it draws is plain DXF (POINT, TEXT, LINE, layers), readable by
 any CAD; the point numbers and descriptions ride in XDATA.
 """
@@ -43,6 +45,16 @@ PLUGIN = PluginSpec(
             MenuItem("Triangulate (TIN)...", "TIN"),
             MenuItem("Edit surface...", "TINEDIT"),
             MenuItem("Check surface", "TINCHECK"),
+            SEPARATOR,
+            MenuItem("Contour lines...", "CONTOUR"),
+            MenuItem("Label contours...", "CONTOURLABEL"),
+            MenuItem("Slope zones...", "SLOPEZONES"),
+        )),
+        Submenu("Profiles", (
+            MenuItem("Longitudinal profile...", "PROFILE"),
+            MenuItem("Grade line", "GRADELINE"),
+            MenuItem("Cross sections...", "SECTIONS"),
+            MenuItem("Earthworks (cut and fill)...", "VOLUMES"),
         )),
         SEPARATOR,
         MenuItem("UTM grid...", "UTMGRID"),
@@ -53,6 +65,7 @@ PLUGIN = PluginSpec(
         ToolbarItem("Annotate bearings and distances", "ANNOT"),
         ToolbarItem("Construction chart...", "CTABLE"),
         ToolbarItem("Triangulate (TIN)...", "TIN"),
+        ToolbarItem("Contour lines...", "CONTOUR"),
     ),
     i18n_dir=Path(__file__).parent / "i18n",
 )
