@@ -466,6 +466,46 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-05 (octies) — T6: plataformas, línea cero y volumen entre superficies
+
+**Tres comandos en Topografía ▸ Plataformas:** PLATFORM (una polilínea
+cerrada pasa a plataforma: cota en el primer vértice, pendiente en % y
+azimut opcionales, taludes de corte y relleno H:V, bermas cada H metros de
+ancho W; sale la **línea cero** como polilínea 3D sobre el terreno, las
+**rayas de talud** larga-corta, la **superficie de diseño** como caras 3D
+con su nombre, y corte y relleno contra el terreno), DAYLIGHT (lo mismo
+sin superficie) y VOLTIN (corte y relleno entre dos superficies del
+dibujo, por nombre, con rótulo opcional).
+
+**La línea cero se estaca como la estacaría una cuadrilla** (`grading.py`):
+desde muestras del borde cada N m, marcha por la normal hacia afuera
+subiendo con el talud de corte si el terreno está arriba o bajando con el
+de relleno si está abajo, hasta cruzar el terreno; en las esquinas sigue la
+bisectriz, así que el pie redondea la esquina como un talud real (2 m a
+1:1 son 2 m también por la bisectriz, no 2√2 —mi primer test esperaba lo
+segundo y era el test el equivocado—). **El volumen entre dos TIN es
+exacto:** cada triángulo de diseño se recorta contra cada triángulo del
+terreno que solapa; la diferencia de dos planos es un plano, su integral
+sobre un pedazo convexo es área × valor en el centroide, y la línea de
+cambio parte el pedazo en relleno y corte. Verificado: dos superficies
+iguales dan 0; el terreno subido 1 m da exactamente su área; un plano
+inclinado sobre uno horizontal da corte = relleno = 12 500,00; y la
+plataforma hundida 2 m con taludes 1:1 coincide con la grilla fina de 25 cm
+al 2 % (el DoD) y cae entre el tronco de pirámide y el mismo con las
+esquinas redondeadas (930–975 m³).
+
+⚠️ **Dos cosas que sólo salieron con el plano real, no con los tests
+sintéticos:** (1) el volumen «exacto» sobre coordenadas UTM daba **1 918 m³
+de relleno en una cancha que tiene 13**: el término constante de cada
+plano es z − a·x − b·y con y ≈ 8 181 000, y la diferencia de dos de esos
+términos se queda sin cifras; se integra ahora en coordenadas locales al
+origen de la superficie de diseño (exacto contra grilla de 10 cm: 29,72 =
+29,72 y 13,08 = 13,08). El test sintético de UTM con terreno plano NO lo
+cazaba —con gradiente cero no hay cancelación—; el que lo caza es la
+cancha sobre el terreno real, y está en la suite. (2) Un «-0.0» en el
+rótulo: el recorte deja migas de 1e-12; los volúmenes se devuelven
+recortados a cero.
+
 ## 🗓 Sesión 2026-09-05 (septies) — T5: perfil, rasante, secciones y movimiento de tierras
 
 **Cuatro comandos en Topografía ▸ Perfiles, sobre la superficie dibujada:**

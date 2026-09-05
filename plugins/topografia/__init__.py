@@ -8,6 +8,7 @@ construction chart, sums of areas, subdivision by area, the UTM grid.
 T3, the surface: a Delaunay TIN of the points as 3DFACEs, edited and checked.
 T4: contour lines at their elevation, their labels, and slope zones.
 T5: the profile along an axis, its grade line, cross sections, earthworks.
+T6: platforms with side slopes to daylight, and exact volumes between surfaces.
 Everything it draws is plain DXF (POINT, TEXT, LINE, layers), readable by
 any CAD; the point numbers and descriptions ride in XDATA.
 """
@@ -49,6 +50,11 @@ PLUGIN = PluginSpec(
             MenuItem("Contour lines...", "CONTOUR"),
             MenuItem("Label contours...", "CONTOURLABEL"),
             MenuItem("Slope zones...", "SLOPEZONES"),
+        )),
+        Submenu("Platforms", (
+            MenuItem("Platform with slopes...", "PLATFORM"),
+            MenuItem("Daylight line only...", "DAYLIGHT"),
+            MenuItem("Volume between surfaces...", "VOLTIN"),
         )),
         Submenu("Profiles", (
             MenuItem("Longitudinal profile...", "PROFILE"),

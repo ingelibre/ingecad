@@ -59,5 +59,14 @@
   },
   "VOLUMES": {
     "name": "VOLUMENES"
+  },
+  "PLATFORM": {
+    "name": "PLATAFORMA"
+  },
+  "DAYLIGHT": {
+    "name": "LINEACERO"
+  },
+  "VOLTIN": {
+    "name": "VOLUMENTIN"
   }
 }

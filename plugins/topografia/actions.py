@@ -45,6 +45,9 @@ LAYERS = {
     "sections": ("TOPO-SECCIONES", 3),
     "sections_grid": ("TOPO-SECCIONES-GRILLA", 8),
     "earthworks": ("TOPO-VOLUMENES", 7),
+    "daylight": ("TOPO-LINEA-CERO", 6),
+    "hachures": ("TOPO-TALUDES", 8),
+    "design_tin": ("TOPO-TIN-DISENO", 4),
 }
 ALL_LABELS = ("number", "elevation", "description")
 
@@ -1385,3 +1388,85 @@ def earthworks_csv(rows) -> str:
             f"{r.cut_area:.3f}", f"{r.fill_area:.3f}", f"{r.cut_volume:.2f}",
             f"{r.fill_volume:.2f}", f"{r.cut_total:.2f}", f"{r.fill_total:.2f}", f"{r.mass:.2f}"]))
     return "\n".join(lines) + "\n"
+
+
+# ======================================================================
+# T6: platforms, daylight, volumes between surfaces
+# ======================================================================
+
+from . import grading as _grading
+
+DAYLIGHT_TAG = "TOPO-DAYLIGHT"
+HACHURE_TAG = "TOPO-HACHURE"
+
+
+@dataclass
+class PlatformResult:
+    daylight: list
+    closed: bool
+    design: _tin.Tin | None
+    cut: float = 0.0
+    fill: float = 0.0
+
+
+def grade_platform(ground: _tin.Tin, polygon, z_of, spec: _grading.SlopeSpec,
+                   sample: float = 1.0, name: str = "PLATAFORMA",
+                   with_surface: bool = True) -> PlatformResult:
+    """Daylight the platform on the ground and, if asked, build its design
+    surface and measure it against the ground."""
+    daylight = _grading.daylight_line(ground, polygon, z_of, spec, sample)
+    closed = all(d is not None for d in daylight) and len(daylight) >= 3
+    design = None
+    cut = fill = 0.0
+    if with_surface and sum(1 for d in daylight if d is not None) >= 3:
+        design = _grading.design_surface(polygon, z_of, daylight, name)
+        cut, fill = _grading.volume_between(ground, design)
+    return PlatformResult(daylight, closed, design, cut, fill)
+
+
+def draw_platform(document, result: PlatformResult, hachures: bool = True) -> CompositeCommand:
+    """The daylight line as a 3D polyline (on the ground), the slope
+    hachures, and the design surface's faces on their own layer."""
+    kinds = ["daylight"] + (["hachures"] if hachures else []) + (["design_tin"] if result.design else [])
+    commands = layer_commands(document, tuple(kinds))
+    day = [(d.x, d.y, d.z) for d in result.daylight if d is not None]
+    if len(day) >= 2:
+        def make_day(msp, pts=day, closed=result.closed):
+            ensure_appid(msp.doc)
+            entity = msp.add_polyline3d(pts, close=closed)
+            entity.set_xdata(APPID, [(1000, DAYLIGHT_TAG)])
+            return entity
+        commands.append(AddEntityCommand("TOPO-DAYLIGHT", make_day, layer=LAYERS["daylight"][0]))
+    if hachures:
+        for a, b in _grading.hachures(result.daylight):
+            commands.append(_line_cmd(a, b, LAYERS["hachures"][0], HACHURE_TAG))
+    if result.design is not None:
+        for a, b, c in result.design.triangles:
+            commands.append(AddEntityCommand(
+                "TOPO-TIN", _face_factory(result.design.points[a], result.design.points[b],
+                                          result.design.points[c], result.design.name),
+                layer=LAYERS["design_tin"][0]))
+    return CompositeCommand("platform", commands)
+
+
+def volumes_between(document, base_name: str, design_name: str) -> tuple[float, float] | None:
+    """(cut, fill) of the design surface against the base, or None when
+    either is missing."""
+    names = surface_names(document)
+    if base_name not in names or design_name not in names:
+        return None
+    base = read_surface(document, base_name)
+    design = read_surface(document, design_name)
+    return _grading.volume_between(base, design)
+
+
+def volume_label(document, point, base_name: str, design_name: str, cut: float, fill: float,
+                 text_height: float = 1.0) -> CompositeCommand:
+    lines = [_tr("{design} vs {base}", design=design_name, base=base_name),
+             _tr("CUT {v:.1f} m³", v=cut), _tr("FILL {v:.1f} m³", v=fill),
+             _tr("NET {v:+.1f} m³", v=fill - cut)]
+    commands = layer_commands(document, ("annotation",))
+    for k, text in enumerate(lines):
+        commands.append(_text_cmd(text, (point[0], point[1] - k * 1.6 * text_height), text_height,
+                                  LAYERS["annotation"][0], align="MIDDLE_LEFT", tag=ANNOT_TAG))
+    return CompositeCommand("volume label", commands)

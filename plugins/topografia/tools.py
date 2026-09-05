@@ -15,6 +15,7 @@ from core.i18n import tr
 from tools.base import Tool
 
 from . import actions, geometry
+from . import grading as grading_mod
 from . import profile as profile_mod
 from . import tin as tin_mod
 from .points import (SurveyPoint, format_points, parse_bearing, parse_points,
@@ -1511,7 +1512,212 @@ class VolumesTool(Tool):
         self.ctx.finish()
 
 
+# ======================================================================
+# T6: platforms, daylight, volumes between surfaces
+# ======================================================================
+
+class PlatformTool(Tool):
+    """PLATFORM: a closed polyline becomes a graded platform -- elevation,
+    optional slope, cut and fill side slopes, benches -- with its daylight
+    line, hachures, design surface and volumes. DAYLIGHT is the same
+    without the surface."""
+
+    line_only = False
+
+    def start(self) -> None:
+        self.name = "DAYLIGHT" if self.line_only else "PLATFORM"
+        self._tin = _surface(self.ctx)
+        self._polygon = None
+        self._z = None
+        self._slope = 0.0
+        self._azimuth = 0.0
+        self._spec = grading_mod.SlopeSpec()
+        self._name = "PLATAFORMA"
+        self._stage = "elevation"
+        if self._tin is None:
+            self.ctx.echo(tr("There is no surface in this space."))
+            self.ctx.finish()
+
+    def selection_prompt(self) -> str:
+        return tr("Select the closed polyline of the platform:")
+
+    wants_selection = True
+
+    def on_selection(self, entities: list) -> None:
+        entity = _closed_polygon(entities)
+        if entity is None:
+            self.ctx.echo(tr("The selection has no closed polyline."))
+            self.ctx.finish()
+            return
+        self._polygon = geometry.polygon_vertices(entity)
+        ground = self._tin.z_at(*self._polygon[0])
+        self._z = ground if ground is not None else 0.0
+        self._stage = "elevation"
+        self.prompt("Platform elevation at the first vertex <{z:.2f}>:", z=self._z)
+
+    def on_option(self, text: str) -> bool:
+        if self._stage == "name":
+            self._name = text.strip() or self._name
+            self._run()
+            return True
+        try:
+            value = _number(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        if self._stage == "elevation":
+            self._z = value
+            self._ask("slope", "Slope of the platform in % (0 = flat) <{v:g}>:", v=self._slope)
+        elif self._stage == "slope":
+            self._slope = value
+            if value != 0.0:
+                self._ask("azimuth", "Azimuth the platform falls along <{v:g}>:", v=self._azimuth)
+            else:
+                self._ask("cut", "Cut slope H:V <{v:g}>:", v=self._spec.cut_hv)
+        elif self._stage == "azimuth":
+            self._azimuth = value
+            self._ask("cut", "Cut slope H:V <{v:g}>:", v=self._spec.cut_hv)
+        elif self._stage == "cut":
+            self._spec.cut_hv = max(value, 0.01)
+            self._ask("fill", "Fill slope H:V <{v:g}>:", v=self._spec.fill_hv)
+        elif self._stage == "fill":
+            self._spec.fill_hv = max(value, 0.01)
+            self._ask("bench_h", "Bench every (height, 0 = none) <{v:g}>:", v=self._spec.bench_height)
+        elif self._stage == "bench_h":
+            self._spec.bench_height = max(value, 0.0)
+            if self._spec.bench_height > 0:
+                self._ask("bench_w", "Bench width <{v:g}>:", v=self._spec.bench_width or 2.0)
+            else:
+                self._after_slopes()
+        elif self._stage == "bench_w":
+            self._spec.bench_width = max(value, 0.0)
+            self._after_slopes()
+        else:
+            return False
+        return True
+
+    def _ask(self, stage: str, prompt: str, **kw) -> None:
+        self._stage = stage
+        self.prompt(prompt, **kw)
+
+    def _after_slopes(self) -> None:
+        if self.line_only:
+            self._run()
+        else:
+            self._ask("name", "Surface name <{name}>:", name=self._name)
+
+    def on_enter(self) -> None:
+        defaults = {"elevation": lambda: self.on_option(f"{self._z}"),
+                    "slope": lambda: self.on_option(f"{self._slope}"),
+                    "azimuth": lambda: self.on_option(f"{self._azimuth}"),
+                    "cut": lambda: self.on_option(f"{self._spec.cut_hv}"),
+                    "fill": lambda: self.on_option(f"{self._spec.fill_hv}"),
+                    "bench_h": lambda: self.on_option(f"{self._spec.bench_height}"),
+                    "bench_w": lambda: self.on_option(f"{self._spec.bench_width or 2.0}"),
+                    "name": lambda: self._run()}
+        action = defaults.get(self._stage)
+        if action is None:
+            self.ctx.finish()
+        else:
+            action()
+
+    def _run(self) -> None:
+        z_of = grading_mod.platform_plane(self._polygon[0], self._z, self._slope, self._azimuth)
+        result = actions.grade_platform(self._tin, self._polygon, z_of, self._spec,
+                                        name=self._name, with_surface=not self.line_only)
+        found = sum(1 for d in result.daylight if d is not None)
+        if found < 3:
+            self.ctx.echo(tr("The slopes never meet the ground: is the platform on the surface?"))
+            self.ctx.finish()
+            return
+        self.ctx.execute(actions.draw_platform(_document(self.ctx), result))
+        if not result.closed:
+            self.ctx.echo(tr("The daylight line is open: {n} of {m} slope lines left the surface.",
+                             n=len(result.daylight) - found, m=len(result.daylight)))
+        else:
+            self.ctx.echo(tr("Daylight line closed, {m} slope lines.", m=len(result.daylight)))
+        if result.design is not None:
+            self.ctx.echo(tr("{name}: cut {c:.1f} m³, fill {f:.1f} m³, net {n:+.1f} m³",
+                             name=self._name, c=result.cut, f=result.fill, n=result.fill - result.cut))
+        self.ctx.finish()
+
+
+class DaylightTool(PlatformTool):
+    line_only = True
+
+
+class VoltinTool(Tool):
+    """VOLTIN: cut and fill between two surfaces of the drawing, exact."""
+
+    def start(self) -> None:
+        self.name = "VOLTIN"
+        names = actions.surface_names(_document(self.ctx))
+        if len(names) < 2:
+            self.ctx.echo(tr("Two surfaces are needed; this space has {n}.", n=len(names)))
+            self.ctx.finish()
+            return
+        self._names = names
+        self._base = "TERRENO" if "TERRENO" in names else names[0]
+        self._design = next((n for n in names if n != self._base), names[-1])
+        self._cut = self._fill = 0.0
+        self._stage = "base"
+        self.prompt("Base surface <{name}> ({options}):", name=self._base, options=", ".join(names))
+
+    def on_option(self, text: str) -> bool:
+        value = text.strip()
+        if self._stage == "base":
+            if value not in self._names:
+                self.ctx.echo(tr("No surface called {name}.", name=value))
+                return True
+            self._base = value
+            self._ask_design()
+        elif self._stage == "design":
+            if value not in self._names:
+                self.ctx.echo(tr("No surface called {name}.", name=value))
+                return True
+            self._design = value
+            self._compute()
+        else:
+            return False
+        return True
+
+    def _ask_design(self) -> None:
+        self._stage = "design"
+        self.prompt("Compared surface <{name}>:", name=self._design)
+
+    def on_enter(self) -> None:
+        if self._stage == "base":
+            self._ask_design()
+        elif self._stage == "design":
+            self._compute()
+        else:
+            self.ctx.finish()
+
+    def _compute(self) -> None:
+        result = actions.volumes_between(_document(self.ctx), self._base, self._design)
+        if result is None:
+            self.ctx.echo(tr("No surface called {name}.", name=self._design))
+            self.ctx.finish()
+            return
+        self._cut, self._fill = result
+        self.ctx.echo(tr("{design} vs {base}: cut {c:.1f} m³, fill {f:.1f} m³, net {n:+.1f} m³",
+                         design=self._design, base=self._base, c=self._cut, f=self._fill,
+                         n=self._fill - self._cut))
+        self._stage = "label"
+        self.prompt("Specify label point (Enter to finish):")
+
+    def on_point(self, point) -> None:
+        if self._stage != "label":
+            return
+        self.ctx.execute(actions.volume_label(_document(self.ctx), point, self._base, self._design,
+                                              self._cut, self._fill))
+        self.ctx.finish()
+
+
 TOOL_CLASSES = {
+    "PLATFORM": PlatformTool,
+    "DAYLIGHT": DaylightTool,
+    "VOLTIN": VoltinTool,
     "PROFILE": ProfileTool,
     "GRADELINE": GradeLineTool,
     "SECTIONS": SectionsTool,
