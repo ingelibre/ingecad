@@ -1411,7 +1411,7 @@ contrato de plugins se diseña CON él, no en abstracto (decisión del rumbo del
 2026-08-12). Contenido: importar CSV de puntos con cota, cuadro de datos
 técnicos automático (Este/Norte, lados, rumbos, área y perímetro — `TABLE` ya
 existe como base) y perfil de elevaciones. El README y el FAQ del sitio ya dicen
-«v0.5», así que la promesa pública está alineada. **Inventario completo de CivilCAD (245 rutinas, precios, cómo lee Google Earth) y mapa de factibilidad capacidad por capacidad: `docs/topografia-civilcad-inventario.md` (2026-09-05). Decisión: complemento incluido; casi todo el módulo Google Earth se porta del `georef/` de IngeTrazo sin Google Earth.**
+«v0.5», así que la promesa pública está alineada. **Inventario completo de CivilCAD (245 rutinas, precios, cómo lee Google Earth) y mapa de factibilidad capacidad por capacidad: `docs/topografia-civilcad-inventario.md` (2026-09-05). Decisión: complemento incluido; casi todo el módulo Google Earth se porta del `georef/` de IngeTrazo sin Google Earth.** **El plan por fases (P0 contrato + gestor → Topografía v0.5 → Terreno v0.6 → Redes v0.7 → Carreteras) con DoD y estimaciones: `docs/plan-complementos.md`. La barra lateral ya se pulió en sesiones anteriores (Marco, 2026-09-05): el frente 2 está cerrado.**
 
 ## 🧭 RUMBO ESTRATÉGICO (2026-08-12) — consolidar, quick wins, y COMPLEMENTOS
 
