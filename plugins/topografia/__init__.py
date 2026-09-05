@@ -5,6 +5,7 @@
 T1, points: import a station's CSV, export, draw by bearing and distance,
 renumber, find. T2, polygons: bearings and distances annotated, the
 construction chart, sums of areas, subdivision by area, the UTM grid.
+T3, the surface: a Delaunay TIN of the points as 3DFACEs, edited and checked.
 Everything it draws is plain DXF (POINT, TEXT, LINE, layers), readable by
 any CAD; the point numbers and descriptions ride in XDATA.
 """
@@ -38,6 +39,11 @@ PLUGIN = PluginSpec(
             MenuItem("Sum of areas", "AREASUM"),
             MenuItem("Subdivide polygon...", "SUBDIV"),
         )),
+        Submenu("Surface", (
+            MenuItem("Triangulate (TIN)...", "TIN"),
+            MenuItem("Edit surface...", "TINEDIT"),
+            MenuItem("Check surface", "TINCHECK"),
+        )),
         SEPARATOR,
         MenuItem("UTM grid...", "UTMGRID"),
     ),
@@ -46,6 +52,7 @@ PLUGIN = PluginSpec(
         ToolbarItem("Point by bearing and distance", "PBY"),
         ToolbarItem("Annotate bearings and distances", "ANNOT"),
         ToolbarItem("Construction chart...", "CTABLE"),
+        ToolbarItem("Triangulate (TIN)...", "TIN"),
     ),
     i18n_dir=Path(__file__).parent / "i18n",
 )

@@ -33,6 +33,7 @@ LAYERS = {
     "table": ("TOPO-CUADROS", 7),
     "grid": ("TOPO-RETICULA", 8),
     "subdivision": ("TOPO-SUBDIV", 1),
+    "tin": ("TOPO-TIN", 8),
 }
 ALL_LABELS = ("number", "elevation", "description")
 
@@ -605,3 +606,233 @@ def utm_grid(document, x0: float, y0: float, x1: float, y1: float, spacing: floa
             label, (x0 - 1.5 * h, y), h, 0.0, align="MIDDLE_RIGHT", tag="TOPO-GRID"),
             layer=layer))
     return CompositeCommand("utm grid", commands)
+
+
+# ======================================================================
+# T3: the surface -- a TIN of 3DFACEs, read back, edited, checked
+# ======================================================================
+
+from . import tin as _tin
+
+TIN_TAG = "TOPO-TIN"
+
+
+def _face_factory(pa, pb, pc, name: str):
+    def make(msp):
+        ensure_appid(msp.doc)
+        entity = msp.add_3dface([pa, pb, pc, pc])
+        entity.set_xdata(APPID, [(1000, TIN_TAG), (1000, name)])
+        return entity
+    return make
+
+
+def _vertex_xyz(v):
+    return (float(v[0]), float(v[1]), float(v[2]) if len(v) > 2 else 0.0)
+
+
+def surface_inputs(entities):
+    """(points, breaklines) among the entities: POINTs are points, lines
+    and polylines are breaklines (their vertices join the surface)."""
+    points, breaklines = [], []
+    for entity in entities:
+        kind = entity.dxftype()
+        if kind == "POINT":
+            loc = entity.dxf.location
+            points.append((loc.x, loc.y, loc.z))
+        elif kind == "LINE":
+            s, e = entity.dxf.start, entity.dxf.end
+            breaklines.append([(s.x, s.y, s.z), (e.x, e.y, e.z)])
+        elif kind == "LWPOLYLINE":
+            z = float(entity.dxf.elevation)
+            verts = [(x, y, z) for x, y in entity.get_points("xy")]
+            if entity.closed and verts:
+                verts.append(verts[0])
+            breaklines.append(verts)
+        elif kind == "POLYLINE":
+            verts = [(v.dxf.location.x, v.dxf.location.y, v.dxf.location.z)
+                     for v in entity.vertices]
+            if entity.is_closed and verts:
+                verts.append(verts[0])
+            breaklines.append(verts)
+    return points, breaklines
+
+
+def build_surface(document, tin: _tin.Tin) -> CompositeCommand:
+    """Every triangle of ``tin`` as a 3DFACE on TOPO-TIN, one undo step."""
+    commands = layer_commands(document, ("tin",))
+    for a, b, c in tin.triangles:
+        commands.append(AddEntityCommand(
+            "TOPO-TIN", _face_factory(tin.points[a], tin.points[b], tin.points[c], tin.name),
+            layer=LAYERS["tin"][0]))
+    return CompositeCommand("triangulate", commands)
+
+
+def is_face(entity, name: str | None = None) -> bool:
+    if entity.dxftype() != "3DFACE":
+        return False
+    data = _xdata(entity)
+    if not data or data[0] != TIN_TAG:
+        return False
+    return name is None or (len(data) > 1 and str(data[1]) == name)
+
+
+def surface_faces(document, name: str | None = None) -> list:
+    return [e for e in document.current_space() if is_face(e, name)]
+
+
+def surface_names(document) -> list[str]:
+    names = []
+    for entity in document.current_space():
+        if is_face(entity):
+            data = _xdata(entity)
+            label = str(data[1]) if len(data) > 1 else ""
+            if label not in names:
+                names.append(label)
+    return names
+
+
+def face_points(face) -> tuple:
+    """The three corners (x, y, z), counter-clockwise."""
+    d = face.dxf
+    pts = [(d.vtx0.x, d.vtx0.y, d.vtx0.z), (d.vtx1.x, d.vtx1.y, d.vtx1.z),
+           (d.vtx2.x, d.vtx2.y, d.vtx2.z)]
+    if _tin.orient(pts[0], pts[1], pts[2]) < 0:
+        pts = [pts[0], pts[2], pts[1]]
+    return tuple(pts)
+
+
+def read_surface(document, name: str | None = None, faces=None) -> _tin.Tin:
+    """The surface the 3DFACEs describe, vertices shared by position."""
+    faces = surface_faces(document, name) if faces is None else faces
+    raw = []
+    for face in faces:
+        raw.extend(face_points(face))
+    pts, index = _tin._dedupe(raw)
+    triangles = [(index[3 * i], index[3 * i + 1], index[3 * i + 2]) for i in range(len(faces))]
+    label = name
+    if label is None and faces:
+        data = _xdata(faces[0])
+        label = str(data[1]) if data and len(data) > 1 else "TERRENO"
+    return _tin.Tin(pts, triangles, label or "TERRENO")
+
+
+def face_name(face) -> str:
+    data = _xdata(face)
+    return str(data[1]) if data and len(data) > 1 else "TERRENO"
+
+
+def face_at(faces, point):
+    """The face whose 2D triangle holds ``point``, or None."""
+    for face in faces:
+        a, b, c = face_points(face)
+        if (_tin.orient(a, b, point) >= -1e-9 and _tin.orient(b, c, point) >= -1e-9
+                and _tin.orient(c, a, point) >= -1e-9):
+            return face
+    return None
+
+
+def _same_xy(p, q) -> bool:
+    return abs(p[0] - q[0]) < 1e-6 and abs(p[1] - q[1]) < 1e-6
+
+
+def nearest_edge(faces, point):
+    """(face_a, face_b, edge) for the shared edge closest to ``point``; None
+    when the closest edge belongs to a single face (the boundary)."""
+    best = None
+    best_d = _math.inf
+    for face in faces:
+        pts = face_points(face)
+        for i in range(3):
+            a, b = pts[i], pts[(i + 1) % 3]
+            d = geometry._point_segment_distance(point, a, b)
+            if d < best_d:
+                best_d, best = d, (face, (a, b))
+    if best is None:
+        return None
+    face, (a, b) = best
+    for other in faces:
+        if other is face:
+            continue
+        pts = other.face_points if False else face_points(other)
+        if sum(1 for q in pts if _same_xy(q, a) or _same_xy(q, b)) == 2:
+            return face, other, (a, b)
+    return None
+
+
+def flip_edge(document, face_a, face_b) -> CompositeCommand | None:
+    """The two faces sharing an edge, re-cut along the other diagonal."""
+    pa, pb = face_points(face_a), face_points(face_b)
+    shared = [q for q in pa if any(_same_xy(q, r) for r in pb)]
+    if len(shared) != 2:
+        return None
+    apex_a = next(q for q in pa if not any(_same_xy(q, r) for r in shared))
+    apex_b = next(q for q in pb if not any(_same_xy(q, r) for r in shared))
+    b, c = shared
+    if not _tin._segments_cross(apex_a, apex_b, b, c):
+        return None                                   # the quad is not convex
+    name = face_name(face_a)
+    t1 = (apex_a, b, apex_b) if _tin.orient(apex_a, b, apex_b) > 0 else (apex_a, apex_b, b)
+    t2 = (apex_a, apex_b, c) if _tin.orient(apex_a, apex_b, c) > 0 else (apex_a, c, apex_b)
+    return CompositeCommand("flip edge", [
+        EraseCommand([face_a, face_b]),
+        AddEntityCommand("TOPO-TIN", _face_factory(*t1, name), layer=face_a.dxf.layer),
+        AddEntityCommand("TOPO-TIN", _face_factory(*t2, name), layer=face_a.dxf.layer),
+    ])
+
+
+def delete_faces(faces) -> CompositeCommand:
+    return CompositeCommand("delete triangles", [EraseCommand(list(faces))])
+
+
+def insert_point(document, faces, point) -> CompositeCommand | None:
+    """Bowyer-Watson on the drawn surface: the faces whose circumcircle
+    holds the point go, the fan around the point comes in."""
+    p = _vertex_xyz(point)
+    cavity = []
+    for face in faces:
+        a, b, c = face_points(face)
+        if _tin.in_circle(a, b, c, p) or face_at([face], p) is face:
+            cavity.append(face)
+    if not cavity:
+        return None
+    name = face_name(cavity[0])
+    layer = cavity[0].dxf.layer
+    counts: dict = {}
+    for face in cavity:
+        pts = face_points(face)
+        for i in range(3):
+            a, b = pts[i], pts[(i + 1) % 3]
+            key = (round(a[0], 6), round(a[1], 6), round(b[0], 6), round(b[1], 6))
+            rev = (key[2], key[3], key[0], key[1])
+            if rev in counts:
+                counts.pop(rev)                       # interior edge: both sides in the cavity
+            else:
+                counts[key] = (a, b)
+    commands = [EraseCommand(cavity)]
+    for a, b in counts.values():
+        if _tin.orient(a, b, p) > 0:
+            tri = (a, b, p)
+        else:
+            tri = (b, a, p)
+        commands.append(AddEntityCommand("TOPO-TIN", _face_factory(*tri, name), layer=layer))
+    return CompositeCommand("insert point", commands)
+
+
+def clip_surface(faces, polygon, keep_inside: bool = True) -> CompositeCommand:
+    gone = []
+    for face in faces:
+        a, b, c = face_points(face)
+        centre = ((a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0)
+        inside = geometry.contains(polygon, centre)
+        if inside != keep_inside:
+            gone.append(face)
+    return CompositeCommand("clip surface", [EraseCommand(gone)] if gone else [])
+
+
+def surface_report(tin: _tin.Tin) -> str:
+    st = tin.stats()
+    return _tr("{name}: {t} triangles, {p} points, {e} edges ({b} on the border), "
+               "Z {zmin:.2f} to {zmax:.2f}, area 2D {a2:.2f} m², 3D {a3:.2f} m²",
+               name=tin.name, t=st["triangles"], p=st["points"], e=st["edges"],
+               b=st["boundary_edges"], zmin=st["z_min"], zmax=st["z_max"],
+               a2=st["area_2d"], a3=st["area_3d"])

@@ -223,6 +223,10 @@ insertar punto), `TINCHECK`. La TIN se materializa como 3DFACE con XDATA.
   en un paquete.
 - Umbral para elegir: si scipy suma menos del 25 % al Flatpak y la
   importación diferida cuesta menos de 1 s, va scipy. Si no, propia.
+- **Decidido el 2026-09-05, con el número:** scipy instalado son ~110 MB, un
+  30 % del Flatpak, por encima del tope. Se escribió la **propia**
+  (`plugins/topografia/tin.py`): 20 000 puntos en 0,43 s, cuenta de Euler
+  exacta, líneas límite por volteo de aristas. Detalle en el CLAUDE.md.
 - **DoD:** con los puntos reales de T1, la TIN respeta cada línea límite
   (ningún triángulo la cruza, test), 20 000 puntos triangulan en menos de
   2 s, y el DWG con 3DFACE abre en BricsCAD como superficie visible.

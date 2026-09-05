@@ -29,5 +29,14 @@
   },
   "UTMGRID": {
     "name": "RETICULA"
+  },
+  "TIN": {
+    "name": "TRIANGULAR"
+  },
+  "TINEDIT": {
+    "name": "EDITARTIN"
+  },
+  "TINCHECK": {
+    "name": "REVISARTIN"
   }
 }

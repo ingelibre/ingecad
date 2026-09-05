@@ -15,6 +15,7 @@ from core.i18n import tr
 from tools.base import Tool
 
 from . import actions, geometry
+from . import tin as tin_mod
 from .points import (SurveyPoint, format_points, parse_bearing, parse_points,
                      point_from_bearing, sniff_order)
 
@@ -696,7 +697,198 @@ class UtmGridTool(Tool):
         return []
 
 
+# ======================================================================
+# T3: the surface
+# ======================================================================
+
+class TinTool(Tool):
+    """TIN: triangulate the selected points (and breaklines) into a surface."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "TIN"
+        self._points = []
+        self._breaklines = []
+        self._name = "TERRENO"
+        self._stage = "name"
+
+    def selection_prompt(self) -> str:
+        return tr("Select points and breaklines to triangulate:")
+
+    def on_selection(self, entities: list) -> None:
+        self._points, self._breaklines = actions.surface_inputs(entities)
+        if len(self._points) + sum(len(b) for b in self._breaklines) < 3:
+            self.ctx.echo(tr("A surface needs at least three points."))
+            self.ctx.finish()
+            return
+        self._stage = "name"
+        self.prompt("Surface name <{name}>:", name=self._name)
+
+    def on_option(self, text: str) -> bool:
+        if self._stage == "name":
+            self._name = text.strip() or self._name
+            self._ask_edge()
+            return True
+        if self._stage == "edge":
+            try:
+                value = _number(text)
+            except ValueError:
+                self.ctx.echo(tr("Invalid length: {text}", text=text))
+                return True
+            self._run(value if value > 0 else None)
+            return True
+        return False
+
+    def _ask_edge(self) -> None:
+        self._stage = "edge"
+        self.prompt("Maximum edge length (Enter for none):")
+
+    def on_enter(self) -> None:
+        if self._stage == "name":
+            self._ask_edge()
+        elif self._stage == "edge":
+            self._run(None)
+        else:
+            self.ctx.finish()
+
+    def _run(self, max_edge) -> None:
+        try:
+            tin = tin_mod.build_tin(self._points, self._breaklines, max_edge=max_edge,
+                                    name=self._name)
+        except ValueError as exc:
+            self.ctx.echo(tr("Cannot triangulate: {error}", error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.execute(actions.build_surface(_document(self.ctx), tin))
+        self.ctx.echo(actions.surface_report(tin))
+        self.ctx.finish()
+
+
+class TinEditTool(Tool):
+    """TINEDIT: flip an edge, delete a triangle, insert a point, clip to a
+    polygon -- on the drawn surface, each an undo step."""
+
+    def start(self) -> None:
+        self.name = "TINEDIT"
+        self._stage = "option"
+        self._point = None
+        self._ask()
+
+    def _faces(self):
+        return actions.surface_faces(_document(self.ctx))
+
+    def _ask(self) -> None:
+        self._stage = "option"
+        self.prompt("Enter option [Flip/Delete/Insert/Clip] or press Enter to finish:")
+
+    def on_option(self, text: str) -> bool:
+        if self._stage == "option":
+            key = self.option(text)
+            prompts = {"F": "Pick a point near the edge to flip:",
+                       "D": "Pick a point inside the triangle to delete:",
+                       "I": "Specify the point to insert:",
+                       "C": "Pick the boundary polyline:"}
+            if key not in prompts:
+                return False
+            self._stage = key
+            self.prompt(prompts[key])
+            return True
+        if self._stage == "z":
+            try:
+                z = _number(text)
+            except ValueError:
+                self.ctx.echo(tr("Invalid elevation: {text}", text=text))
+                return True
+            self._insert(z)
+            return True
+        return False
+
+    def on_point(self, point) -> None:
+        faces = self._faces()
+        if not faces:
+            self.ctx.echo(tr("There is no surface in this space."))
+            self.ctx.finish()
+            return
+        if self._stage == "F":
+            hit = actions.nearest_edge(faces, point)
+            command = actions.flip_edge(_document(self.ctx), hit[0], hit[1]) if hit else None
+            if command is None:
+                self.ctx.echo(tr("That edge cannot be flipped."))
+            else:
+                self.ctx.execute(command)
+                self.ctx.echo(tr("Edge flipped."))
+            self._ask()
+        elif self._stage == "D":
+            face = actions.face_at(faces, point)
+            if face is None:
+                self.ctx.echo(tr("No triangle there."))
+            else:
+                self.ctx.execute(actions.delete_faces([face]))
+                self.ctx.echo(tr("Triangle deleted."))
+            self._ask()
+        elif self._stage == "I":
+            self._point = point
+            tin = actions.read_surface(_document(self.ctx), faces=faces)
+            z = tin.z_at(point[0], point[1])
+            self._stage = "z"
+            self.prompt("Elevation <{z:.2f}>:", z=z if z is not None else 0.0)
+        elif self._stage == "C":
+            pick = getattr(self.ctx.services, "pick_entity", None)
+            entity = pick(point) if pick else None
+            polygon = geometry.polygon_vertices(entity) if entity is not None else None
+            if polygon is None:
+                self.ctx.echo(tr("Pick a closed polyline."))
+            else:
+                command = actions.clip_surface(faces, polygon)
+                self.ctx.execute(command)
+                self.ctx.echo(tr("{n} triangles outside the boundary removed.",
+                                 n=len(command.commands[0].entities) if command.commands else 0))
+            self._ask()
+
+    def on_enter(self) -> None:
+        if self._stage == "z":
+            tin = actions.read_surface(_document(self.ctx), faces=self._faces())
+            z = tin.z_at(self._point[0], self._point[1])
+            self._insert(z if z is not None else 0.0)
+        elif self._stage == "option":
+            self.ctx.finish()
+        else:
+            self._ask()
+
+    def _insert(self, z: float) -> None:
+        command = actions.insert_point(_document(self.ctx), self._faces(),
+                                       (self._point[0], self._point[1], z))
+        if command is None:
+            self.ctx.echo(tr("The point is outside the surface."))
+        else:
+            self.ctx.execute(command)
+            self.ctx.echo(tr("Point inserted at Z={z:.2f}.", z=z))
+        self._ask()
+
+
+class TinCheckTool(Tool):
+    """TINCHECK: what the surface in this space is made of."""
+
+    def start(self) -> None:
+        self.name = "TINCHECK"
+        document = _document(self.ctx)
+        names = actions.surface_names(document)
+        if not names:
+            self.ctx.echo(tr("There is no surface in this space."))
+        for name in names:
+            tin = actions.read_surface(document, name)
+            self.ctx.echo(actions.surface_report(tin))
+            bad = tin.stats()["bad_edges"]
+            if bad:
+                self.ctx.echo(tr("{n} edges are shared by more than two triangles.", n=bad))
+        self.ctx.finish()
+
+
 TOOL_CLASSES = {
+    "TIN": TinTool,
+    "TINEDIT": TinEditTool,
+    "TINCHECK": TinCheckTool,
     "PIMPORT": ImportPointsTool,
     "PEXPORT": ExportPointsTool,
     "PBY": PointByBearingTool,

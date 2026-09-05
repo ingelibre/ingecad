@@ -466,6 +466,47 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-05 (quinquies) — T3: la triangulación, propia y medida
+
+**La decisión del plan se tomó con el número en la mano: Delaunay propia,
+sin scipy.** scipy son 35 MB de wheel y ~110 MB instalados, un 30 % del
+Flatpak, por encima del 25 % que el plan fijó como tope. La propia vive en
+`plugins/topografia/tin.py`: Bowyer–Watson incremental, puntos insertados
+en orden de serpiente por celdas para que la caminata hasta el triángulo
+contenedor sea corta, cavidad por el grafo de vecinos, líneas límite por
+volteo de aristas (Sloan 1993), contorno y longitud máxima de arista.
+**Medido: 20 000 puntos en 0,43 s**, y la cuenta de Euler (T = 2n − h − 2)
+exacta a 300, 1 500, 5 000 y 20 000 puntos, con la propiedad del
+circuncírculo vacío verificada por muestreo y una grilla regular de 900
+puntos (todos cocirculares) sin un solo volteo espurio.
+
+**En el dibujo:** TIN (puntos seleccionados y polilíneas o líneas como
+líneas límite → una 3DFACE por triángulo en `TOPO-TIN`, con nombre de
+superficie en XDATA), TINEDIT (voltear arista, suprimir triángulo, insertar
+punto con cota interpolada —Bowyer–Watson sobre las caras dibujadas—, y
+recortar por una polilínea), TINCHECK (triángulos, puntos, aristas, borde,
+rango de Z, área 2D y 3D). El levantamiento sintético con el lote como
+línea límite: 158 triángulos en 3 ms, y los cinco lados del lote son
+aristas de la superficie (test).
+
+⚠️ **Tres bugs que sólo la medición destapó, los tres de adyacencia:**
+1. Un triángulo exterior que toca la cavidad por DOS aristas recibía el
+   vecino nuevo en «la primera ranura que apunta a la cavidad», que puede
+   ser la de la otra arista → caminatas que se salían de la triangulación.
+   La ranura se elige por la arista exacta.
+2. **El supertriángulo finito no es un detalle:** con 1 000 × el tamaño,
+   la cobertura del casco convexo era 99,995 % a 300 puntos, 98,6 % a
+   1 500 y **57 % a 20 000** —un triángulo de borde muy obtuso tiene un
+   circuncírculo que alcanza al vértice ficticio, y cuantos más puntos,
+   más triángulos así—. La regla correcta: un vértice ficticio está en el
+   infinito, y el «círculo» de un triángulo que lo contiene es el semiplano
+   más allá de su arista real. Cobertura 100,0000 % en los cuatro tamaños.
+3. Al voltear una arista, el mapa de aristas actualizaba los dueños de
+   `(b,d)` y `(c,a)` con `b, c` tomados de la clave ORDENADA, no del orden
+   CCW del triángulo: la mitad de las veces era el par equivocado y un
+   volteo posterior encontraba dos «vecinos» que no lo eran. `_flip`
+   devuelve ahora la arista vieja en el orden del triángulo.
+
 ## 🗓 Sesión 2026-09-05 (quater) — T2: polígonos (rotulado, cuadro de construcción, subdivisión, retícula)
 
 **Cinco comandos más en Topografía ▸ Polígonos, todos sobre polilíneas y
