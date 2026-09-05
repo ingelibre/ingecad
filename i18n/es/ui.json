@@ -1341,5 +1341,14 @@
   "DWG 2018 — Open CAD Studio (*.dwg)": "DWG 2018 — Open CAD Studio (*.dwg)",
   "DXF (*.dxf)": "DXF (*.dxf)",
   "Saved {name} (DWG 2018 via Open CAD Studio)": "Guardado {name} (DWG 2018 vía Open CAD Studio)",
-  "DWG support needs a converter — LibreDWG (dwg2dxf) or Open CAD Studio — and neither was found.": "El soporte DWG necesita un conversor —LibreDWG (dwg2dxf) u Open CAD Studio— y no se encontró ninguno."
+  "DWG support needs a converter — LibreDWG (dwg2dxf) or Open CAD Studio — and neither was found.": "El soporte DWG necesita un conversor —LibreDWG (dwg2dxf) u Open CAD Studio— y no se encontró ninguno.",
+  "Plugins...": "Complementos...",
+  "Plugins": "Complementos",
+  "A plugin adds a menu of its own. Turn it off and everything it added goes away.": "Un complemento agrega un menú propio. Al apagarlo desaparece todo lo que agregó.",
+  "Version {v}": "Versión {v}",
+  "unavailable: {reason}": "no disponible: {reason}",
+  "Bundled with IngeCAD": "Incluido con IngeCAD",
+  "Installed by you": "Instalado por vos",
+  "Location: {path}": "Ubicación: {path}",
+  "No plugins found.": "No se encontró ningún complemento."
 }

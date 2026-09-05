@@ -92,7 +92,7 @@ plugins/
 │   ├── geo.py, tin.py, contours.py, sections.py, volumes.py  ← matemática pura, numpy
 │   ├── i18n/es/{ui,commands}.json
 │   ├── resources/icons/
-│   └── tests/             ← corre con la suite (pytest descubre plugins/*/tests)
+│   └── (tests en tests/test_<id>_*.py, que es lo que corre el CI)
 ├── terreno/
 ├── redes/
 └── carreteras/
@@ -172,7 +172,7 @@ Convenciones de entidades (las que cualquier CAD entiende):
 
 | objeto | entidad DXF | capa por defecto | XDATA |
 |---|---|---|---|
-| punto topográfico | POINT en (E, N, Z) + TEXT número / cota / descripción | `TOPO-PUNTOS`, `TOPO-COTAS`, `TOPO-DESC` | id, descripción |
+| punto topográfico | POINT en (E, N, Z) + TEXT número / cota / descripción | `TOPO-PUNTOS`, `TOPO-NUMEROS`, `TOPO-COTAS`, `TOPO-DESC` | número y descripción en el POINT; cada etiqueta lleva el handle de su punto |
 | triangulación | 3DFACE por triángulo | `TOPO-TIN` | id de superficie |
 | línea límite (breakline) | LWPOLYLINE / POLYLINE 3D | `TOPO-LIMITES` | id de superficie |
 | curva de nivel | LWPOLYLINE con `elevation` | `TOPO-CN-GRUESA`, `TOPO-CN-FINA` | intervalo |

@@ -264,11 +264,20 @@ class MainWindow(QMainWindow):
         # command window spans the drawing area, not the palette).
         self.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
 
+        # Plugins (docs/plugins.md): discovered now, so the menus can list
+        # them; activated once the toolbars exist, since they add to both.
+        from core.plugins import PluginManager
+
+        self.plugins = PluginManager(host=self)
+        self.plugins.discover()
+        self._plugin_toolbars: dict = {}
+
         self._build_menus()
         self._build_status_bar()
         self._build_command_line()
         self._build_sidebar()
         self._build_toolbars()
+        self.plugins.activate_enabled()
         self.viewport.cursorMoved.connect(self._on_cursor_moved)
 
         # Frameless windows have no system resize borders; an app-wide filter
@@ -1011,6 +1020,17 @@ class MainWindow(QMainWindow):
         cmd_item(modify_menu, tr("Explode"), "EXPLODE")
 
         # -- Tools ------------------------------------------------------------
+        # -- Plugins: one menu each, between Modify and Tools -----------------
+        # The PySide6 gotcha below (Python-owned QMenus) bites here first: a
+        # menu created in a loop has no local name, so it must be held until
+        # the keep-alive pass at the end of this method has seen it.
+        plugin_menus: list = []
+        for spec in self.plugins.active_specs():
+            if spec.menu:
+                top = menu_bar.addMenu(tr(spec.name))
+                plugin_menus.append(top)
+                self._fill_plugin_menu(top, spec.menu, plugin_menus)
+
         tools_menu = menu_bar.addMenu(tr("Tools"))
         # AutoCAD's Tools > Draw Order, with its two entries: the command
         # itself still asks Front/Back, but nobody should have to find that
@@ -1025,6 +1045,7 @@ class MainWindow(QMainWindow):
         item(tools_menu, tr("Quick Select..."), self._cmd_qselect)
         item(tools_menu, tr("QuickCalc"), self._cmd_quickcalc)
         item(tools_menu, tr("Group..."), self._cmd_group)
+        item(tools_menu, tr("Plugins..."), self._cmd_plugins)
         inquiry_menu = tools_menu.addMenu(tr("Inquiry"))
         cmd_item(inquiry_menu, tr("Distance"), "DIST", icon=False)
         cmd_item(inquiry_menu, tr("Area"), "AREA", icon=False)
@@ -1062,15 +1083,121 @@ class MainWindow(QMainWindow):
         # PySide6 gotcha: QMenus returned by addMenu(title) are Python-owned
         # — without a live reference, gc.collect() DELETES them (menus and
         # submenus would vanish from a running app). Keep them all.
+        # And call .menu() ONCE per action: a second call hands back a
+        # throwaway wrapper, and the C++ menu dies with it (measured: 1 of
+        # 22 menus survived a version that tested `.menu() is not None`
+        # and then called it again).
         self._menus = []
-        for action in menu_bar.actions():
-            menu = action.menu()
-            if menu is None:
-                continue
+
+        def keep(menu) -> None:
             self._menus.append(menu)
             for sub in menu.actions():
-                if sub.menu() is not None:
-                    self._menus.append(sub.menu())
+                child = sub.menu()
+                if child is not None:
+                    keep(child)               # plugin menus nest deeper
+
+        for action in menu_bar.actions():
+            menu = action.menu()
+            if menu is not None:
+                keep(menu)
+
+    # -- plugins: the host side of core/plugins.py --------------------------
+    def _fill_plugin_menu(self, menu, items, keep: list) -> None:
+        """Build a plugin's menu entries; every submenu goes into ``keep``
+        so it outlives this call (see the ownership note in _build_menus)."""
+        from PySide6.QtGui import QIcon
+
+        from core.plugins import SEPARATOR, Submenu
+        from views.icons import command_icon
+
+        for entry in items:
+            if entry == SEPARATOR:
+                menu.addSeparator()
+            elif isinstance(entry, Submenu):
+                sub = menu.addMenu(tr(entry.label))
+                keep.append(sub)
+                self._fill_plugin_menu(sub, entry.items, keep)
+            else:
+                act = QAction(tr(entry.label), self)
+                act.setIcon(QIcon(str(entry.icon)) if entry.icon
+                            else command_icon(entry.command))
+                act.triggered.connect(
+                    lambda _=False, n=entry.command: self._invoke_command(n))
+                menu.addAction(act)
+
+    def _cmd_plugins(self, *args) -> None:
+        """PLUGINS: the manager (Tools > Plugins...)."""
+        from views.plugins_dialog import PluginsDialog
+
+        PluginsDialog(self).exec()
+
+    def register_command(self, name: str, handler) -> None:
+        self.dispatcher.register(name, handler)
+
+    def unregister_command(self, name: str) -> None:
+        self.dispatcher.unregister(name)
+
+    def register_tools(self, mapping: dict, owner: str) -> None:
+        from views.tool_controller import register_tool_classes
+
+        register_tool_classes(mapping, owner)
+
+    def unregister_tools(self, names, owner: str) -> None:
+        from views.tool_controller import unregister_tool_classes
+
+        unregister_tool_classes(names, owner)
+
+    def add_alias(self, alias: str, command: str) -> bool:
+        """A plugin alias, unless the user's PGP or the core already answers
+        to that token -- an alias always wins over a command name, so a
+        plugin must never be able to take one."""
+        alias = alias.upper()
+        if alias in self.dispatcher.aliases or alias in self.dispatcher._commands:
+            return False
+        self.dispatcher.aliases[alias] = command.upper()
+        return True
+
+    def remove_alias(self, alias: str) -> None:
+        self.dispatcher.aliases.pop(alias.upper(), None)
+
+    def add_pack_dir(self, path) -> None:
+        i18n.register_pack_dir(path)
+
+    def remove_pack_dir(self, path) -> None:
+        i18n.unregister_pack_dir(path)
+
+    def add_toolbar(self, spec) -> None:
+        from PySide6.QtGui import QIcon
+        from PySide6.QtWidgets import QToolBar
+
+        from views.icons import command_icon
+
+        bar = QToolBar(tr(spec.name), self)
+        bar.setObjectName(f"plugin_{spec.id}_toolbar")
+        bar.setMovable(True)
+        for entry in spec.toolbar:
+            icon = QIcon(str(entry.icon)) if entry.icon else command_icon(entry.command)
+            act = QAction(icon, tr(entry.label), self)
+            act.setToolTip(f"{tr(entry.label)} ({entry.command})")
+            act.triggered.connect(
+                lambda _=False, n=entry.command: self._invoke_command(n))
+            bar.addAction(act)
+        self.addToolBar(Qt.TopToolBarArea, bar)
+        self._plugin_toolbars[spec.id] = bar
+
+    def remove_toolbar(self, plugin_id: str) -> None:
+        bar = self._plugin_toolbars.pop(plugin_id, None)
+        if bar is not None:
+            self.removeToolBar(bar)
+            bar.setParent(None)        # gone from findChildren at once,
+            bar.deleteLater()          # not at the next event-loop turn
+
+    def menus_changed(self) -> None:
+        self._build_menus()
+
+    def echo(self, text: str) -> None:
+        """What a plugin says goes to the command window."""
+        self.command_line.echo(text)
 
     def _report_problem(self) -> None:
         """Open the issue chooser: three guided forms, Spanish welcome.
@@ -1511,6 +1638,7 @@ class MainWindow(QMainWindow):
         self._refresh_layout_tabs()
         self.viewport.set_scene(None)
         self.tools.attach_document(self.document)
+        self.plugins.document_opened(self.document)
         if self._layers_panel is not None:
             self._layers_panel.refresh()
         if getattr(self, "_styles_panel", None) is not None:
@@ -2220,6 +2348,7 @@ class MainWindow(QMainWindow):
         d.register("VIEWRES", self._cmd_viewres)
         d.register("CURSORSIZE", self._cmd_cursorsize)
         d.register("PICKBOX", self._cmd_pickbox)
+        d.register("PLUGINS", self._cmd_plugins)
         d.register("BEDIT", self._cmd_bedit)
         d.register("-BEDIT", self._cmd_bedit)
         d.register("BSAVE", self._cmd_bsave)
@@ -3825,6 +3954,7 @@ class MainWindow(QMainWindow):
         self._layout_scenes[self._active_layout] = (document.revision, scene)
         self.viewport.zoom_extents()
         self.tools.attach_document(document, flatten=scene.flatten)
+        self.plugins.document_opened(document)
         if self._layers_panel is not None:
             self._layers_panel.refresh()   # show the opened drawing's layers
         if getattr(self, "_styles_panel", None) is not None:

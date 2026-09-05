@@ -158,6 +158,23 @@ def _self_check() -> int:
               f"under {i18n.i18n_dir()}")
         problems.append("translations")
 
+    # Plugins ship as folders under plugins/ (docs/plugins.md); a bundle
+    # that forgot them, or the module one of them needs, starts fine and
+    # simply has no Topography menu -- the same silent loss as a language.
+    from core.plugins import PluginManager
+
+    plugins_dir = root / "plugins"
+    manager = PluginManager()
+    found = manager.discover()
+    print(f"  plugins       : {len(found)} ({', '.join(found) or 'none'})  {plugins_dir}")
+    if not plugins_dir.is_dir():
+        print(f"  {'plugins dir':<14}: MISSING  {plugins_dir}")
+        problems.append("plugins dir")
+    for pid, reason in manager.problems():
+        print(f"  plugin {pid:<7}: UNAVAILABLE  {reason}")
+        if manager.loaded[pid].bundled:
+            problems.append(f"plugin {pid}")
+
     # The drawing frontend resolves hatch patterns and text through these; a
     # missing hidden import shows up here rather than on the first HATCH.
     for label, module in (

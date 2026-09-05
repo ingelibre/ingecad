@@ -19,6 +19,9 @@ ROOT = Path(os.environ.get("INGECAD_ROOT", os.getcwd())).resolve()
 datas = [
     (str(ROOT / "resources"), "resources"),
     (str(ROOT / "i18n"), "i18n"),
+    # Plugins are loaded by path from app_root()/plugins, never imported as
+    # a package, so they travel as data like the language packs do.
+    (str(ROOT / "plugins"), "plugins"),
 ]
 
 # The two LibreDWG converters, as binaries so the executable bit survives.

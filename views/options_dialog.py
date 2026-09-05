@@ -101,6 +101,16 @@ class OptionsDialog(QDialog):
         self.tabs.addTab(self._drafting_tab(), tr("Drafting"))
         self.tabs.addTab(self._user_tab(), tr("User Preferences"))
         self.tabs.addTab(self._selection_tab(), tr("Selection"))
+        # A plugin may add a page of its own (docs/plugins.md): built with
+        # (dialog, window), and its apply() runs with the others on OK.
+        self._plugin_pages: list = []
+        manager = getattr(window, "plugins", None)
+        for spec in (manager.active_specs() if manager is not None else []):
+            if spec.options_page is None:
+                continue
+            page = spec.options_page(self, window)
+            self.tabs.addTab(page, tr(spec.name))
+            self._plugin_pages.append(page)
         root.addWidget(self.tabs, 1)
 
         buttons = QDialogButtonBox(
@@ -459,4 +469,7 @@ class OptionsDialog(QDialog):
 
     def _ok(self) -> None:
         self.apply()
+        for page in self._plugin_pages:
+            if hasattr(page, "apply"):
+                page.apply()
         self.accept()

@@ -59,6 +59,10 @@ class Dispatcher:
         """A command in scope but not implemented yet: answer honestly."""
         self._commands[name.upper()] = _Entry(handler=None, phase=phase)
 
+    def unregister(self, name: str) -> None:
+        """Forget a command (a plugin turning off). Unknown names are fine."""
+        self._commands.pop(name.upper(), None)
+
     def known_names(self) -> list[str]:
         """Commands + aliases, for prompt autocompletion.
 

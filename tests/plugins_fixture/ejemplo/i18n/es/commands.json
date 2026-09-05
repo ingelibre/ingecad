@@ -1,0 +1,5 @@
+{
+  "_": "Localized command names of the sample plugin: the English name always keeps working.",
+  "HELLO": {"name": "HOLA"},
+  "ECHOPT": {"name": "REPETIRPUNTO"}
+}

@@ -466,6 +466,47 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-05 (bis) — P0: el contrato de complementos y su gestor
+
+**Arrancó el plan de complementos (`docs/plan-complementos.md`) por su fase
+P0, y P0 está hecha.** El contrato vive en `core/plugins.py` (`PluginSpec`,
+`PluginManager`, `PluginContext`), el gestor en Herramientas ▸
+Complementos… (`views/plugins_dialog.py`, comando `PLUGINS`), y el
+contrato escrito para contribuidores en `docs/plugins.md`. Un complemento
+es una carpeta `plugins/<id>/` con `PLUGIN = PluginSpec(...)`; al
+activarse registra comandos, herramientas y alias, fusiona su pack de
+idioma (`plugins/<id>/i18n/<lang>/{ui,commands}.json`), y agrega su menú
+(entre Modify y Tools) y su barra; al apagarse quita exactamente eso.
+
+**Los cuatro ganchos que hicieron falta, todos chicos:**
+`Dispatcher.unregister`; `register_tool_classes` / `unregister_tool_classes`
+sobre el ÚNICO registro que lee `start_tool` (un nombre del núcleo se
+rechaza entero: un complemento agrega LINE jamás); `i18n.register_pack_dir`
+(el catálogo del complemento se fusiona DESPUÉS del de la app, que gana el
+empate, y el inglés nunca se pierde); y la ventana como *host* con una
+docena de métodos duck-typed. Los alias que el PGP del usuario o el núcleo
+ya contestan no se toman (un alias gana sobre un nombre, así que un
+complemento no puede quedarse con `L`). Una dependencia ausente lista el
+complemento como «no disponible: necesita X», nunca rompe el arranque.
+
+**El test que sostiene el diseño:** `tests/test_plugins.py` activa y
+desactiva el complemento de muestra (`tests/plugins_fixture/ejemplo/`) y
+exige que despachador, alias, registro de herramientas, menús, barras,
+nombres localizados y packs queden **idénticos** a antes — y que la segunda
+activación devuelva exactamente lo que la primera. La cobertura de
+traducción mide cada complemento incluido contra SU pack. Los tres paquetes
+llevan `plugins/` (manifiesto Flatpak, `datas` del `.spec`, y un test
+estructural que lo vigila) y `main.py --check` los lista.
+
+⚠️ **La trampa de PySide del día, medida:** el bucle que «conserva» los
+menús (`self._menus`) guarda envoltorios que **ya están muertos** al salir
+de `_build_menus` —21 de 22 dan RuntimeError al pedirles el título, también
+en HEAD— y los menús siguen vivos por el padre C++. Lo que sí mata un menú
+es dejar morir el envoltorio de su **acción** de la barra: un
+`next(a.menu() for a in bar.actions() if ...)` lo tumba en la línea
+siguiente. Regla: la lista de `bar.actions()` se guarda en un local mientras
+se usa el menú, y `.menu()` se llama **una** vez por acción.
+
 ## 🗓 Sesión 2026-08-29 (bis) — v0.4.7: lo que Marco encontró usándolo
 
 Una sesión entera de dogfooding suyo, comando por comando, y **de siete

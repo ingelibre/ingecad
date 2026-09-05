@@ -61,7 +61,7 @@ modules:
       - pip3 install --prefix=${FLATPAK_DEST} --no-warn-script-location -r reqs.txt
       # 2. The application, as source — GPL code hides from nobody.
       - mkdir -p ${FLATPAK_DEST}/ingecad
-      - cp -a main.py core views render formats tools resources i18n LICENSE ${FLATPAK_DEST}/ingecad/
+      - cp -a main.py core views render formats tools plugins resources i18n LICENSE ${FLATPAK_DEST}/ingecad/
       - find ${FLATPAK_DEST}/ingecad -name '__pycache__' -type d -exec rm -rf {} +
       # 3. Launcher + desktop integration
       - install -Dm755 packaging/flatpak/flatpak-launcher.sh ${FLATPAK_DEST}/bin/ingecad

@@ -112,6 +112,45 @@ ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES,
                     **CONSTRUCT_TOOL_CLASSES, **INQUIRY_TOOL_CLASSES,
                     **MODIFY_TOOL_CLASSES}
 
+
+#: name -> (owner, windows using it). The registry is process-wide and a
+#: process may hold several windows, each activating the same plugin: the
+#: second must find its own names already there and count itself in, and
+#: a name only leaves when the last window lets go.
+_TOOL_OWNERS: dict[str, list] = {}
+
+
+def register_tool_classes(mapping: dict, owner: str = "plugin") -> None:
+    """A plugin's tools join the ONE registry ``start_tool`` reads.
+
+    A name the core owns, or another plugin owns, refuses the whole set: a
+    plugin may add commands, never replace LINE.
+    """
+    clash = sorted(n.upper() for n in mapping
+                   if n.upper() in ALL_TOOL_CLASSES
+                   and _TOOL_OWNERS.get(n.upper(), ("core",))[0] != owner)
+    if clash:
+        raise ValueError(f"tool names already registered: {', '.join(clash)}")
+    for name, cls in mapping.items():
+        key = name.upper()
+        if key in _TOOL_OWNERS:
+            _TOOL_OWNERS[key][1] += 1
+        else:
+            ALL_TOOL_CLASSES[key] = cls
+            _TOOL_OWNERS[key] = [owner, 1]
+
+
+def unregister_tool_classes(names, owner: str = "plugin") -> None:
+    for name in names:
+        key = name.upper()
+        record = _TOOL_OWNERS.get(key)
+        if record is None or record[0] != owner:
+            continue
+        record[1] -= 1
+        if record[1] <= 0:
+            _TOOL_OWNERS.pop(key, None)
+            ALL_TOOL_CLASSES.pop(key, None)
+
 # Sentinel first element of _grip_drag while a VIEWPORT grip is hot — the
 # paper-space grip flow shares the widget's click-move-click plumbing but
 # none of the modelspace snapshot/overlay machinery.

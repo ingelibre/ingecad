@@ -27,7 +27,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from core import i18n  # noqa: E402
 
-SKIP_DIRS = {"build", "web", "vendor", ".venv", "venv", "externos", "tests"}
+SKIP_DIRS = {"build", "web", "vendor", ".venv", "venv", "externos", "tests",
+             "plugins"}     # a plugin's strings live in ITS pack (below)
 
 
 def _maintained() -> list[str]:
@@ -43,7 +44,8 @@ def _maintained() -> list[str]:
 MAINTAINED = _maintained()
 
 
-def _scan() -> tuple[dict[str, str], set[str]]:
+def _scan(root: Path = ROOT,
+          skip: set[str] = SKIP_DIRS) -> tuple[dict[str, str], set[str]]:
     """(literals passed to tr(), every string literal in the sources).
 
     The second set matters: plenty of translated text never appears inside a
@@ -55,8 +57,8 @@ def _scan() -> tuple[dict[str, str], set[str]]:
     """
     calls: dict[str, str] = {}
     literals: set[str] = set()
-    for path in sorted(ROOT.rglob("*.py")):
-        if SKIP_DIRS & set(path.parts):
+    for path in sorted(root.rglob("*.py")):
+        if skip & set(path.relative_to(root).parts):
             continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -173,3 +175,22 @@ def test_coverage_report(capsys) -> None:
                      + ("  [maintained]" if lang in MAINTAINED else ""))
     with capsys.disabled():
         print("\ntranslation coverage\n" + "\n".join(lines))
+
+
+# -- bundled plugins: each carries its own packs, held to the same standard ---
+PLUGIN_DIRS = sorted(p for p in (ROOT / "plugins").glob("*")
+                     if p.is_dir() and (p / "__init__.py").is_file()
+                     and p.name[:1] not in ("_", "."))
+
+
+@pytest.mark.parametrize("folder", PLUGIN_DIRS, ids=[p.name for p in PLUGIN_DIRS])
+@pytest.mark.parametrize("lang", MAINTAINED)
+def test_bundled_plugin_translates_every_string(folder: Path, lang: str) -> None:
+    """A bundled plugin ships ``i18n/<lang>/ui.json`` for every maintained
+    language, and every literal it hands to tr() or prompt() is in it."""
+    calls, _ = _scan(folder, skip=SKIP_DIRS - {"plugins"})
+    pack = i18n.extra_pack(folder / "i18n", lang)
+    table = pack.load() if pack is not None else {}
+    missing = sorted(text for text in calls if text not in table)
+    assert not missing, (f"{folder.name}/{lang}: {len(missing)} untranslated: "
+                         + "; ".join(f"{t!r} at {calls[t]}" for t in missing[:10]))

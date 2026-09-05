@@ -64,17 +64,76 @@ def language_name(code: str) -> str:
     return pack.name if pack else code
 
 
+#: Extra pack roots (a plugin's ``i18n/``), merged after the app's own,
+#: with how many windows registered each: the catalog is process-wide and
+#: a plugin's pack leaves only when the last window lets go of it.
+_pack_dirs: list[Path] = []
+_pack_refs: dict[Path, int] = {}
+
+
+def register_pack_dir(path: Path) -> None:
+    """A plugin's ``i18n/`` joins the active language: its ``<lang>/ui.json``
+    adds the strings the app's catalog does not have (the app wins a clash)
+    and its ``<lang>/commands.json`` adds localized command names."""
+    path = Path(path)
+    _pack_refs[path] = _pack_refs.get(path, 0) + 1
+    if path not in _pack_dirs:
+        _pack_dirs.append(path)
+        set_language(_lang)
+
+
+def unregister_pack_dir(path: Path) -> None:
+    path = Path(path)
+    if path not in _pack_refs:
+        return
+    _pack_refs[path] -= 1
+    if _pack_refs[path] <= 0:
+        _pack_refs.pop(path, None)
+        _pack_dirs.remove(path)
+        set_language(_lang)
+
+
+def pack_dirs() -> list[Path]:
+    return list(_pack_dirs)
+
+
+def extra_pack(root: Path, lang: str):
+    """The pack a plugin folder holds for ``lang`` (``<root>/<lang>/``), or
+    None when it ships nothing for that language."""
+    from .packs import LanguagePack
+
+    folder = Path(root) / lang
+    if not folder.is_dir():
+        return None
+    ui = folder / "ui.json"
+    commands = folder / "commands.json"
+    return LanguagePack(code=lang, name=lang,
+                        catalog=ui if ui.is_file() else None,
+                        commands=commands if commands.is_file() else None)
+
+
 def set_language(lang: str) -> None:
     """Activate ``lang`` for subsequent :func:`tr` calls.
 
     English, an unknown code or a broken file all load an empty catalog, so
-    ``tr`` returns the source string unchanged.
+    ``tr`` returns the source string unchanged. The packs of the active
+    plugins (:func:`register_pack_dir`) are merged after the app's own.
     """
     global _catalog, _command_names, _lang
     _lang = lang or "en"
     pack = language_packs().get(_lang)
-    _catalog = pack.load() if pack is not None else {}
-    _command_names = _commands.table(pack) if pack is not None else {}
+    catalog = dict(pack.load()) if pack is not None else {}
+    names = dict(_commands.table(pack)) if pack is not None else {}
+    for root in _pack_dirs:
+        extra = extra_pack(root, _lang)
+        if extra is None:
+            continue
+        for key, value in extra.load().items():
+            catalog.setdefault(key, value)
+        for token, english in _commands.table(extra).items():
+            names.setdefault(token, english)
+    _catalog = catalog
+    _command_names = names
 
 
 def current_language() -> str:
