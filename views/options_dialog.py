@@ -466,10 +466,12 @@ class OptionsDialog(QDialog):
             # that a language change needs a restart to reach everything
             self.window._set_language(self.language.currentData())
         self.window._update_mode_buttons()
-
-    def _ok(self) -> None:
-        self.apply()
+        # a plugin's page applies with the core ones -- on Apply as much as
+        # on OK, or the button would silently skip half the dialog
         for page in self._plugin_pages:
             if hasattr(page, "apply"):
                 page.apply()
+
+    def _ok(self) -> None:
+        self.apply()
         self.accept()

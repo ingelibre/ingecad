@@ -16,10 +16,10 @@ from dataclasses import dataclass
 from core.actions import AddEntityCommand
 from core.commands import Command, CompositeCommand
 from core.layers import NewLayerCommand
+from core.xdata import APPID, ensure_appid   # noqa: F401  (re-exported)
 
 from .points import SurveyPoint
 
-APPID = "INGECAD"
 POINT_TAG = "TOPO-POINT"
 LABEL_TAG = "TOPO-LABEL"
 
@@ -57,11 +57,6 @@ class LabelStyle:
     text_height: float = 1.0
     labels: tuple = ALL_LABELS
     decimals: int = 2            # of the elevation label
-
-
-def ensure_appid(doc) -> None:
-    if APPID not in doc.appids:
-        doc.appids.add(APPID)
 
 
 class SetHeaderCommand(Command):
@@ -1500,10 +1495,19 @@ def lot_name(document, entity) -> str | None:
 
 
 def memoria_for(document, entity, name: str, location: str, front: int = 0,
-                neighbours: dict | None = None, zone: str = "19 S",
-                datum: str = "WGS84") -> _memoria.Memoria:
+                neighbours: dict | None = None, zone: str | None = None,
+                datum: str | None = None) -> _memoria.Memoria:
     """The descriptive report of a closed polyline, walked clockwise from
-    ``front`` (a side index of the clockwise vertex order)."""
+    ``front`` (a side index of the clockwise vertex order). The datum and
+    zone come from the drawing's georeference (GEOREF) when it has one,
+    else Peru's usual WGS84 / 19 S; a caller may still say otherwise."""
+    from core.georef import read_georef
+
+    declared = read_georef(document.doc)
+    if zone is None:
+        zone = declared.zone_label() if declared else "19 S"
+    if datum is None:
+        datum = declared.datum if declared else "WGS84"
     data = polygon_data(entity, ChartStyle(clockwise=True))
     return _memoria.build_memoria(name, location, data.rows, data.area, data.perimeter,
                                   front, neighbours, datum, zone)

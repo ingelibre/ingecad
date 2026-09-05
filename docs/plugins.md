@@ -63,7 +63,7 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `aliases` | added unless the user's `acad.pgp` or the core already answers to the token — an alias always wins over a command name, so a plugin can never take one |
 | `menu` | one top-level menu per plugin, between *Modify* and *Tools*; labels go through `tr()` when the menu is built |
 | `toolbar` | a `QToolBar` named `plugin_<id>_toolbar`, top area, movable |
-| `options_page` | `callable(dialog, window) -> QWidget` added as a tab to Options; if the widget has `apply()`, it runs on OK |
+| `options_page` | `callable(dialog, window) -> QWidget` added as a tab to Options after the core ones; if the widget has `apply()`, it runs with the core pages on OK and on Apply |
 | `i18n_dir` | `<dir>/<lang>/ui.json` strings merge after the app's catalog (the app wins a clash); `<dir>/<lang>/commands.json` adds localized command names, English always kept |
 | `requires` | module names; a missing one lists the plugin as *unavailable: needs X* instead of breaking start-up |
 | `on_document_open` | `callable(ctx, document)` after a drawing is created or opened |
@@ -78,8 +78,12 @@ They are the project's own, not extra ones:
 2. **The ezdxf document is the model.** A plugin writes plain DXF entities
    in named layers; what it must remember (which 3DFACEs form one surface,
    which UTM zone the drawing is in) goes into XDATA under the `INGECAD`
-   APPID or the document's extension dictionary. The drawing opens in any
-   CAD without IngeCAD.
+   APPID (`core/xdata.py` owns the name and `ensure_appid`) or the root
+   dictionary's `INGECAD` dictionary. What several plugins need to agree on
+   lives in the core, once: the drawing's UTM zone, hemisphere and datum are
+   `core/georef.py` (`read_georef`, `SetGeorefCommand`), declared by the
+   Terrain plugin's GEOREF and read by Topography's reports. The drawing
+   opens in any CAD without IngeCAD.
 3. **Typed is English, read is translated.** Command names are English with
    additive localized names; menus and prompts go through `tr()`. The
    coverage test (`tests/test_i18n_coverage.py`) checks each bundled

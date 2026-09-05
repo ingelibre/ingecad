@@ -1,0 +1,9 @@
+{
+  "_": "Spanish command names of the Terrain plugin. The English names always keep working.",
+  "GEOREF": {
+    "name": "GEORREFERENCIAR"
+  },
+  "LATLON": {
+    "name": "GEOGRAFICAS"
+  }
+}

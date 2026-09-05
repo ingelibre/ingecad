@@ -372,7 +372,8 @@ def test_options_dialog_persists_what_it_offers(qapp, clean_settings):
     try:
         win.new_document("mm")
         dlg = OptionsDialog(win)
-        assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == [
+        # the six core tabs first; a bundled plugin's page (Terrain) after them
+        assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())][:6] == [
             "Files", "Open and Save", "Display", "Drafting",
             "User Preferences", "Selection"]
 

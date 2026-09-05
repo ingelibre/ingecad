@@ -293,6 +293,13 @@ libres y **sin Google Earth instalado**. Casi todo se porta de
 
 ### G1 — Georreferenciación del dibujo (1 sesión)
 
+> **Estado (2026-09-05): hecha.** `plugins/terreno/` (GEOREF, LATLON, página
+> en Opciones ▸ Terreno). El datum vive en `core/georef.py` (diccionario
+> `INGECAD` / XRECORD `GEOREF` del rootdict), sobrevive DXF y DWG r2000, y la
+> memoria descriptiva de Topografía lo lee. Matemática propia medida contra
+> PROJ 9.5.1: < 0,15 mm en la zona 19 S; PSAD56 con EPSG:1208 (Perú).
+> Para G2/G3 falta `--share=network` en el Flatpak.
+
 `GEOREF` (zona UTM y hemisferio, dados o calculados de una longitud
 aproximada; datum WGS84 o **PSAD56** con la transformación para planos
 antiguos del Perú; se guarda en el diccionario del documento y se lee al

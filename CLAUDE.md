@@ -466,6 +466,59 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-05 (decies) — G1: nace el complemento Terreno (georreferenciación)
+
+**Segundo complemento incluido, `plugins/terreno/` (v0.6.0), con dos
+comandos:** GEOREF (zona UTM —dada o calculada de una longitud—,
+hemisferio, datum WGS84 o PSAD56 con su desplazamiento a WGS84; se guarda
+EN el dibujo y se anuncia al abrirlo) y LATLON (designar puntos y leer su
+latitud/longitud WGS84 en decimales y en grados-minutos-segundos, o
+teclear coordenadas geográficas en cualquier forma habitual —`-16.4, -71.5`,
+`16°26'03" S 71°32'11" W`, `16 26 03 S 71 32 11 W`— y marcar el punto con
+un POINT y un TEXT en TERRENO-GEO). Página propia en Opciones ▸ Terreno
+(zona y hemisferio por defecto, desplazamiento PSAD56). Verificado en la
+ventana real sobre `levantamiento-arequipa.dwg`: GEOREF 19 S, LATLON lee
+la esquina V1 del lote (16°26'03.70" S, 71°32'11.24" W) y coloca un punto
+tecleado en el centro del lote.
+
+**Dónde vive el datum: en `core/georef.py`, un solo lugar.** «¿En qué zona
+y datum está este dibujo?» lo contesta el núcleo, no el complemento:
+diccionario `INGECAD` del rootdict con un XRECORD `GEOREF` de cadenas
+`clave=valor` —DXF plano que cualquier CAD conserva—, verificado que
+sobrevive DXF y **DWG r2000 por LibreDWG**, con deshacer exacto y sin dejar
+un diccionario vacío al quitarlo. La memoria descriptiva de Topografía toma
+de ahí el datum y la zona (los tenía fijos en «WGS84 / 19 S»). Y
+`APPID`/`ensure_appid` se fueron a `core/xdata.py` por la misma regla: los
+dos complementos escribían XDATA bajo el mismo nombre, cada uno con su copia.
+
+**La matemática es propia** (`plugins/terreno/datum.py`, portada de
+IngeTrazo y generalizada al elipsoide Internacional 1924): sin pyproj, sin
+dependencia nueva. **Medida contra PROJ 9.5.1** (pyproj bajado al scratchpad
+sólo como referencia): peor caso **0,15 mm** en siete puntos de control de
+la zona 19 S (0,06 mm dentro de la zona), ida y vuelta < 0,15 mm; PSAD56 con
+la transformación **EPSG:1208 (Perú, −279/175/−379 m, ±16 m)** a 0,06 mm de
+PROJ. Las cifras de referencia quedan en el test, con su procedencia.
+
+⚠️ **El hallazgo del día: el cambio de datum no era invertible al
+milímetro, y PROJ tampoco lo es.** El desplazamiento geocéntrico toma la
+altura elipsoidal como cero de SU lado; la altura que resulta (cientos de
+metros, el tamaño del desplazamiento) inclina la normal lo justo para dejar
+**7,4 mm** en el suelo al ir y volver. Contra ±16 m del datum es nada; pero
+una esquina de lote que se corre 7 mm por ir a Google Earth y volver es un
+bug que un topógrafo ve. La vuelta (`from_wgs84`) refina la estimación
+hasta que la ida aterriza en el punto pedido: ida y vuelta a 0,05 mm. Y el
+test de control tuvo que definirse **en la dirección que el complemento
+define** (plano PSAD56 → WGS84): mi primera versión copió los pares de PROJ
+en la dirección contraria y «falló» por esos mismos 7 mm.
+
+⚠️ **Dos cosas ajenas que destapó el primer complemento con página de
+Opciones:** el botón **Aplicar** del diálogo se saltaba las páginas de los
+complementos (sólo Aceptar las aplicaba: el contrato decía «runs on OK» y
+era literal), y el test de Opciones fijaba la lista de pestañas en las seis
+del núcleo. Y la regla de teclas por mayúsculas lee `WGS84` como la tecla
+«WGS84» (los dígitos cuentan), así que el prompt del datum resuelve W/P a
+mano. 39 tests nuevos.
+
 ## 🗓 Sesión 2026-09-05 (nonies) — T7: memoria descriptiva y áreas por lote — **v0.5 completa**
 
 **Dos comandos más en Topografía ▸ Polígonos, y con ellos se cierra el
