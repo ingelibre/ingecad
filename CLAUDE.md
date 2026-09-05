@@ -466,6 +466,38 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-05 (nonies) — T7: memoria descriptiva y áreas por lote — **v0.5 completa**
+
+**Dos comandos más en Topografía ▸ Polígonos, y con ellos se cierra el
+plan de la v0.5 (T1–T7):** MEMORIA (se designa el lado del frente, se
+contesta lado por lado con quién colinda —texto libre, con espacios—,
+nombre y ubicación; sale la memoria descriptiva a `.txt` y su cuadro a
+`.csv`, con la redacción de los trámites peruanos en el pack español: «Por
+el frente: colinda con …, en línea recta de … m (lado V4-V1, rumbo …)»,
+«Por la derecha entrando», «Por el fondo», «Por la izquierda entrando»,
+ÁREA, PERÍMETRO y DATOS TÉCNICOS con datum y zona; opcionalmente como
+MTEXT en el plano) y AREAREPORT (áreas y perímetros de varios lotes con su
+total, en tabla y CSV; el TEXT escrito dentro de cada lote lo nombra).
+
+**El DoD de la v0.5 es un test que corre entero** (`tests/test_topografia_end_to_end.py`):
+el CSV del topógrafo → lindero sobre los vértices exactos → rotulado y
+cuadro de construcción (1 523,77 m²) → memoria → superficie, curvas y
+rótulos → perfil de un eje → plataforma con volúmenes (29,72 / 13,08 m³)
+→ **el modelo sólo contiene POINT, TEXT, MTEXT, LINE, LWPOLYLINE,
+POLYLINE, 3DFACE, HATCH y SOLID**, y tras guardar como DWG r2000 por
+LibreDWG y releer, están los 96 puntos, las mismas entidades y ninguna
+rara. Es exactamente la promesa: el plano se abre en el AutoCAD del colega.
+
+⚠️ **Lo que queda para Marco:** la redacción exacta de la memoria se
+confirma contra un trámite real (COFOPRI / SUNARP / municipio) —cada
+línea es una cadena traducible, así que ajustarla es editar el pack—, y
+abrir en BricsCAD el DWG de `capturas/levantamiento-arequipa.dwg`.
+
+⚠️ **Trampa de test propia:** el frente de un lote dibujado antihorario es
+el ÚLTIMO lado en el orden horario del cuadro (V4-V1), no V1-V2; mi
+aserción esperaba lo segundo. La regla «el cuadro se lista horario» manda
+también sobre los nombres de los lados en la memoria.
+
 ## 🗓 Sesión 2026-09-05 (octies) — T6: plataformas, línea cero y volumen entre superficies
 
 **Tres comandos en Topografía ▸ Plataformas:** PLATFORM (una polilínea

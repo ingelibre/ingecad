@@ -1470,3 +1470,89 @@ def volume_label(document, point, base_name: str, design_name: str, cut: float, 
         commands.append(_text_cmd(text, (point[0], point[1] - k * 1.6 * text_height), text_height,
                                   LAYERS["annotation"][0], align="MIDDLE_LEFT", tag=ANNOT_TAG))
     return CompositeCommand("volume label", commands)
+
+
+# ======================================================================
+# T7: the descriptive report and the report of areas
+# ======================================================================
+
+from . import memoria as _memoria
+
+
+def lot_name(document, entity) -> str | None:
+    """The text written inside the lot (a TEXT or MTEXT whose insertion
+    point falls in it), or None."""
+    pts = geometry.polygon_vertices(entity)
+    if pts is None:
+        return None
+    for other in document.current_space():
+        if other.dxftype() == "TEXT":
+            anchor = other.dxf.insert
+            text = other.dxf.text
+        elif other.dxftype() == "MTEXT":
+            anchor = other.dxf.insert
+            text = other.plain_text()
+        else:
+            continue
+        if text and geometry.contains(pts, (anchor.x, anchor.y)):
+            return text.strip()
+    return None
+
+
+def memoria_for(document, entity, name: str, location: str, front: int = 0,
+                neighbours: dict | None = None, zone: str = "19 S",
+                datum: str = "WGS84") -> _memoria.Memoria:
+    """The descriptive report of a closed polyline, walked clockwise from
+    ``front`` (a side index of the clockwise vertex order)."""
+    data = polygon_data(entity, ChartStyle(clockwise=True))
+    return _memoria.build_memoria(name, location, data.rows, data.area, data.perimeter,
+                                  front, neighbours, datum, zone)
+
+
+def front_side_index(entity, point) -> int:
+    """Which side of the clockwise-ordered lot the point is nearest to."""
+    pts = geometry.oriented(geometry.polygon_vertices(entity), True)
+    return geometry.nearest_side(pts, point).index
+
+
+def memoria_mtext(document, point, text: str, text_height: float = 1.0,
+                  width: float | None = None) -> CompositeCommand:
+    lines = text.splitlines()
+    longest = max((len(line) for line in lines), default=20)
+    box = width if width else longest * text_height * 0.75
+
+    def make(msp):
+        ensure_appid(msp.doc)
+        entity = msp.add_mtext("\\P".join(lines), dxfattribs={"char_height": text_height, "width": box})
+        entity.set_location((point[0], point[1]), attachment_point=1)
+        entity.set_xdata(APPID, [(1000, "TOPO-MEMORIA")])
+        return entity
+    return CompositeCommand("descriptive report", layer_commands(document, ("table",)) + [
+        AddEntityCommand("TOPO-MEMORIA", make, layer=LAYERS["table"][0])])
+
+
+def lots_of(document, entities) -> list:
+    """The closed polylines among ``entities`` as lots: the text inside
+    each names it, else LOTE 1, 2, 3..."""
+    lots = []
+    for entity in entities:
+        pts = geometry.polygon_vertices(entity)
+        if pts is None:
+            continue
+        name = lot_name(document, entity) or _tr("LOT {n}", n=len(lots) + 1)
+        lots.append(_memoria.Lot(name, area_of(entity) or geometry.area(pts), geometry.perimeter(pts)))
+    return lots
+
+
+def lots_table(document, lots, insert, text_height: float = 1.0) -> CompositeCommand:
+    h = text_height
+    rows = _memoria.lots_rows(lots)
+    table = _tables.insert_table(insert, cols=3, col_width=10.0 * h, data_rows=len(rows),
+                                 row_height=2.0 * h, text_height=h, title=_tr("AREAS BY LOT"),
+                                 headers=[_tr("LOT"), _tr("AREA (m²)"), _tr("PERIMETER (m)")],
+                                 data=rows, col_widths=[12.0 * h, 12.0 * h, 14.0 * h])
+    commands = layer_commands(document, ("table",))
+    for command in table.commands:
+        command.layer = LAYERS["table"][0]
+    commands.extend(table.commands)
+    return CompositeCommand("areas by lot", commands)

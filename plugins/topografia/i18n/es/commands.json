@@ -68,5 +68,11 @@
   },
   "VOLTIN": {
     "name": "VOLUMENTIN"
+  },
+  "MEMORIA": {
+    "name": "MEMORIADESCRIPTIVA"
+  },
+  "AREAREPORT": {
+    "name": "AREASLOTES"
   }
 }

@@ -163,6 +163,11 @@ Nada de instalar desde internet en la v1 del gestor.
 
 ## 3. TOPOGRAFÍA — `plugins/topografia/` (v0.5, 8-10 sesiones)
 
+> **Estado (2026-09-05): T1–T7 hechas en una sola sesión larga, cada una con
+> sus pruebas y captura; el DoD de la v0.5 corre como test de punta a punta
+> (`tests/test_topografia_end_to_end.py`). Queda confirmar con Marco la
+> redacción de la memoria contra un trámite real y su prueba en BricsCAD.**
+
 El caso que lo define, escrito ya en la fase 7 del CLAUDE.md y confirmado
 por el inventario: **CSV del topógrafo → plano de lindero enganchado a los
 puntos → cuadro de coordenadas y área → triangulación y curvas → perfil del

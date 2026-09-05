@@ -9,6 +9,7 @@ T3, the surface: a Delaunay TIN of the points as 3DFACEs, edited and checked.
 T4: contour lines at their elevation, their labels, and slope zones.
 T5: the profile along an axis, its grade line, cross sections, earthworks.
 T6: platforms with side slopes to daylight, and exact volumes between surfaces.
+T7: the descriptive report of a lot and the report of areas by lot.
 Everything it draws is plain DXF (POINT, TEXT, LINE, layers), readable by
 any CAD; the point numbers and descriptions ride in XDATA.
 """
@@ -23,7 +24,7 @@ from .tools import TOOL_CLASSES
 PLUGIN = PluginSpec(
     id="topografia",
     name="Topography",
-    version="0.5.0a1",
+    version="0.5.0",
     description="Survey points, contours, profiles and volumes for the civil engineer.",
     tools=dict(TOOL_CLASSES),
     aliases={"PIM": "PIMPORT", "PEX": "PEXPORT", "PRN": "PRENUM", "PFI": "PFIND"},
@@ -41,6 +42,9 @@ PLUGIN = PluginSpec(
             MenuItem("Construction chart...", "CTABLE"),
             MenuItem("Sum of areas", "AREASUM"),
             MenuItem("Subdivide polygon...", "SUBDIV"),
+            SEPARATOR,
+            MenuItem("Descriptive report...", "MEMORIA"),
+            MenuItem("Areas by lot...", "AREAREPORT"),
         )),
         Submenu("Surface", (
             MenuItem("Triangulate (TIN)...", "TIN"),

@@ -16,6 +16,7 @@ from tools.base import Tool
 
 from . import actions, geometry
 from . import grading as grading_mod
+from . import memoria as memoria_mod
 from . import profile as profile_mod
 from . import tin as tin_mod
 from .points import (SurveyPoint, format_points, parse_bearing, parse_points,
@@ -1714,7 +1715,190 @@ class VoltinTool(Tool):
         self.ctx.finish()
 
 
+# ======================================================================
+# T7: the descriptive report and the report of areas
+# ======================================================================
+
+class MemoriaTool(Tool):
+    """MEMORIA: the descriptive report of a lot -- front side, who adjoins
+    each side, name and location -- written as text and CSV, optionally
+    placed in the drawing."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "MEMORIA"
+        self._entity = None
+        self._front = 0
+        self._roles = []
+        self._order = []
+        self._neighbours = {}
+        self._k = 0
+        self._name = ""
+        self._location = ""
+        self._memoria = None
+        self._stage = "front"
+
+    def selection_prompt(self) -> str:
+        return tr("Select the lot (a closed polyline):")
+
+    def on_selection(self, entities: list) -> None:
+        self._entity = _closed_polygon(entities)
+        if self._entity is None:
+            self.ctx.echo(tr("The selection has no closed polyline."))
+            self.ctx.finish()
+            return
+        self._name = actions.lot_name(_document(self.ctx), self._entity) or tr("LOT 1")
+        self._stage = "front"
+        self.prompt("Pick a point near the front side:")
+
+    def wants_raw_text(self) -> bool:
+        return self._stage in ("neighbour", "name", "location")
+
+    def on_point(self, point) -> None:
+        if self._stage == "front":
+            self._front = actions.front_side_index(self._entity, point)
+            data = actions.polygon_data(self._entity, actions.ChartStyle(clockwise=True))
+            n = len(data.rows)
+            self._roles = memoria_mod.side_roles(n, self._front)
+            self._order = [(self._front + k) % n for k in range(n)]
+            self._rows = data.rows
+            self._k = 0
+            self._ask_neighbour()
+        elif self._stage == "insert":
+            self.ctx.execute(actions.memoria_mtext(_document(self.ctx), point, self._memoria.text(), 1.0))
+            self.ctx.finish()
+
+    def _ask_neighbour(self) -> None:
+        if self._k >= len(self._order):
+            self._stage = "name"
+            self.prompt("Lot name <{name}>:", name=self._name)
+            return
+        i = self._order[self._k]
+        row = self._rows[i]
+        self._stage = "neighbour"
+        self.prompt("{role} ({side}, {length} m) adjoins:",
+                    role=memoria_mod.role_label(self._roles[i]), side=row[1], length=row[2])
+
+    def on_option(self, text: str) -> bool:
+        if self._stage == "neighbour":
+            self._neighbours[self._order[self._k]] = text.strip()
+            self._k += 1
+            self._ask_neighbour()
+            return True
+        if self._stage == "name":
+            self._name = text.strip() or self._name
+            self._stage = "location"
+            self.prompt("Location (district, province, department):")
+            return True
+        if self._stage == "location":
+            self._location = text.strip()
+            self._write()
+            return True
+        if self._stage == "place":
+            key = self.option(text)
+            if key == "Y":
+                self._stage = "insert"
+                self.prompt("Specify the top-left corner of the text:")
+            elif key == "N":
+                self.ctx.finish()
+            else:
+                return False
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        if self._stage == "neighbour":
+            self.on_option("")
+        elif self._stage == "name":
+            self.on_option(self._name)
+        elif self._stage == "location":
+            self.on_option("")
+        elif self._stage == "place":
+            self.ctx.finish()
+        else:
+            self.ctx.finish()
+
+    def _write(self) -> None:
+        self._memoria = actions.memoria_for(_document(self.ctx), self._entity, self._name,
+                                            self._location, self._front, self._neighbours)
+        window = _window(self.ctx)
+        if window is not None:
+            from views import file_dialogs
+
+            path, _selected = file_dialogs.get_save_file(
+                window, tr("Save the descriptive report"), "memoria-descriptiva.txt",
+                tr("Text (*.txt);;All files (*)"))
+        else:
+            path = self.ctx.ask_text(tr("Report file (Enter for none):"), "")
+        if path:
+            target = Path(path)
+            target.write_text(self._memoria.text(), encoding="utf-8")
+            csv = target.with_suffix(".csv")
+            csv.write_text(self._memoria.csv(), encoding="utf-8")
+            self.ctx.echo(tr("Report written to {path} and {csv}", path=target, csv=csv.name))
+        self.ctx.echo(tr("{name}: {area}, {per}", name=self._name,
+                         area=geometry.format_area(self._memoria.area),
+                         per=geometry.format_length(self._memoria.perimeter)))
+        self._stage = "place"
+        self.prompt("Place the report in the drawing? [Yes/No] <No>:")
+
+
+class AreaReportTool(Tool):
+    """AREAREPORT: the areas of the selected lots, with their total, as a
+    table and a CSV."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "AREAREPORT"
+        self._lots = []
+        self._stage = "point"
+
+    def selection_prompt(self) -> str:
+        return tr("Select the lots (closed polylines):")
+
+    def on_selection(self, entities: list) -> None:
+        self._lots = actions.lots_of(_document(self.ctx), entities)
+        if not self._lots:
+            self.ctx.echo(tr("No closed objects in the selection."))
+            self.ctx.finish()
+            return
+        self.ctx.echo(tr("{n} lots, total {area}", n=len(self._lots),
+                         area=geometry.format_area(sum(l.area for l in self._lots))))
+        self._stage = "point"
+        self.prompt("Specify the top-left corner of the table (Enter to skip):")
+
+    def on_point(self, point) -> None:
+        if self._stage != "point":
+            return
+        self.ctx.execute(actions.lots_table(_document(self.ctx), self._lots, point))
+        self._csv()
+
+    def on_enter(self) -> None:
+        if self._stage == "point":
+            self._csv()
+        else:
+            self.ctx.finish()
+
+    def _csv(self) -> None:
+        window = _window(self.ctx)
+        if window is not None:
+            from views import file_dialogs
+
+            path, _selected = file_dialogs.get_save_file(
+                window, tr("Save areas CSV"), "areas.csv", tr("CSV (*.csv);;All files (*)"))
+        else:
+            path = self.ctx.ask_text(tr("Areas CSV (Enter for none):"), "")
+        if path:
+            Path(path).write_text(memoria_mod.lots_csv(self._lots), encoding="utf-8")
+            self.ctx.echo(tr("Areas written to {path}", path=path))
+        self.ctx.finish()
+
+
 TOOL_CLASSES = {
+    "MEMORIA": MemoriaTool,
+    "AREAREPORT": AreaReportTool,
     "PLATFORM": PlatformTool,
     "DAYLIGHT": DaylightTool,
     "VOLTIN": VoltinTool,
