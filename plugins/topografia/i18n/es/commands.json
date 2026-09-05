@@ -1,0 +1,8 @@
+{
+  "_": "Spanish command names of the topography plugin. The English names always keep working.",
+  "PIMPORT": {"name": "IMPORTARPUNTOS"},
+  "PEXPORT": {"name": "EXPORTARPUNTOS"},
+  "PBY": {"name": "PUNTORUMBO"},
+  "PRENUM": {"name": "RENUMERAR"},
+  "PFIND": {"name": "BUSCARPUNTO"}
+}

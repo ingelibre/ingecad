@@ -466,6 +466,47 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-05 (ter) — T1: los puntos topográficos (`plugins/topografia/`)
+
+**El primer complemento real está en el aire, y P0 aguantó su primer
+cliente sin tocar el núcleo.** `plugins/topografia/` trae PIMPORT (CSV o
+TXT de estación total: `P,N,E,Z,D` y sus variantes, con coma, punto y
+coma, tabulador o espacios, coma decimal y cabecera; el orden de columnas
+se adivina por los números —una Norte del hemisferio sur tiene siete
+cifras— y el diálogo lo deja corregir con vista previa), PEXPORT, PBY (una
+poligonal tecleada tramo a tramo: punto base, rumbo `N45°30'20"E` o
+azimut, distancia, cota, número; el punto nuevo pasa a ser la base),
+PRENUM y PFIND, con alias PIM/PEX/PRN/PFI y nombres en español
+(IMPORTARPUNTOS, PUNTORUMBO…).
+
+**Lo que dibuja es DXF de cualquier CAD:** POINT en (E, N, Z) en
+`TOPO-PUNTOS` y hasta tres TEXT (número, cota, descripción) en
+`TOPO-NUMEROS` / `TOPO-COTAS` / `TOPO-DESC`; número y descripción viajan en
+XDATA bajo el APPID `INGECAD`, y cada etiqueta lleva el handle de su punto,
+que es lo que permite renumerar. Verificado el viaje completo: DXF → DWG
+r2000 por LibreDWG → releído, los cinco puntos con sus números y
+descripciones. El snap NOD cae **bit-exacto** sobre la coordenada
+importada (test). Toda importación es UN paso de deshacer, capas incluidas.
+
+⚠️ **Lo que sólo mostró la captura:** los 500 puntos importados se veían
+como etiquetas flotando —el POINT en sí era un píxel, porque un dibujo
+nuevo trae `$PDMODE` 0—. La primera importación pone el marcador X de
+AutoCAD (`$PDMODE` 3, `$PDSIZE` = 0,8 × altura de texto) con undo exacto,
+y respeta el marcador de un dibujo que ya eligió uno. Medido con 500
+puntos: 37 ms el comando, 2,2 s la regeneración de 1 500 textos.
+
+⚠️ **Y una regla nueva que salió de un fallo:** el registro de herramientas
+y el de packs de idioma son **por proceso**, y un proceso puede tener
+varias ventanas; la segunda ventana activaba el mismo complemento y
+chocaba con sus propios nombres. Ahora cuentan referencias por
+complemento: un nombre entra una vez y sale cuando la última ventana lo
+suelta. El test genérico de «cero contaminación» recorre ahora todos los
+complementos incluidos, no sólo el de muestra.
+
+**Pendiente de Marco para cerrar el DoD de T1 de verdad:** dos o tres CSV
+reales de topógrafos (el sintético de 500 puntos prueba la mecánica, no
+los dialectos de SU estación) y abrir el DWG resultante en BricsCAD.
+
 ## 🗓 Sesión 2026-09-05 (bis) — P0: el contrato de complementos y su gestor
 
 **Arrancó el plan de complementos (`docs/plan-complementos.md`) por su fase
