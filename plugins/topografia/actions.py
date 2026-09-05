@@ -29,6 +29,10 @@ LAYERS = {
     "number": ("TOPO-NUMEROS", 2),
     "elevation": ("TOPO-COTAS", 3),
     "description": ("TOPO-DESC", 4),
+    "annotation": ("TOPO-ROTULOS", 7),
+    "table": ("TOPO-CUADROS", 7),
+    "grid": ("TOPO-RETICULA", 8),
+    "subdivision": ("TOPO-SUBDIV", 1),
 }
 ALL_LABELS = ("number", "elevation", "description")
 
@@ -289,3 +293,315 @@ class RenumberCommand(Command):
 
 def renumber(entities, start: int, step: int = 1) -> RenumberCommand:
     return RenumberCommand(entities, start, step)
+
+
+# ======================================================================
+# T2: annotation, the construction chart, areas, subdivision, UTM grid
+# ======================================================================
+
+import math as _math
+
+from core import tables as _tables
+from core.actions import EraseCommand, add_polyline
+from core.i18n import tr as _tr
+
+from . import geometry
+from .points import format_bearing, format_dms
+
+ANNOT_TAG = "TOPO-ANNOT"
+
+
+@dataclass
+class AnnotationStyle:
+    text_height: float = 1.0
+    mode: str = "both"           # "bearing" | "distance" | "both"
+    azimuth: bool = False        # azimuth 123.4567° instead of N 45°30' E
+    decimals: int = 2
+    prefix: str = ""
+    suffix: str = ""
+
+
+def readable_rotation(angle_deg: float) -> float:
+    """The rotation a label along a line takes so it never reads upside
+    down: AutoCAD's rule, (-90, 90]."""
+    a = angle_deg % 360.0
+    if 90.0 < a <= 270.0:
+        a -= 180.0
+    return ((a + 180.0) % 360.0) - 180.0
+
+
+def _text_factory(text: str, pos, height: float, rotation: float = 0.0,
+                  align: str = "MIDDLE_CENTER", link: str | None = None,
+                  tag: str = ANNOT_TAG):
+    def make(msp):
+        from ezdxf.enums import TextEntityAlignment
+
+        ensure_appid(msp.doc)
+        entity = msp.add_text(text, height=height, dxfattribs={"rotation": rotation})
+        entity.set_placement((pos[0], pos[1]),
+                             align=getattr(TextEntityAlignment, align))
+        if link is not None:
+            entity.set_xdata(APPID, [(1000, tag), (1005, link)])
+        return entity
+    return make
+
+
+def bearing_text(azimuth: float, style: AnnotationStyle) -> str:
+    return f"{azimuth:.4f}°" if style.azimuth else format_bearing(azimuth)
+
+
+def segment_annotation_commands(a, b, style: AnnotationStyle,
+                                link: str | None = None) -> list[Command]:
+    """Distance above the segment, bearing below, both readable."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length = _math.hypot(dx, dy)
+    if length < 1e-9:
+        return []
+    angle = _math.degrees(_math.atan2(dy, dx))
+    rotation = readable_rotation(angle)
+    rad = _math.radians(rotation)
+    up = (-_math.sin(rad), _math.cos(rad))          # "above" for the reader
+    mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+    gap = 0.9 * style.text_height
+    out: list[Command] = []
+    if style.mode in ("distance", "both"):
+        text = f"{style.prefix}{length:.{style.decimals}f}{style.suffix}"
+        out.append(AddEntityCommand("TOPO-ANNOT", _text_factory(
+            text, (mid[0] + up[0] * gap, mid[1] + up[1] * gap),
+            style.text_height, rotation, link=link), layer=LAYERS["annotation"][0]))
+    if style.mode in ("bearing", "both"):
+        azimuth = geometry.cad_to_azimuth(angle)
+        out.append(AddEntityCommand("TOPO-ANNOT", _text_factory(
+            bearing_text(azimuth, style), (mid[0] - up[0] * gap, mid[1] - up[1] * gap),
+            style.text_height, rotation, link=link), layer=LAYERS["annotation"][0]))
+    return out
+
+
+def arc_annotation_commands(arc, style: AnnotationStyle,
+                            link: str | None = None) -> list[Command]:
+    """L, R, delta and chord of an ARC, outside its middle."""
+    c = arc.dxf.center
+    r = float(arc.dxf.radius)
+    a0, a1 = float(arc.dxf.start_angle), float(arc.dxf.end_angle)
+    while a1 <= a0:
+        a1 += 360.0
+    delta = a1 - a0
+    mid_angle = _math.radians((a0 + a1) / 2.0)
+    length = _math.radians(delta) * r
+    chord = 2.0 * r * _math.sin(_math.radians(delta) / 2.0)
+    text = (f"L={length:.{style.decimals}f}  R={r:.{style.decimals}f}  "
+            f"D={format_dms(delta)}  C={chord:.{style.decimals}f}")
+    gap = 1.2 * style.text_height
+    pos = (c.x + (r + gap) * _math.cos(mid_angle), c.y + (r + gap) * _math.sin(mid_angle))
+    rotation = readable_rotation(_math.degrees(mid_angle) + 90.0)
+    return [AddEntityCommand("TOPO-ANNOT", _text_factory(
+        text, pos, style.text_height, rotation, link=link),
+        layer=LAYERS["annotation"][0])]
+
+
+def _segments_of(entity):
+    """(kind, payload) per straight segment / arc of a LINE, ARC or polyline."""
+    kind = entity.dxftype()
+    if kind == "LINE":
+        s, e = entity.dxf.start, entity.dxf.end
+        yield "segment", ((s.x, s.y), (e.x, e.y))
+    elif kind == "ARC":
+        yield "arc", entity
+    elif kind in ("LWPOLYLINE", "POLYLINE"):
+        for part in entity.virtual_entities():
+            if part.dxftype() == "LINE":
+                s, e = part.dxf.start, part.dxf.end
+                yield "segment", ((s.x, s.y), (e.x, e.y))
+            elif part.dxftype() == "ARC":
+                yield "arc", part
+
+
+def annotate(document, entities, style: AnnotationStyle | None = None) -> CompositeCommand:
+    """Bearing and distance on every straight segment, arc data on every
+    arc, of the lines, arcs and polylines given -- one undo step."""
+    style = style or AnnotationStyle()
+    commands = layer_commands(document, ("annotation",))
+    for entity in entities:
+        link = entity.dxf.handle
+        for kind, payload in _segments_of(entity):
+            if kind == "segment":
+                commands.extend(segment_annotation_commands(payload[0], payload[1], style, link))
+            else:
+                commands.extend(arc_annotation_commands(payload, style, link))
+    return CompositeCommand("annotate", commands)
+
+
+# -- the construction chart ----------------------------------------------------------
+
+@dataclass
+class ChartStyle:
+    text_height: float = 1.0
+    clockwise: bool | None = True    # None = as drawn
+    azimuth: bool = False
+    decimals: int = 2
+    label_vertices: bool = True
+    vertex_prefix: str = "V"
+
+
+@dataclass
+class PolygonData:
+    vertices: list
+    rows: list
+    area: float
+    perimeter: float
+
+
+def polygon_data(entity_or_points, style: ChartStyle | None = None) -> PolygonData:
+    """Vertex by vertex: name, side, distance, bearing, interior angle,
+    east, north -- what every coordinate chart lists."""
+    style = style or ChartStyle()
+    pts = entity_or_points if isinstance(entity_or_points, list) \
+        else geometry.polygon_vertices(entity_or_points)
+    if pts is None:
+        raise ValueError("not a closed polygon")
+    if style.clockwise is not None:
+        pts = geometry.oriented(pts, style.clockwise)
+    angles = geometry.interior_angles(pts)
+    rows = []
+    n = len(pts)
+    for side in geometry.sides(pts):
+        i, j = side.index, (side.index + 1) % n
+        name, nxt = f"{style.vertex_prefix}{i + 1}", f"{style.vertex_prefix}{j + 1}"
+        rows.append([
+            name, f"{name}-{nxt}",
+            f"{side.length:.{style.decimals}f}",
+            bearing_text(side.azimuth, AnnotationStyle(azimuth=style.azimuth)),
+            format_dms(angles[i]),
+            f"{side.start[0]:.{style.decimals}f}",
+            f"{side.start[1]:.{style.decimals}f}",
+        ])
+    return PolygonData(pts, rows, geometry.area(pts), geometry.perimeter(pts))
+
+
+def chart_headers(style: ChartStyle) -> list[str]:
+    return [_tr("VERTEX"), _tr("SIDE"), _tr("DISTANCE"),
+            _tr("AZIMUTH") if style.azimuth else _tr("BEARING"),
+            _tr("INTERIOR ANGLE"), _tr("EAST"), _tr("NORTH")]
+
+
+def chart_widths(style: ChartStyle) -> list[float]:
+    h = style.text_height
+    return [w * h for w in (7.0, 9.0, 10.0, 13.0, 12.0, 12.0, 13.0)]
+
+
+def construction_table(document, entity, insert, style: ChartStyle | None = None) -> CompositeCommand:
+    """The construction chart of a closed polygon, as a table of lines and
+    text at ``insert`` (top-left), plus the vertex labels on the drawing."""
+    style = style or ChartStyle()
+    data = polygon_data(entity, style)
+    rows = list(data.rows)
+    rows.append(["", _tr("AREA"), geometry.format_area(data.area, style.decimals), "", "", "", ""])
+    rows.append(["", _tr("PERIMETER"), geometry.format_length(data.perimeter, style.decimals),
+                 "", "", "", ""])
+    h = style.text_height
+    table = _tables.insert_table(
+        insert, cols=7, col_width=10.0 * h, data_rows=len(rows), row_height=2.0 * h,
+        text_height=h, title=_tr("CONSTRUCTION CHART"), headers=chart_headers(style),
+        data=rows, col_widths=chart_widths(style))
+    commands = layer_commands(document, ("table", "annotation"))
+    for command in table.commands:
+        command.layer = LAYERS["table"][0]
+    commands.extend(table.commands)
+    if style.label_vertices:
+        cx, cy = geometry.centroid(data.vertices)
+        for i, (x, y) in enumerate(data.vertices):
+            # a little outward from the centroid, so the label clears the corner
+            dx, dy = x - cx, y - cy
+            d = _math.hypot(dx, dy) or 1.0
+            pos = (x + dx / d * 1.2 * h, y + dy / d * 1.2 * h)
+            commands.append(AddEntityCommand("TOPO-ANNOT", _text_factory(
+                f"{style.vertex_prefix}{i + 1}", pos, h, link=entity.dxf.handle),
+                layer=LAYERS["annotation"][0]))
+    return CompositeCommand("construction chart", commands)
+
+
+# -- areas -------------------------------------------------------------------------------
+
+def area_of(entity) -> float | None:
+    """The area an entity encloses: closed polylines and circles."""
+    if entity.dxftype() == "CIRCLE":
+        return _math.pi * float(entity.dxf.radius) ** 2
+    pts = geometry.polygon_vertices(entity)
+    if pts is None:
+        return None
+    if entity.dxftype() == "LWPOLYLINE" and any(abs(b) > 1e-12 for b in
+                                                (p[4] for p in entity.get_points())):
+        # arcs in the boundary: measure the flattened outline
+        flat = [(v.x, v.y) for v in entity.flattening(0.01)]
+        if flat and geometry._close(flat[0], flat[-1]):
+            flat = flat[:-1]
+        return geometry.area(flat)
+    return geometry.area(pts)
+
+
+def area_label(document, point, text: str, text_height: float) -> CompositeCommand:
+    return CompositeCommand("area label", layer_commands(document, ("annotation",)) + [
+        AddEntityCommand("TOPO-ANNOT", _text_factory(text, point, text_height),
+                         layer=LAYERS["annotation"][0])])
+
+
+# -- subdivision ---------------------------------------------------------------------------
+
+def subdivide(document, entity, cut: geometry.Cut, split: bool = False) -> CompositeCommand:
+    """Draw the cut line; with ``split``, replace the polygon by its two
+    pieces (same layer), the original kept for undo."""
+    commands = layer_commands(document, ("subdivision",))
+    a, b = cut.start, cut.end
+    commands.append(AddEntityCommand(
+        "TOPO-SUBDIV", lambda msp: msp.add_line((a[0], a[1]), (b[0], b[1])),
+        layer=LAYERS["subdivision"][0]))
+    if split:
+        layer = entity.dxf.layer
+        commands.append(EraseCommand([entity]))
+        for piece in (cut.left, cut.right):
+            if len(piece) >= 3:
+                command = add_polyline(piece, closed=True)
+                command.layer = layer
+                commands.append(command)
+    return CompositeCommand("subdivide", commands)
+
+
+# -- UTM grid -------------------------------------------------------------------------------
+
+def utm_grid(document, x0: float, y0: float, x1: float, y1: float, spacing: float,
+             text_height: float = 1.0, crosses: bool = True) -> CompositeCommand:
+    """Crosses (or full lines) at every multiple of ``spacing`` inside the
+    rectangle, with E/N labels along the bottom and left borders."""
+    x0, x1 = min(x0, x1), max(x0, x1)
+    y0, y1 = min(y0, y1), max(y0, y1)
+    xs, ys = geometry.grid_values(x0, x1, spacing), geometry.grid_values(y0, y1, spacing)
+    layer = LAYERS["grid"][0]
+    commands = layer_commands(document, ("grid",))
+
+    def line(a, b):
+        commands.append(AddEntityCommand(
+            "TOPO-GRID", lambda msp, a=a, b=b: msp.add_line(a, b), layer=layer))
+
+    arm = spacing * 0.08
+    if crosses:
+        for x in xs:
+            for y in ys:
+                line((x - arm, y), (x + arm, y))
+                line((x, y - arm), (x, y + arm))
+    else:
+        for x in xs:
+            line((x, y0), (x, y1))
+        for y in ys:
+            line((x0, y), (x1, y))
+    h = text_height
+    for x in xs:
+        label = "E " + f"{x:,.0f}".replace(",", " ")
+        commands.append(AddEntityCommand("TOPO-GRID", _text_factory(
+            label, (x, y0 - 1.5 * h), h, 90.0, align="MIDDLE_RIGHT", tag="TOPO-GRID"),
+            layer=layer))
+    for y in ys:
+        label = "N " + f"{y:,.0f}".replace(",", " ")
+        commands.append(AddEntityCommand("TOPO-GRID", _text_factory(
+            label, (x0 - 1.5 * h, y), h, 0.0, align="MIDDLE_RIGHT", tag="TOPO-GRID"),
+            layer=layer))
+    return CompositeCommand("utm grid", commands)

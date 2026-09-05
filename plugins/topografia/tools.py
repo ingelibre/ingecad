@@ -14,7 +14,7 @@ from pathlib import Path
 from core.i18n import tr
 from tools.base import Tool
 
-from . import actions
+from . import actions, geometry
 from .points import (SurveyPoint, format_points, parse_bearing, parse_points,
                      point_from_bearing, sniff_order)
 
@@ -308,10 +308,403 @@ class FindPointTool(Tool):
         return True
 
 
+# ======================================================================
+# T2: annotation, construction chart, areas, subdivision, UTM grid
+# ======================================================================
+
+def _number(text: str) -> float:
+    return float(text.strip().replace(",", "."))
+
+
+def _closed_polygon(entities):
+    """The first closed polyline among ``entities``, or None."""
+    for entity in entities:
+        if geometry.polygon_vertices(entity) is not None:
+            return entity
+    return None
+
+
+class AnnotateTool(Tool):
+    """ANNOT: bearing and distance on lines and polyline segments, arc
+    data on arcs; options first, Enter annotates."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "ANNOT"
+        self._entities = []
+        self._style = actions.AnnotationStyle()
+        self._await_height = False
+
+    def selection_prompt(self) -> str:
+        return tr("Select lines, arcs and polylines to annotate:")
+
+    def on_selection(self, entities: list) -> None:
+        self._entities = [e for e in entities
+                          if e.dxftype() in ("LINE", "ARC", "LWPOLYLINE", "POLYLINE")]
+        if not self._entities:
+            self.ctx.echo(tr("Nothing to annotate in the selection."))
+            self.ctx.finish()
+            return
+        self._ask()
+
+    def _ask(self) -> None:
+        self._await_height = False
+        self.prompt("Enter annotation option [Bearing/Distance/All/aZimuth/Height] "
+                    "or press Enter to annotate:")
+
+    def on_option(self, text: str) -> bool:
+        if self._await_height:
+            try:
+                self._style.text_height = _number(text)
+            except ValueError:
+                self.ctx.echo(tr("Invalid height: {text}", text=text))
+                return True
+            self._ask()
+            return True
+        key = self.option(text)
+        if key == "B":
+            self._style.mode = "bearing"
+        elif key == "D":
+            self._style.mode = "distance"
+        elif key == "A":
+            self._style.mode = "both"
+        elif key == "Z":
+            self._style.azimuth = not self._style.azimuth
+        elif key == "H":
+            self._await_height = True
+            self.prompt("Text height <{h:g}>:", h=self._style.text_height)
+            return True
+        else:
+            return False
+        self._ask()
+        return True
+
+    def on_enter(self) -> None:
+        if self._await_height:
+            self._ask()
+            return
+        if self._entities:
+            self.ctx.execute(actions.annotate(_document(self.ctx), self._entities, self._style))
+            self.ctx.echo(tr("{n} objects annotated", n=len(self._entities)))
+        self.ctx.finish()
+
+
+class ConstructionTableTool(Tool):
+    """CTABLE: the construction chart of a closed polyline, placed by a
+    click; options set bearing/azimuth, turn and text height."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "CTABLE"
+        self._entity = None
+        self._style = actions.ChartStyle()
+        self._await_height = False
+
+    def selection_prompt(self) -> str:
+        return tr("Select the closed polyline:")
+
+    def on_selection(self, entities: list) -> None:
+        self._entity = _closed_polygon(entities)
+        if self._entity is None:
+            self.ctx.echo(tr("The selection has no closed polyline."))
+            self.ctx.finish()
+            return
+        self._ask()
+
+    def _ask(self) -> None:
+        self._await_height = False
+        self.prompt("Specify insertion point (top-left) or "
+                    "[Azimuth/Bearing/Clockwise/cOunterclockwise/Height]:")
+
+    def on_option(self, text: str) -> bool:
+        if self._await_height:
+            try:
+                self._style.text_height = _number(text)
+            except ValueError:
+                self.ctx.echo(tr("Invalid height: {text}", text=text))
+                return True
+            self._ask()
+            return True
+        key = self.option(text)
+        if key == "A":
+            self._style.azimuth = True
+        elif key == "B":
+            self._style.azimuth = False
+        elif key == "C":
+            self._style.clockwise = True
+        elif key == "O":
+            self._style.clockwise = False
+        elif key == "H":
+            self._await_height = True
+            self.prompt("Text height <{h:g}>:", h=self._style.text_height)
+            return True
+        else:
+            return False
+        self._ask()
+        return True
+
+    def on_point(self, point) -> None:
+        if self._entity is None or self._await_height:
+            return
+        document = _document(self.ctx)
+        data = actions.polygon_data(self._entity, self._style)
+        self.ctx.execute(actions.construction_table(document, self._entity, point, self._style))
+        self.ctx.echo(tr("Area {area}, perimeter {per}, {n} vertices.",
+                         area=geometry.format_area(data.area, self._style.decimals),
+                         per=geometry.format_length(data.perimeter, self._style.decimals),
+                         n=len(data.vertices)))
+        self.ctx.finish()
+
+
+class AreaSumTool(Tool):
+    """AREASUM: the area of the selected closed polylines and circles,
+    echoed and optionally written on the drawing."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "AREASUM"
+        self._total = 0.0
+        self._count = 0
+
+    def selection_prompt(self) -> str:
+        return tr("Select closed polylines and circles:")
+
+    def on_selection(self, entities: list) -> None:
+        areas = [a for a in (actions.area_of(e) for e in entities) if a is not None]
+        if not areas:
+            self.ctx.echo(tr("No closed objects in the selection."))
+            self.ctx.finish()
+            return
+        self._total, self._count = sum(areas), len(areas)
+        self.ctx.echo(tr("Total area: {area} ({n} objects)",
+                         area=geometry.format_area(self._total), n=self._count))
+        self.prompt("Specify label point (Enter to finish):")
+
+    def on_point(self, point) -> None:
+        if not self._count:
+            return
+        self.ctx.execute(actions.area_label(
+            _document(self.ctx), point,
+            tr("TOTAL AREA = {area}", area=geometry.format_area(self._total)), 1.0))
+        self.ctx.finish()
+
+
+class SubdivideTool(Tool):
+    """SUBDIV: cut a closed polyline -- parallel to a side for a given
+    area, through a pivot for a given area, or by two points."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "SUBDIV"
+        self._entity = None
+        self._pts = None
+        self._stage = "select"
+        self._side = None
+        self._pivot = None
+        self._first = None
+        self._cut = None
+
+    def selection_prompt(self) -> str:
+        return tr("Select the closed polyline to divide:")
+
+    def on_selection(self, entities: list) -> None:
+        self._entity = _closed_polygon(entities)
+        if self._entity is None:
+            self.ctx.echo(tr("The selection has no closed polyline."))
+            self.ctx.finish()
+            return
+        self._pts = geometry.polygon_vertices(self._entity)
+        self._stage = "method"
+        self.prompt("Divide by [Parallel/pOint/Two points] <Parallel>:")
+
+    def on_option(self, text: str) -> bool:
+        if self._stage == "method":
+            key = self.option(text)
+            if key == "P" or not key and not text.strip():
+                self._parallel()
+            elif key == "O":
+                self._stage = "pivot"
+                self.prompt("Specify the pivot point on the boundary:")
+            elif key == "T":
+                self._stage = "two-first"
+                self.prompt("Specify first point of the cut:")
+            else:
+                return False
+            return True
+        if self._stage in ("area-parallel", "area-point"):
+            try:
+                wanted = _number(text)
+            except ValueError:
+                self.ctx.echo(tr("Invalid area: {text}", text=text))
+                return True
+            if self._stage == "area-parallel":
+                self._cut = geometry.cut_parallel_to_side(self._pts, self._side.index, wanted)
+            else:
+                self._cut = geometry.cut_through_point(self._pts, self._pivot, wanted)
+            self._ask_split()
+            return True
+        if self._stage == "split":
+            key = self.option(text)
+            if key in ("Y", "N"):
+                self._finish(split=(key == "Y"))
+                return True
+            return False
+        return False
+
+    def _parallel(self) -> None:
+        self._stage = "side"
+        self.prompt("Specify a point near the side the cut runs parallel to:")
+
+    def on_point(self, point) -> None:
+        if self._stage == "side":
+            self._side = geometry.nearest_side(self._pts, point)
+            self._stage = "area-parallel"
+            self.prompt("Area of the piece next to that side:")
+        elif self._stage == "pivot":
+            self._pivot = geometry.project_on_boundary(self._pts, point)
+            self._stage = "area-point"
+            self.prompt("Area of the piece to the left of the cut, seen from the pivot:")
+        elif self._stage == "two-first":
+            self._first = point
+            self._stage = "two-second"
+            self.prompt("Specify second point of the cut:")
+        elif self._stage == "two-second":
+            self._cut = geometry.cut_by_two_points(self._pts, self._first, point)
+            self._ask_split()
+
+    def _ask_split(self) -> None:
+        self._stage = "split"
+        self.ctx.echo(tr("Pieces: {a} and {b}.",
+                         a=geometry.format_area(self._cut.area_left),
+                         b=geometry.format_area(self._cut.area_right)))
+        self.prompt("Split the polygon into the two pieces? [Yes/No] <No>:")
+
+    def on_enter(self) -> None:
+        if self._stage == "method":
+            self._parallel()
+        elif self._stage == "split":
+            self._finish(split=False)
+        else:
+            self.ctx.finish()
+
+    def _finish(self, split: bool) -> None:
+        self.ctx.execute(actions.subdivide(_document(self.ctx), self._entity, self._cut, split))
+        self.ctx.echo(tr("Cut drawn from ({x1:.3f}, {y1:.3f}) to ({x2:.3f}, {y2:.3f}).",
+                         x1=self._cut.start[0], y1=self._cut.start[1],
+                         x2=self._cut.end[0], y2=self._cut.end[1]))
+        self.ctx.finish()
+
+    def preview_segments(self, cursor):
+        if self._stage == "two-second" and self._first is not None:
+            return [(self._first, cursor)]
+        return []
+
+
+class UtmGridTool(Tool):
+    """UTMGRID: crosses or lines every N metres, with E/N labels."""
+
+    def start(self) -> None:
+        self.name = "UTMGRID"
+        self._corner = None
+        self._rect = None
+        self._spacing = 100.0
+        self._crosses = True
+        self._stage = "first"
+        self.prompt("Specify first corner of the grid or [Extents]:")
+
+    def on_option(self, text: str) -> bool:
+        if self._stage == "first" and self.option(text) == "E":
+            box = self._extents()
+            if box is None:
+                self.ctx.echo(tr("The drawing is empty."))
+                self.ctx.finish()
+                return True
+            self._rect = box
+            self._ask_spacing()
+            return True
+        if self._stage == "spacing":
+            try:
+                self._spacing = _number(text)
+                if self._spacing <= 0:
+                    raise ValueError(text)
+            except ValueError:
+                self.ctx.echo(tr("Invalid spacing: {text}", text=text))
+                return True
+            self._ask_style()
+            return True
+        if self._stage == "style":
+            key = self.option(text)
+            if key in ("C", "L"):
+                self._crosses = key == "C"
+                self._run()
+                return True
+            return False
+        return False
+
+    def _extents(self):
+        from ezdxf import bbox
+
+        box = bbox.extents(_document(self.ctx).current_space(), fast=True)
+        if not box.has_data:
+            return None
+        return (box.extmin.x, box.extmin.y, box.extmax.x, box.extmax.y)
+
+    def on_point(self, point) -> None:
+        if self._stage == "first":
+            self._corner = point
+            self.last_point = point
+            self._stage = "second"
+            self.prompt("Specify opposite corner:")
+        elif self._stage == "second":
+            self._rect = (self._corner[0], self._corner[1], point[0], point[1])
+            self._ask_spacing()
+
+    def _ask_spacing(self) -> None:
+        self._stage = "spacing"
+        self.prompt("Grid spacing <{s:g}>:", s=self._spacing)
+
+    def _ask_style(self) -> None:
+        self._stage = "style"
+        self.prompt("Grid style [Crosses/Lines] <Crosses>:")
+
+    def on_enter(self) -> None:
+        if self._stage == "spacing":
+            self._ask_style()
+        elif self._stage == "style":
+            self._run()
+        else:
+            self.ctx.finish()
+
+    def _run(self) -> None:
+        x0, y0, x1, y1 = self._rect
+        self.ctx.execute(actions.utm_grid(_document(self.ctx), x0, y0, x1, y1,
+                                          self._spacing, 1.0, self._crosses))
+        nx = len(geometry.grid_values(min(x0, x1), max(x0, x1), self._spacing))
+        ny = len(geometry.grid_values(min(y0, y1), max(y0, y1), self._spacing))
+        self.ctx.echo(tr("UTM grid: {n} intersections every {s:g} m", n=nx * ny, s=self._spacing))
+        self.ctx.finish()
+
+    def preview_segments(self, cursor):
+        if self._stage == "second" and self._corner is not None:
+            c = self._corner
+            return [(c, (cursor[0], c[1])), ((cursor[0], c[1]), cursor),
+                    (cursor, (c[0], cursor[1])), ((c[0], cursor[1]), c)]
+        return []
+
+
 TOOL_CLASSES = {
     "PIMPORT": ImportPointsTool,
     "PEXPORT": ExportPointsTool,
     "PBY": PointByBearingTool,
     "PRENUM": RenumberPointsTool,
     "PFIND": FindPointTool,
+    "ANNOT": AnnotateTool,
+    "CTABLE": ConstructionTableTool,
+    "AREASUM": AreaSumTool,
+    "SUBDIV": SubdivideTool,
+    "UTMGRID": UtmGridTool,
 }

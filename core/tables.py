@@ -40,15 +40,25 @@ def _line_factory(a, b):
 def insert_table(insert, cols: int, col_width: float, data_rows: int,
                  row_height: float, text_height: float,
                  title: str = "", headers: list[str] | None = None,
-                 data: list[list[str]] | None = None) -> CompositeCommand:
+                 data: list[list[str]] | None = None,
+                 col_widths: list[float] | None = None) -> CompositeCommand:
     """The whole grid as ONE undoable command.
 
     ``insert`` is the TOP-LEFT corner, like AutoCAD places tables.
+    ``col_widths`` gives each column its own width (a coordinate chart
+    needs a wide bearing column and a narrow vertex one); ``col_width``
+    is the width of every column when it is not given.
     """
     from core import actions
 
     x0, y0 = float(insert[0]), float(insert[1])
-    width = cols * col_width
+    widths = [float(w) for w in col_widths] if col_widths else [float(col_width)] * cols
+    if len(widths) != cols:
+        raise ValueError(f"{len(widths)} column widths for {cols} columns")
+    edges = [x0]
+    for w in widths:
+        edges.append(edges[-1] + w)
+    width = edges[-1] - x0
     n_header = 1 if headers is not None else 0
     n_title = 1 if title != "" else 0
     n_rows = n_title + n_header + data_rows
@@ -69,7 +79,7 @@ def insert_table(insert, cols: int, col_width: float, data_rows: int,
     add(_line_factory((x0, y0), (x0, y0 - height)))
     add(_line_factory((x0 + width, y0), (x0 + width, y0 - height)))
     for c in range(1, cols):
-        x = x0 + c * col_width
+        x = edges[c]
         add(_line_factory((x, y_top_internal), (x, y0 - height)))
 
     if n_title:
@@ -80,7 +90,7 @@ def insert_table(insert, cols: int, col_width: float, data_rows: int,
         for c, head in enumerate(headers or []):
             if c >= cols or not str(head):
                 continue
-            add(_cell_text_factory(str(head), x0 + (c + 0.5) * col_width, y,
+            add(_cell_text_factory(str(head), (edges[c] + edges[c + 1]) / 2.0, y,
                                    text_height))
     for r, row in enumerate(data or []):
         if r >= data_rows:
@@ -89,7 +99,7 @@ def insert_table(insert, cols: int, col_width: float, data_rows: int,
         for c, value in enumerate(row):
             if c >= cols or not str(value):
                 continue
-            add(_cell_text_factory(str(value), x0 + (c + 0.5) * col_width, y,
+            add(_cell_text_factory(str(value), (edges[c] + edges[c + 1]) / 2.0, y,
                                    text_height))
 
     return CompositeCommand(tr("table"), commands)

@@ -466,6 +466,41 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-05 (quater) — T2: polígonos (rotulado, cuadro de construcción, subdivisión, retícula)
+
+**Cinco comandos más en Topografía ▸ Polígonos, todos sobre polilíneas y
+líneas normales del dibujo:** ANNOT (rumbo y distancia en cada tramo,
+distancia arriba y rumbo abajo, siempre legibles por la regla de AutoCAD de
+(-90°, 90°]; en arcos L, R, D y cuerda), CTABLE (el cuadro de construcción:
+vértice, lado, distancia, rumbo o azimut, ángulo interno, Este, Norte, con
+pie de área y perímetro y los V1…Vn marcados en el plano; horario por
+defecto, que es como se lista en el Perú), AREASUM, SUBDIV (paralela a un
+lado para un área dada, por un punto de giro para un área dada, o por dos
+puntos; dibuja el corte y, si se pide, reemplaza el polígono por las dos
+piezas) y UTMGRID (cruces o líneas cada N m con rótulos E/N).
+
+**La matemática vive en `plugins/topografia/geometry.py`, pura y probada:**
+área con signo, ángulos internos que suman (n−2)·180 también en polígonos
+cóncavos y en los dos sentidos, recorte por semiplano (Sutherland–Hodgman) y
+bisección sobre el área para los cortes, con tolerancia de 1e-6 m². El cuadro
+usa `core/tables.insert_table`, que ahora acepta **un ancho por columna**
+(`col_widths`), compatible con los tres llamadores de antes.
+
+**Verificado con captura sobre el lote del levantamiento sintético
+(`tests/data/levantamiento-arequipa.csv`, 96 puntos, Arequipa UTM 19S, que
+Marco pidió porque no tiene uno real):** 1 523,77 m² y 156,70 m, los cinco
+ángulos internos suman 540°00'00" exactos, el corte paralelo al frente deja
+600,00 m² justos, y el cuadro se lee entero. El DWG importado quedó en
+`capturas/levantamiento-arequipa.dwg` para que lo abra en BricsCAD.
+
+⚠️ **Dos detalles de rumbos que salieron de los tests:** el oeste exacto
+(azimut 270°) se escribe «N 90° W», no «S 90° W»; y 269,9999° redondeado al
+segundo ES 90°00'00", así que una aserción que esperaba «S 89°59'60"» estaba
+mal, no el código. Los cortes por dos puntos en polígonos cóncavos usan el
+recorte por semiplano, que devuelve el área exacta de cada lado aunque la
+pieza quede en dos trozos unidos por un puente de ancho cero; para lotes
+convexos, el caso real, el corte es un segmento limpio.
+
 ## 🗓 Sesión 2026-09-05 (ter) — T1: los puntos topográficos (`plugins/topografia/`)
 
 **El primer complemento real está en el aire, y P0 aguantó su primer

@@ -96,6 +96,7 @@ def test_bad_bearings_are_refused():
 
 def test_bearing_geometry_round_trips():
     assert format_bearing(150.0) == "S 30°00'00\" E"
+    assert format_bearing(270.0) == "N 90°00'00\" W"           # due west reads north
     assert format_bearing(45 + 30 / 60 + 20 / 3600) == "N 45°30'20\" E"
     east, north = point_from_bearing((1000.0, 2000.0), 45.0, 100.0)
     assert (east, north) == pytest.approx((1070.7107, 2070.7107), abs=1e-4)

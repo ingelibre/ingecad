@@ -3,8 +3,10 @@
 """Topography -- the civil engineer's plugin (docs/plan-complementos.md).
 
 T1, points: import a station's CSV, export, draw by bearing and distance,
-renumber, find. Everything it draws is plain DXF (POINT, TEXT, layers),
-readable by any CAD; the point numbers and descriptions ride in XDATA.
+renumber, find. T2, polygons: bearings and distances annotated, the
+construction chart, sums of areas, subdivision by area, the UTM grid.
+Everything it draws is plain DXF (POINT, TEXT, LINE, layers), readable by
+any CAD; the point numbers and descriptions ride in XDATA.
 """
 from __future__ import annotations
 
@@ -30,10 +32,20 @@ PLUGIN = PluginSpec(
             MenuItem("Renumber points", "PRENUM"),
             MenuItem("Find point...", "PFIND"),
         )),
+        Submenu("Polygons", (
+            MenuItem("Annotate bearings and distances", "ANNOT"),
+            MenuItem("Construction chart...", "CTABLE"),
+            MenuItem("Sum of areas", "AREASUM"),
+            MenuItem("Subdivide polygon...", "SUBDIV"),
+        )),
+        SEPARATOR,
+        MenuItem("UTM grid...", "UTMGRID"),
     ),
     toolbar=(
         ToolbarItem("Import points (CSV)...", "PIMPORT"),
         ToolbarItem("Point by bearing and distance", "PBY"),
+        ToolbarItem("Annotate bearings and distances", "ANNOT"),
+        ToolbarItem("Construction chart...", "CTABLE"),
     ),
     i18n_dir=Path(__file__).parent / "i18n",
 )

@@ -1,8 +1,33 @@
 {
   "_": "Spanish command names of the topography plugin. The English names always keep working.",
-  "PIMPORT": {"name": "IMPORTARPUNTOS"},
-  "PEXPORT": {"name": "EXPORTARPUNTOS"},
-  "PBY": {"name": "PUNTORUMBO"},
-  "PRENUM": {"name": "RENUMERAR"},
-  "PFIND": {"name": "BUSCARPUNTO"}
+  "PIMPORT": {
+    "name": "IMPORTARPUNTOS"
+  },
+  "PEXPORT": {
+    "name": "EXPORTARPUNTOS"
+  },
+  "PBY": {
+    "name": "PUNTORUMBO"
+  },
+  "PRENUM": {
+    "name": "RENUMERAR"
+  },
+  "PFIND": {
+    "name": "BUSCARPUNTO"
+  },
+  "ANNOT": {
+    "name": "ROTULAR"
+  },
+  "CTABLE": {
+    "name": "CUADRO"
+  },
+  "AREASUM": {
+    "name": "SUMAREAS"
+  },
+  "SUBDIV": {
+    "name": "SUBDIVIDIR"
+  },
+  "UTMGRID": {
+    "name": "RETICULA"
+  }
 }

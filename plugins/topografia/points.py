@@ -204,7 +204,7 @@ def format_bearing(azimuth: float, seconds: bool = True) -> str:
         ns, ew, angle = "N", "E", az
     elif az <= 180.0:
         ns, ew, angle = "S", "E", 180.0 - az
-    elif az <= 270.0:
+    elif az < 270.0:
         ns, ew, angle = "S", "W", az - 180.0
     else:
         ns, ew, angle = "N", "W", 360.0 - az
