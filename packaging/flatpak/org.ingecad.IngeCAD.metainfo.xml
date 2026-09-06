@@ -45,6 +45,36 @@
   <url type="vcs-browser">https://github.com/ingelibre/ingecad</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.0" date="2026-09-06">
+      <description>
+        <p>Two discipline plugins on a new plugin system: Topography (survey
+        points, construction chart, descriptive report, TIN, contours,
+        profiles, earthworks, platforms) and Terrain (georeferencing, ground
+        elevations from a global DEM, the satellite image under the plan,
+        Google Earth by KML/KMZ — the only use IngeCAD makes of the network).
+        AutoCAD's keyboard key by key, with SNAP, object snap tracking and
+        dynamic input. A crash in a worker thread fixed.</p>
+        <p xml:lang="es">Dos complementos de disciplina sobre un sistema de
+        complementos nuevo: Topografía (puntos del levantamiento, cuadro de
+        construcción, memoria descriptiva, TIN, curvas de nivel, perfiles,
+        movimiento de tierras, plataformas) y Terreno (georreferenciación,
+        cotas de un DEM global, la imagen satelital bajo el plano, Google
+        Earth por KML/KMZ — el único uso que IngeCAD hace de la red). El
+        teclado de AutoCAD tecla por tecla, con FORZC, rastreo de referencia
+        y entrada dinámica. Arreglado un cierre inesperado en un hilo de
+        trabajo.</p>
+      </description>
+    </release>
+    <release version="0.4.7" date="2026-08-29">
+      <description>
+        <p>Edit the model through a viewport (MSPACE), automatic save with
+        drawing recovery, hatch editing and a linetype library read from
+        real plans.</p>
+        <p xml:lang="es">Editar el modelo a través de una ventana gráfica
+        (MSPACE), guardado automático con recuperación de dibujos, edición de
+        sombreados y una biblioteca de tipos de línea leída de planos reales.</p>
+      </description>
+    </release>
     <release version="0.4.6" date="2026-08-27">
       <description>
         <p>A layout tab now edits its own sheet: select, move, erase, trim,

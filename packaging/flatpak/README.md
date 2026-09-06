@@ -17,8 +17,9 @@ module lets pip reach the network for wheels, which is exactly what Flathub
 forbids: if this ever goes there, that module becomes generated offline
 sources (flatpak-pip-generator) and this file is the reminder.
 
-Sandbox: wayland + fallback-x11 + dri + `--filesystem=home`, and **no
-network** — IngeCAD needs none, and the sandbox should say so.
+Sandbox: wayland + fallback-x11 + dri + `--filesystem=home`, and since
+0.6 `--share=network`: the Terrain plugin fetches elevation and imagery
+tiles on request, and the metainfo says that is the only use of it.
 
 Next step (decided, not yet built): the signed OSTree repo on R2 behind
 ingecad.org, mirroring IngePresupuestos' `publish-flatpak.yml`, so installs

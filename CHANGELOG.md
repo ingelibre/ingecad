@@ -1,6 +1,79 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 — 2026-09-06
+
+The release the plan called v0.5 and v0.6 together: the first two
+discipline plugins, on the plugin contract that makes them possible, plus
+AutoCAD's keyboard and a crash in the core that the work uncovered.
+
+### Added — plugins: the core stays AutoCAD LT, the disciplines plug in
+A plugin is a folder that, switched on, adds one menu, its commands and
+tools, an optional toolbar and options page and its own translations —
+and, switched off, removes exactly that (the suite holds every bundled
+plugin to "no trace left"). **Tools ▸ Plugins…** (`PLUGINS`) manages them;
+the contract is written in `docs/plugins.md` for anyone who wants to write
+one; `ingecad --check` lists what it found. A plugin's toolbar is off by
+default — the menu is what a plugin adds, the toolbar is yours to switch
+on. Everything a plugin draws is plain DXF (POINT, TEXT, LINE, polylines,
+3DFACE, HATCH) that any CAD opens, and it survives Save as DWG.
+
+### Added — Topography (the v0.5 promise), menu *Topography*
+- **Points**: import a total station's CSV/TXT (`P,N,E,Z,D` and its
+  dialects, column order guessed and correctable), export, a traverse
+  typed by bearing and distance, renumber, find. NOD snap lands on the
+  imported coordinate exactly.
+- **Polygons**: bearings and distances annotated, the **construction
+  chart** (vertex, side, distance, bearing/azimuth, interior angle, E, N,
+  area, perimeter — the table everybody used to build by hand), sums of
+  areas, subdivision by area (parallel to a side, about a point, by two
+  points), the UTM grid, the **descriptive report** (memoria descriptiva)
+  in the wording a Peruvian filing expects, and areas by lot.
+- **Surface**: an own Delaunay TIN with breaklines, boundary and maximum
+  edge (20 000 points in 0.4 s, Euler count exact), edited (flip, delete,
+  insert, clip) and checked; **contours** at their elevation with labels
+  and optional smoothing; slope zones with a legend.
+- **Profiles and earthworks**: the longitudinal profile of an axis with
+  station and elevation bands, a grade line drawn on it, cross sections
+  with a template, cut and fill by prismoidal or end-area method, table
+  and CSV.
+- **Platforms**: a pad at an elevation and slope, side slopes to daylight
+  (benches included), the daylight line, hachures, the design surface and
+  the exact volume between two surfaces (the cancellation that made a
+  13 m³ pad read 1 918 m³ in UTM is handled).
+
+### Added — Terrain (the v0.6 promise), menu *Terrain*
+- **GEOREF / LATLON**: the drawing's UTM zone, hemisphere and datum (WGS84,
+  or PSAD56 with the EPSG:1208 shift for Peru's older plans), kept in the
+  drawing itself and read on open; latitude and longitude of any point,
+  typed coordinates in decimal or DMS. The maths is our own, checked
+  against PROJ to 0.15 mm; nothing new is installed.
+- **DEMPOINTS / DEMPROFILE**: a grid of ground elevations, or an axis'
+  profile, from a global 30 m DEM (AWS Terrain Tiles, no key, cached) —
+  a terrain with no survey yet, straight into TIN and CONTOUR, and every
+  time the command says it is for preliminary design only.
+- **SATIMAGE**: the satellite image under the plan from a licensed source
+  (Esri World Imagery, Sentinel-2 cloudless, OpenStreetMap, or your own
+  XYZ), resampled into the drawing's UTM grid so it lands exactly, saved
+  beside the drawing, clipped to the polygon if asked, with the
+  attribution the licence requires written on the plan.
+- **KMLIN / KMLOUT / KMLOVERLAY**: Google Earth both ways — placemarks in
+  as points, polylines and polygons with names and colours; the selection
+  out as a KMZ (a lot boundary comes back within 0.1 mm); the plan
+  rendered as a ground overlay draped on the terrain.
+- The Flatpak now shares the network for these; nothing else uses it.
+
+### Added — AutoCAD's keyboard, key by key
+SNAP (F9 / Ctrl+B: the cursor jumps by the grid on screen), **object snap
+tracking** (F11: pause on a snap point to acquire it, ride the alignment
+paths from it, lock where two meet), **dynamic input** (F12: the prompt
+and the live coordinates beside the cursor; a bare `x,y` after a first
+point is relative, `#x,y` absolute), Shift held as a temporary ortho,
+Ctrl+G/L/U/F for grid/ortho/polar/osnap (Ctrl+F is no longer Find, which
+AutoCAD leaves without a key), Ctrl+1 Properties, Ctrl+9 the command
+line, Ctrl+A select all, Ctrl+W selection cycling, Ctrl+I coordinates,
+Ctrl+J/M repeat, Ctrl+[ and Ctrl+\ cancel, Ctrl+PgUp/PgDn layout tabs,
+Ctrl+Tab drawing windows, Ctrl+Shift+C copy with base point,
+Ctrl+Shift+V paste as block, F1 help. The table is in the README.
 
 ### Added — Open CAD Studio as a second DWG satellite
 [Open CAD Studio](https://github.com/acadrust/opencadstudio) (MIT, Rust)
@@ -15,6 +88,29 @@ on the LibreDWG binaries for `.dwg`. LibreDWG stays first for reading and
 for r2000 writes; Open CAD Studio keeps the source DXF version, so the
 bridge upgrades the intermediate DXF to AC1032 before asking for r2018.
 `ingecad --check` lists the converters it found.
+
+### Fixed
+- **A crash in the core, older than the plugins**: Python collected cyclic
+  garbage on a worker thread (the index warmer, the regen worker, the
+  autosave…) and the garbage held Qt objects made on the GUI thread —
+  one segfault in five runs of the suite, reproducible on demand. Every
+  worker now runs with the collector paused, so collections only ever
+  happen on the GUI thread.
+- With two plugins on, **Ctrl+C on the canvas copied nothing**: every menu
+  rebuild added the clipboard actions again and Qt fires none of an
+  ambiguous shortcut. Also Delete, Ctrl+X and Ctrl+V.
+- The layer control, the Layers tab and the Properties tab now follow a
+  command that creates or removes a layer, and follow an undo at once
+  instead of on the next mouse move; Options' Apply button applies plugin
+  pages, as OK did.
+- One question, one place: the dimension magnet inside a 1:5 viewport
+  reached 5× less than it should; the Block Editor's overlay flattened
+  arcs 2 000× coarser than the scene; Properties showed an untranslated
+  colour name beside a translated one. Each answer now lives once.
+
+### Changed
+- The menu order puts plugin menus between Modify and Tools; Find keeps
+  its Edit entry without a key.
 
 ## v0.4.7 — 2026-08-29
 

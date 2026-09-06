@@ -532,6 +532,17 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🚀 v0.6.0 — 2026-09-06, con el OK de Marco («haz el release»)
+
+Una sola release para lo que el plan llamaba v0.5 y v0.6: el contrato de
+complementos y su gestor, Topografía (T1–T7) y Terreno (G1–G4), el teclado
+de AutoCAD con FORZC/RASTREO/DIN, y los arreglos del núcleo de estos días
+(el segfault del recolector en hilos de trabajo, el Ctrl+C ambiguo con dos
+complementos, los paneles que no seguían a los comandos). Detalle en
+`CHANGELOG.md`. Pendiente conocido: el dogfooding de Terreno con Marco
+sobre planos reales quedó para después de la publicación por decisión
+suya; lo que encuentre va a la 0.6.1.
+
 ## 🗓 Sesión 2026-09-06 (sexies) — F11 y F12 como funciones: rastreo de referencia y entrada dinámica
 
 **Marco: «haz la 2».** Los dos modos que faltaban en la barra de estado

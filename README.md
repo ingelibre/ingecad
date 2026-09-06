@@ -31,10 +31,20 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature AutoCAD clone.
 
-## Status — v0.4.7
+## Status — v0.6.0
 
 What works today:
 
+- **Topography plugin** (menu *Topography*): survey points from the total
+  station's CSV, bearings and distances, the construction chart, areas and
+  subdivision, the descriptive report, an own Delaunay TIN with contours,
+  profiles, cross sections, earthworks, platforms with slopes to daylight
+  and exact volumes — all plain DXF that any CAD opens.
+- **Terrain plugin** (menu *Terrain*): georeference the drawing (UTM zone,
+  WGS84 or PSAD56), read or type latitude and longitude, ground elevations
+  from a global DEM, the satellite image under the plan, and Google Earth
+  both ways by KML/KMZ. Plugins are managed in Tools ▸ Plugins; the
+  contract for writing one is in `docs/plugins.md`.
 - **Faithful viewer** for real-world DWG/DXF: nested blocks, MTEXT, hatches
   (patterns + solids), linetypes, dimensions, OCS, paperspace layouts —
   smooth pan/zoom even on cadastre-scale drawings (90k+ entities).
