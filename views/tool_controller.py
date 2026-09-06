@@ -67,6 +67,12 @@ class _CacheWarmer(QThread):
         self._document = document
 
     def run(self) -> None:
+        from core import gc_guard
+
+        with gc_guard.paused():      # never collect Qt garbage off the GUI thread
+            self._run()
+
+    def _run(self) -> None:
         revision = self._document.revision
         # Which space these caches describe. NOT derivable from the
         # revision: a Model/Layout switch marks the document dirty WITHOUT
@@ -100,6 +106,12 @@ class _GhostWorker(QThread):
         self._canvas = canvas
 
     def run(self) -> None:
+        from core import gc_guard
+
+        with gc_guard.paused():      # never collect Qt garbage off the GUI thread
+            self._run()
+
+    def _run(self) -> None:
         try:
             scene = build_scene_for_entities(
                 self._document, self._ents, self._flatten, self._canvas)

@@ -421,7 +421,7 @@ el fork hasta madurar.
 
 ## 🎯 LO PRIMERO DE LA PRÓXIMA SESIÓN (pedido de Marco, 2026-09-06)
 
-**1. Cazar el fallo de segmentación del pre-calentador (es un bug del
+**1. ✅ Cazado el 2026-09-06 (ver la sesión «quinquies»). Cazar el fallo de segmentación del pre-calentador (es un bug del
 núcleo, no de los complementos).** Una de cinco corridas completas de la
 suite del 2026-09-06 murió con SIGSEGV al 75 %, en
 `tests/test_shortcut_commands.py::test_select_similar_and_isolation_run_end_to_end`,
@@ -474,6 +474,16 @@ suite (`views/main_window.py`, tabla `_MODES` y `_build_menus`):
   dinámica junto al cursor), F4/F5/F6 (tableta, isoplano, SCP dinámico:
   fuera del filtro maestro). De esos, FORZC y OTRACK son memoria muscular
   del que dibuja rápido; anotar en la prueba cuáles echa de menos Marco.
+✅ **Hecho el 2026-09-06 (a2bdc1e): FORZC y toda la tabla de AutoCAD;
+ver la sesión «quater».**
+
+**4. Para la PRÓXIMA RELEASE (pedido de Marco, 2026-09-06): F11 y F12 como
+funciones.** **F11 = OTRACK** (rastreo de referencia a objetos: adquirir
+un punto de referencia pasando el cursor y trazar desde él líneas de
+rastreo ortogonales/polares) y **F12 = DYNMODE** (entrada dinámica: el
+prompt y las cotas junto al cursor). Son funciones, no teclas: cuando
+existan, la tecla se agrega a `_MODES` / `_build_acad_shortcuts` y al test
+de teclado. Van después del dogfooding de Terreno y antes de publicar.
 
 ## 🗓 Sesión 2026-09-05 — una pregunta, un lugar (el pedido de Marco, hecho)
 
@@ -521,6 +531,57 @@ ventana falsa.
 **La regla queda, y es para todo lo que sigue: si dos sitios contestan la
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
+
+## 🗓 Sesión 2026-09-06 (quinquies) — el segfault del pre-calentador, cazado
+
+**Marco: «cacemos ese bug que parece que estaba en el núcleo».** Estaba, y
+es más viejo que los complementos: desde que existe un hilo que corre
+Python fuera de la GUI (el pre-calentador de índices, el regen worker, el
+autoguardado, el fantasma de arrastre, las miniaturas de la ventana de
+inicio).
+
+**El mecanismo, medido y no supuesto.** CPython corre una recolección de
+basura cíclica **en el hilo que cruza el umbral de asignaciones**, sea
+cual sea. Si la basura que encuentra tiene envoltorios de Qt creados en la
+GUI (iconos, pixmaps, acciones atrapados en un ciclo de referencias), sus
+destructores corren en ESE hilo, y Qt prohíbe destruir objetos de GUI
+fuera del hilo de la GUI. Reproductor (`scratchpad/segv_repro.py`):
+`gc.set_threshold(5, 1, 1)` para que cada asignación dispare una
+recolección, y ciclos de iconos fabricados en la GUI mientras el
+calentador recorre un dibujo de 400 círculos. **Sin arreglo: SIGSEGV en la
+primera ronda de la primera corrida**, con la misma traza que la suite
+(hilo `cache-warmer` «Garbage-collecting» dentro de `snap._build`, hilo
+principal en `swatch_icon`). Las dos corridas siguientes sin arreglo no
+llegaron a caer en 300 s: es una carrera, no un fallo determinista, y por
+eso la suite lo mostró una vez en cinco.
+
+**El arreglo (`core/gc_guard.py`): la recolección automática se apaga
+mientras viva cualquier hilo trabajador, y se vuelve a encender cuando
+termina el último.** Cada `QThread.run()` de la app corre su cuerpo bajo
+`gc_guard.paused()` (contador con candado; un hilo que revienta lo
+restaura al salir). Así el hilo de la GUI no dispara recolecciones
+mientras un trabajador corre (una pausa acotada a segundos) y **todas las
+recolecciones que ocurren, ocurren en la GUI**, donde los objetos de Qt sí
+pueden morir. Nada se fuga: el recolector está pausado, no desactivado.
+Descartada la variante «apagar el GC del todo y recolectar por un timer en
+la GUI» (la de pyqtgraph): en la suite, los tests puros no procesan
+eventos y los documentos de ezdxf —cíclicos: el documento y sus
+entidades se apuntan mutuamente— se habrían acumulado sin límite.
+
+**Con el arreglo: el mismo reproductor, los mismos umbrales, 3 corridas de
+5 rondas, 0 fallos; el recolector vuelve encendido y sin pausas colgadas.**
+Tests en `tests/test_gc_guard.py`: el contador anidado y su restauración
+ante excepción, un hilo que asigna bajo el guardián sin finalizar jamás
+la basura de la GUI (y la GUI la finaliza después), los cinco hilos de la
+app bajo el guardián (test estructural, para que un hilo nuevo no se
+olvide), y el reproductor acortado dentro de la suite.
+
+⚠️ **La lección de método:** un fallo que la suite muestra una vez en
+cinco no se caza corriendo la suite cinco veces más; se caza **forzando la
+condición de carrera** hasta que sea determinista (umbrales del GC a 5-1-1
+y basura de GUI fabricada a propósito) y recién ahí se mide el arreglo. Y
+la lista de hilos se busca con `grep class .*QThread`, no de memoria: el
+de las miniaturas no estaba en la traza y también podía matar la app.
 
 ## 🗓 Sesión 2026-09-06 (quater) — el teclado de AutoCAD, y las barras de los complementos apagadas
 

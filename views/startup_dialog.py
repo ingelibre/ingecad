@@ -57,6 +57,12 @@ class _ThumbnailWorker(QThread):
         self._stop = True
 
     def run(self) -> None:
+        from core import gc_guard
+
+        with gc_guard.paused():      # never collect Qt garbage off the GUI thread
+            self._run()
+
+    def _run(self) -> None:
         from formats import thumbnails
 
         for path in self._paths:

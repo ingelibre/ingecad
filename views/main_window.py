@@ -90,6 +90,12 @@ class RegenWorker(QThread):
         self._revision = revision
 
     def run(self) -> None:
+        from core import gc_guard
+
+        with gc_guard.paused():      # never collect Qt garbage off the GUI thread
+            self._run()
+
+    def _run(self) -> None:
         import time
 
         from render.backend import build_scene
@@ -124,6 +130,12 @@ class _AutoSaveWorker(QThread):
         self._info = Path(info_path)
 
     def run(self) -> None:
+        from core import gc_guard
+
+        with gc_guard.paused():      # never collect Qt garbage off the GUI thread
+            self._run()
+
+    def _run(self) -> None:
         from core import autosave
 
         temporary = self._sv.with_suffix(self._sv.suffix + ".part")
