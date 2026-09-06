@@ -419,6 +419,41 @@ Siguiente paso anotado: comparar byte a byte los section-page headers contra una
 referencia r2018 escrita por ODA. Y el CLA sigue pendiente: L4 es aporte grande, vive en
 el fork hasta madurar.
 
+## 🎯 LO PRIMERO DE LA PRÓXIMA SESIÓN (pedido de Marco, 2026-09-06)
+
+**1. Cazar el fallo de segmentación del pre-calentador (es un bug del
+núcleo, no de los complementos).** Una de cinco corridas completas de la
+suite del 2026-09-06 murió con SIGSEGV al 75 %, en
+`tests/test_shortcut_commands.py::test_select_similar_and_isolation_run_end_to_end`,
+antes de que corriera ningún test de Terreno. La traza (`faulthandler`,
+guardada en la nota de la sesión G4): el hilo **`cache-warmer`**
+(`views/tool_controller.py:81`, `_IndexWarmer.run` → `core/select.py:500`,
+`GeometryIndex._build`) estaba **recolectando basura** y esa recolección
+finalizó envoltorios de Qt (`shibokensupport/feature.py`) mientras el hilo
+principal pintaba iconos (`views/color_dialog.py:75 swatch_icon` ←
+`layers_panel.fill_color_combo` ← `_refresh_props_toolbar` ←
+`attach_document` ← `new_document`). Qt sólo admite crear y destruir
+objetos GUI (QIcon, QPixmap) desde el hilo de la interfaz; el GC de Python
+corre en el hilo que lo dispara, así que basura cíclica con iconos creada
+por el hilo principal puede morir en el hilo del calentador. **No es sólo
+de la suite: el calentador corre en la app real en cada plano abierto.**
+Pistas para el arreglo: (a) que el calentador no dispare el GC —
+`gc.disable()` al entrar y `gc.enable()` al salir, o `gc.freeze()`—, o
+(b) que los iconos no formen ciclos (los combos guardan `QIcon` por fila;
+buscar quién retiene una referencia circular), o (c) una recolección
+explícita en el hilo principal antes de lanzar el hilo. Reproducirlo
+primero: correr la suite entera varias veces, o el test con un
+`gc.set_threshold` bajo que fuerce recolecciones en el calentador. El
+archivo aislado pasó 3/3 y la corrida completa siguiente pasó entera.
+
+**2. Después, en otra sesión: dogfooding de los complementos de Terreno
+ANTES de cualquier release.** Marco va a probar GEOREF, LATLON,
+DEMPOINTS, DEMPROFILE, SATIMAGE, KMLIN, KMLOUT y KMLOVERLAY sobre planos
+reales, más el DWG con imagen en BricsCAD y los dos KMZ en Google Earth
+(`capturas/`). La v0.5/v0.6 se publican sólo con su OK y después de esa
+prueba (regla `[[preguntar-antes-de-release]]`). Redes (v0.7) no se abre
+antes.
+
 ## 🗓 Sesión 2026-09-05 — una pregunta, un lugar (el pedido de Marco, hecho)
 
 **Lo que Marco pidió el 2026-08-29 —reducir conceptos duplicados antes que
