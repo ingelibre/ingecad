@@ -299,3 +299,249 @@ def insert_satellite(document, placement, path, polygon, clip: bool, source,
         AddEntityCommand("SAT-CAPTION", make_text, layer=layer),
         DeferredCommand("send to back", send_back),
     ])
+
+
+# -- G4: to and from Google Earth ------------------------------------------------------------------
+
+KML_TAG = "KML"
+LAYERS["kml"] = ("TERRENO-KML", 7)
+
+
+def entity_rgb(document, entity) -> tuple[int, int, int]:
+    """The colour the entity shows: its true colour, else its ACI, else
+    its layer's -- as RGB, which is what a KML wants."""
+    from ezdxf import colors as ezcolors
+
+    rgb = entity.rgb
+    if rgb is not None:
+        return tuple(int(c) for c in rgb)
+    aci = entity.dxf.get("color", 256)
+    if aci in (0, 256) or aci is None:
+        layers = document.doc.layers
+        layer = layers.get(entity.dxf.layer) if entity.dxf.layer in layers else None
+        aci = abs(int(layer.color)) if layer is not None else 7
+    if not 1 <= int(aci) <= 255:
+        aci = 7
+    return tuple(int(c) for c in ezcolors.aci2rgb(int(aci)))
+
+
+def _kml_xdata(entity) -> tuple[str, str, str]:
+    """(name, description, folder) a KML import left on the entity."""
+    if entity.has_xdata(APPID):
+        values = [v for _c, v in entity.get_xdata(APPID)]
+        if values and values[0] == KML_TAG:
+            return (str(values[1]) if len(values) > 1 else "",
+                    str(values[2]) if len(values) > 2 else "",
+                    str(values[3]) if len(values) > 3 else "")
+    return "", "", ""
+
+
+def _flat_vertices(entity) -> list[tuple[float, float, float]]:
+    """A curve's vertices for a KML: arcs flattened to 5 cm, Z kept."""
+    import ezdxf.path
+
+    kind = entity.dxftype()
+    if kind == "LINE":
+        s, e = entity.dxf.start, entity.dxf.end
+        return [(s.x, s.y, s.z), (e.x, e.y, e.z)]
+    if kind == "POLYLINE" and entity.is_3d_polyline:
+        return [(v.dxf.location.x, v.dxf.location.y, v.dxf.location.z) for v in entity.vertices]
+    path = ezdxf.path.make_path(entity)
+    return [(p.x, p.y, p.z) for p in path.flattening(0.05)]
+
+
+def _is_closed(entity) -> bool:
+    kind = entity.dxftype()
+    if kind in ("CIRCLE", "ELLIPSE"):
+        return kind == "CIRCLE" or abs(entity.dxf.end_param - entity.dxf.start_param) >= 2 * math.pi - 1e-9
+    if kind == "LWPOLYLINE":
+        return bool(entity.closed)
+    if kind == "POLYLINE":
+        return bool(entity.is_closed)
+    return False
+
+
+def kml_features(document, entities) -> tuple[list, int]:
+    """The entities as KML features (WGS84), and how many could not go:
+    points (named as the surveyor named them), lines and polylines
+    (arcs flattened), circles and closed polylines as polygons, texts as
+    named points. The description says the layer, and an area or a
+    length."""
+    from core.hatch_boundary import polygon_area
+    from . import kml as kml_mod
+
+    georef = georef_of(document)
+    if georef is None:
+        raise ValueError("the drawing is not georeferenced")
+    topo = topography()
+    features, skipped = [], 0
+
+    def latlon(x, y, z=0.0):
+        lat, lon = datum.drawing_to_latlon(georef, float(x), float(y))
+        return (lat, lon, float(z))
+
+    for entity in entities:
+        kind = entity.dxftype()
+        name, description, folder = _kml_xdata(entity)
+        color = entity_rgb(document, entity)
+        layer_note = tr("Layer {layer}", layer=entity.dxf.layer)
+        if kind == "POINT":
+            loc = entity.dxf.location
+            if topo is not None and topo.is_survey_point(entity):
+                point = topo.survey_point(entity)
+                name, description = name or point.name, description or point.desc
+            features.append(kml_mod.Feature("point", [latlon(loc.x, loc.y, loc.z)], name,
+                                            description or layer_note, color, [], folder))
+        elif kind in ("TEXT", "MTEXT"):
+            insert = entity.dxf.insert
+            text = entity.plain_text() if kind == "MTEXT" else entity.dxf.text
+            features.append(kml_mod.Feature("point", [latlon(insert.x, insert.y, insert.z)],
+                                            name or text, description or layer_note, color, [], folder))
+        elif kind in ("LINE", "LWPOLYLINE", "POLYLINE", "CIRCLE", "ARC", "ELLIPSE", "SPLINE"):
+            try:
+                verts = _flat_vertices(entity)
+            except Exception:
+                skipped += 1
+                continue
+            if len(verts) < 2:
+                skipped += 1
+                continue
+            closed = _is_closed(entity)
+            if closed and len(verts) > 2 and abs(verts[0][0] - verts[-1][0]) < 1e-9 \
+                    and abs(verts[0][1] - verts[-1][1]) < 1e-9:
+                verts = verts[:-1]
+            coords = [latlon(*v) for v in verts]
+            if closed and len(coords) >= 3:
+                flat = [(v[0], v[1]) for v in verts]
+                per = sum(math.hypot(flat[(i + 1) % len(flat)][0] - flat[i][0],
+                                     flat[(i + 1) % len(flat)][1] - flat[i][1]) for i in range(len(flat)))
+                note = description or tr("{layer_note}. Area {area:.2f} m², perimeter {per:.2f} m",
+                                         layer_note=layer_note, area=polygon_area(flat), per=per)
+                features.append(kml_mod.Feature("polygon", coords, name, note, color, [], folder))
+            else:
+                length = sum(math.hypot(verts[i + 1][0] - verts[i][0], verts[i + 1][1] - verts[i][1])
+                             for i in range(len(verts) - 1))
+                note = description or tr("{layer_note}. Length {length:.2f} m",
+                                         layer_note=layer_note, length=length)
+                features.append(kml_mod.Feature("line", coords, name, note, color, [], folder))
+        else:
+            skipped += 1
+    return features, skipped
+
+
+def export_kmz(document, entities, path, name: str = "IngeCAD") -> tuple[int, int]:
+    """Write the entities to ``path`` (.kmz or .kml); (written, skipped)."""
+    from . import kml as kml_mod
+
+    features, skipped = kml_features(document, entities)
+    if features:
+        kml_mod.write_file(path, features, name)
+    return len(features), skipped
+
+
+def import_features(document, features, text_height: float = 1.0) -> CompositeCommand:
+    """KML features -> plain entities on TERRENO-KML, one undo step: a
+    point is a POINT with its name as TEXT beside it, a line an
+    LWPOLYLINE (a 3D POLYLINE when it carries altitudes), a polygon a
+    closed LWPOLYLINE with each hole as another; the colour goes on the
+    entity as true colour, name, description and folder in XDATA."""
+    georef = georef_of(document)
+    if georef is None:
+        raise ValueError("the drawing is not georeferenced")
+    layer = LAYERS["kml"][0]
+
+    def xy(coord):
+        return datum.latlon_to_drawing(georef, coord[0], coord[1])
+
+    def tags(f, suffix: str = ""):
+        return [(1000, KML_TAG), (1000, (f.name + suffix)[:255]), (1000, f.description[:255]),
+                (1000, f.folder[:255])]
+
+    def paint(entity, f):
+        if f.color is not None:
+            entity.rgb = tuple(int(c) for c in f.color)
+
+    commands = layer_commands(document, ("kml",))
+    for f in features:
+        if f.kind == "point":
+            x, y = xy(f.coords[0])
+            z = f.coords[0][2]
+
+            def make_point(msp, f=f, x=x, y=y, z=z):
+                ensure_appid(msp.doc)
+                entity = msp.add_point((x, y, z))
+                entity.set_xdata(APPID, tags(f))
+                paint(entity, f)
+                return entity
+            commands.append(AddEntityCommand("KML-POINT", make_point, layer=layer))
+            if f.name:
+                def make_label(msp, f=f, x=x, y=y):
+                    entity = msp.add_text(f.name, height=text_height)
+                    entity.set_placement((x + text_height * 0.5, y + text_height * 0.5))
+                    paint(entity, f)
+                    return entity
+                commands.append(AddEntityCommand("KML-LABEL", make_label, layer=layer))
+        elif f.kind == "line":
+            pts = [xy(c) + (c[2],) for c in f.coords]
+            three_d = any(abs(p[2]) > 1e-9 for p in pts) and len({round(p[2], 3) for p in pts}) > 1
+
+            def make_line(msp, f=f, pts=pts, three_d=three_d):
+                ensure_appid(msp.doc)
+                if three_d:
+                    entity = msp.add_polyline3d(pts)
+                else:
+                    entity = msp.add_lwpolyline([(p[0], p[1]) for p in pts],
+                                                dxfattribs={"elevation": pts[0][2]})
+                entity.set_xdata(APPID, tags(f))
+                paint(entity, f)
+                return entity
+            commands.append(AddEntityCommand("KML-LINE", make_line, layer=layer))
+        else:
+            rings = [(f.coords, "")] + [(hole, tr(" (hole)")) for hole in f.holes]
+            for ring, suffix in rings:
+                pts = [xy(c) for c in ring]
+
+                def make_ring(msp, f=f, pts=pts, suffix=suffix):
+                    ensure_appid(msp.doc)
+                    entity = msp.add_lwpolyline(pts, close=True)
+                    entity.set_xdata(APPID, tags(f, suffix))
+                    paint(entity, f)
+                    return entity
+                commands.append(AddEntityCommand("KML-POLYGON", make_ring, layer=layer))
+    return CompositeCommand("KML import", commands)
+
+
+def overlay_quad(georef: Georef, e0: float, n0: float, e1: float, n1: float) -> list:
+    """The rectangle's corners as (lat, lon), SW, SE, NE, NW -- the order
+    a gx:LatLonQuad wants."""
+    return [datum.drawing_to_latlon(georef, x, y) for x, y in ((e0, n0), (e1, n0), (e1, n1), (e0, n1))]
+
+
+def render_overlay(document, e0: float, n0: float, e1: float, n1: float,
+                   width_px: int) -> tuple[bytes, int, int]:
+    """The model space inside the rectangle as a PNG with a transparent
+    background, north up, ``width_px`` wide; (bytes, width, height)."""
+    from PySide6.QtCore import QBuffer, QIODevice, QRectF, Qt
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from formats.pdf_out import build_graphics_scene
+
+    width_px = max(16, min(int(width_px), 8192))
+    height_px = max(16, int(round(width_px * (n1 - n0) / (e1 - e0))))
+    scene = build_graphics_scene(document, "Model")
+    scene.setBackgroundBrush(Qt.NoBrush)                  # the terrain shows through
+    image = QImage(width_px, height_px, QImage.Format_ARGB32)
+    image.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(image)
+    try:
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        # the scene keeps world Y (north up) and Qt paints Y down: flip
+        painter.translate(0, height_px)
+        painter.scale(1, -1)
+        scene.render(painter, QRectF(0, 0, width_px, height_px), QRectF(e0, n0, e1 - e0, n1 - n0),
+                     Qt.IgnoreAspectRatio)
+    finally:
+        painter.end()
+    buffer = QBuffer()
+    buffer.open(QIODevice.WriteOnly)
+    image.save(buffer, "PNG")
+    return bytes(buffer.data()), width_px, height_px

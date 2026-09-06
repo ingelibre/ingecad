@@ -357,6 +357,18 @@ dibuja IMAGE y ya mueve sus cuatro esquinas sin regen.
 
 ### G4 — Ida y vuelta con Google Earth por KML/KMZ (1 sesión)
 
+> **Estado (2026-09-06): hecha — con esto Terreno v0.6 (G1–G4) está completo.**
+> KMLIN (puntos, líneas, polígonos con huecos, nombres, descripciones,
+> colores por estilo y StyleMap, carpetas, gx:Track), KMLOUT (puntos con el
+> nombre del topógrafo, líneas, polilíneas y arcos aplanados, círculos y
+> textos; área o longitud en la descripción; KMZ o KML) y KMLOVERLAY (el
+> modelo dentro de un polígono renderizado con fondo transparente, norte
+> arriba, como GroundOverlay con `gx:LatLonQuad` y opacidad). Medido sobre
+> el levantamiento de Arequipa: 97 marcas, ida y vuelta del lindero con
+> **0,09 mm** de error (el DoD pedía < 1 cm) y de los 96 puntos con 0,17 mm,
+> cota conservada. Entregables para Google Earth en `capturas/`:
+> `levantamiento-arequipa.kmz` y `levantamiento-arequipa-overlay.kmz`.
+
 `KMLIN` (polígonos, rutas y marcadores → polilíneas y puntos, conservando
 nombre y color; portar `georef/geoimport.py`), `KMLOUT` (puntos, polilíneas
 y polígonos seleccionados → KMZ con nombre, descripción y color; se abre en

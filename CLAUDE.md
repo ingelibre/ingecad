@@ -466,6 +466,65 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-06 (ter) — G4: ida y vuelta con Google Earth — **Terreno v0.6 completo**
+
+**Tres comandos en Terreno, y con ellos se cierra el plan de la v0.6
+(G1–G4):** KMLIN (las marcas de un KML o KMZ como POINT con su nombre en
+TEXT, LWPOLYLINE —POLYLINE 3D cuando trae altitudes—, y polígonos como
+polilíneas cerradas con cada hueco como otra; color verdadero en la
+entidad; nombre, descripción y carpeta en XDATA), KMLOUT (la selección o
+todo el modelo a un KMZ que Google Earth abre con doble clic: los puntos
+con el nombre y la descripción que les puso el topógrafo, líneas y
+polilíneas con los arcos aplanados a 5 cm, círculos y polilíneas cerradas
+como polígonos, textos como marcas con su texto; la descripción dice la
+capa y el área o la longitud; los colores ByLayer resueltos a RGB) y
+KMLOVERLAY (el modelo dentro de un polígono, dibujado con el
+`QGraphicsScene` de `formats/pdf_out` sobre **fondo transparente y con el
+norte arriba** —la escena conserva la Y del mundo y Qt pinta hacia abajo,
+así que el painter va volteado—, envuelto como GroundOverlay con
+`gx:LatLonQuad`: las cuatro esquinas exactas de un raster alineado a UTM,
+no una caja lat/lon que quedaría un pelo girada).
+
+**El DoD, medido sobre el levantamiento de Arequipa:** 97 marcas (el
+lindero y los 96 puntos) a KMZ y de vuelta a un dibujo nuevo con la misma
+georreferencia: el lindero vuelve con **0,09 mm** de error y los puntos
+con 0,17 mm, cota incluida; el plan pedía menos de 1 cm. La precisión sale
+de escribir nueve decimales de grado (0,1 mm) y del UTM invertible de G1.
+El overlay de 2048 × 2424 px del levantamiento se renderiza en 0,6 s.
+Todo va con `clampToGround`: la altitud viaja como tercera coordenada
+para el regreso, pero Google Earth jamás entierra un lindero bajo su
+propio terreno. **Entregables para que Marco los abra en Google Earth:**
+`capturas/levantamiento-arequipa.kmz` y `…-overlay.kmz`.
+
+**Lo que se portó y lo que no:** el importador de IngeTrazo
+(`georef/geoimport.py`) sólo leía líneas y polígonos sin color; el de
+IngeCAD (`plugins/terreno/kml.py`, puro: `xml.etree` y `zipfile`) lee
+también puntos, huecos, descripciones, colores por Style y StyleMap,
+carpetas y `gx:Track`, y escribe. GeoJSON quedó fuera a propósito: el
+plan dice KML/KMZ, y un formato más es otra pregunta que contestar en dos
+lugares.
+
+⚠️ **Trampa de test propia:** inventé la quinta esquina del lote en el
+test y el área dio 1 406 m² en vez de los 1 523,77 del levantamiento. Los
+vértices se leen ahora del CSV, como hace el test de punta a punta de
+Topografía. Las coordenadas de control se leen de los datos, no se
+recuerdan. 15 tests nuevos.
+
+⚠️ **Un segfault en una de cinco corridas completas de hoy, anotado para
+cazarlo aparte:** al 75 % de la suite, en
+`test_shortcut_commands.py::test_select_similar_and_isolation_run_end_to_end`
+(antes de que corriera ningún test de G4), el **hilo del pre-calentador
+de índices** (`tool_controller._IndexWarmer.run` → `select._build`) entró
+en una **recolección de basura** que finalizó envoltorios de Qt mientras
+el hilo principal pintaba iconos (`swatch_icon` desde
+`_refresh_props_toolbar`). Es la familia del CI del 2026-08-23: objetos
+GUI de Qt finalizados desde un hilo que no es el de la GUI. El archivo
+solo pasa 3/3 y la corrida completa siguiente pasó entera (1243 tests);
+el arreglo de fondo
+(que el calentador no dispare el GC sobre basura de la GUI —`gc.freeze`
+al entrar, o una recolección explícita en el hilo principal—) es trabajo
+del núcleo, no del complemento, y va aparte.
+
 ## 🗓 Sesión 2026-09-06 (bis) — G3: la imagen satelital bajo el plano
 
 **SATIMAGE, en Terreno:** un polígono cerrado (o dos esquinas), un nivel

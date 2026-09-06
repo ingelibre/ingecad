@@ -15,8 +15,10 @@ the numbers are for a preliminary design. G3: SATIMAGE puts the
 satellite image of a polygon under the plan -- a licensed tile source
 (Esri World Imagery, Sentinel-2 cloudless, OpenStreetMap, or the user's
 own XYZ), resampled into the drawing's UTM grid, saved beside the drawing
-and referenced as a plain IMAGE with its attribution. To come: G4 KML/KMZ
-to and from Google Earth.
+and referenced as a plain IMAGE with its attribution. G4: KMLIN brings a
+KML/KMZ's placemarks in as points, polylines and polygons with their names
+and colours; KMLOUT writes the selection as a KMZ Google Earth opens with
+a double click; KMLOVERLAY drapes a rendering of the plan on its terrain.
 """
 from __future__ import annotations
 
@@ -49,8 +51,8 @@ PLUGIN = PluginSpec(
     name="Terrain",
     version="0.6.0",
     description="Georeference the drawing (UTM zone, WGS84 or PSAD56), read or type geographic "
-                "coordinates, take ground elevations from a global DEM, and put the satellite "
-                "image under the plan.",
+                "coordinates, take ground elevations from a global DEM, put the satellite image "
+                "under the plan, and go to and from Google Earth by KML/KMZ.",
     tools=dict(TOOL_CLASSES),
     menu=(
         MenuItem("Georeference drawing...", "GEOREF"),
@@ -60,6 +62,10 @@ PLUGIN = PluginSpec(
         MenuItem("Profile from DEM...", "DEMPROFILE"),
         SEPARATOR,
         MenuItem("Satellite image...", "SATIMAGE"),
+        SEPARATOR,
+        MenuItem("Import KML / KMZ...", "KMLIN"),
+        MenuItem("Export to Google Earth (KMZ)...", "KMLOUT"),
+        MenuItem("Plan overlay for Google Earth...", "KMLOVERLAY"),
     ),
     options_page=_options_page,
     i18n_dir=Path(__file__).parent / "i18n",

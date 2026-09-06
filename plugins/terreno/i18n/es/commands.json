@@ -14,5 +14,14 @@
   },
   "SATIMAGE": {
     "name": "IMAGENSATELITAL"
+  },
+  "KMLIN": {
+    "name": "IMPORTARKML"
+  },
+  "KMLOUT": {
+    "name": "EXPORTARKML"
+  },
+  "KMLOVERLAY": {
+    "name": "SUPERPONERKML"
   }
 }

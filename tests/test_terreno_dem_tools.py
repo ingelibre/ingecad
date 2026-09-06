@@ -207,9 +207,9 @@ def test_the_window_runs_dempoints_from_the_command_line_and_the_layers_tab_foll
         terrain = next(a for a in bar_actions if a.text() == "Terrain")
         menu = terrain.menu()
         labels = [a.text() for a in menu.actions() if a.text()]
-        assert labels == ["Georeference drawing...", "Geographic coordinates...",
-                          "Elevation points from DEM...", "Profile from DEM...",
-                          "Satellite image..."]
+        assert labels[:5] == ["Georeference drawing...", "Geographic coordinates...",
+                              "Elevation points from DEM...", "Profile from DEM...",
+                              "Satellite image..."]           # G4 checks its own three
         win.new_document("m")
         win.tools._execute(SetGeorefCommand(Georef(19)))
         win.tools.dem = dem.Dem(dem.TileStore(dem.AWS_TERRAIN, tmp_path / "cache", FakeFetch()), 13)

@@ -5,11 +5,17 @@ the way AutoCAD prompts. Both run headless (the suite drives them
 without a window): every answer arrives as a typed token or a point."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from core.georef import Georef
 from core.i18n import tr
 from tools.base import Tool
 
 from . import actions, datum, prefs
+
+
+def _window(ctx):
+    return getattr(ctx.services, "window", None)
 
 
 def _document(ctx):
@@ -647,5 +653,199 @@ class SatImageTool(_BoundaryTool):
         self.ctx.finish()
 
 
+# ======================================================================
+# G4: to and from Google Earth
+# ======================================================================
+
+from . import kml as kml_mod                  # noqa: E402
+
+KML_FILTER = "Google Earth (*.kml *.kmz);;All files (*)"
+KMZ_FILTER = "Google Earth KMZ (*.kmz);;KML (*.kml);;All files (*)"
+
+
+def _document_stem(document) -> str:
+    path = getattr(document, "path", None)
+    return Path(path).stem if path else "plano"
+
+
+def _georef_or_stop(tool) -> bool:
+    document = _document(tool.ctx)
+    georef = actions.georef_of(document)
+    if georef is None:
+        tool.ctx.echo(tr("The drawing is not georeferenced: run GEOREF first."))
+        tool.ctx.finish()
+        return False
+    tool._georef = georef
+    return True
+
+
+class KmlInTool(Tool):
+    """KMLIN: the placemarks of a KML or KMZ (Google Earth) as points,
+    polylines and polygons on TERRENO-KML, in the drawing's coordinates,
+    with their names, descriptions and colours."""
+
+    def start(self) -> None:
+        self.name = "KMLIN"
+        if not _georef_or_stop(self):
+            return
+        window = _window(self.ctx)
+        if window is not None:
+            from views import file_dialogs
+
+            path = file_dialogs.get_open_file(window, tr("Import KML / KMZ"), tr(KML_FILTER))
+        else:
+            path = self.ctx.ask_text(tr("KML or KMZ file:"), "")
+        if not path:
+            self.ctx.finish()
+            return
+        try:
+            features = kml_mod.parse_file(path)
+        except (OSError, ValueError) as exc:
+            self.ctx.echo(tr("Cannot read {path}: {error}", path=path, error=exc))
+            self.ctx.finish()
+            return
+        if not features:
+            self.ctx.echo(tr("No placemarks in {path}.", path=path))
+            self.ctx.finish()
+            return
+        document = _document(self.ctx)
+        self.ctx.execute(actions.import_features(document, features))
+        kinds = [f.kind for f in features]
+        self.ctx.echo(tr("{n} placemarks imported on {layer}: {p} points, {l} lines, {g} polygons.",
+                         n=len(features), layer=actions.LAYERS["kml"][0], p=kinds.count("point"),
+                         l=kinds.count("line"), g=kinds.count("polygon")))
+        viewport = getattr(window, "viewport", None)
+        if viewport is not None:
+            viewport.zoom_extents()
+        self.ctx.finish()
+
+
+class KmlOutTool(Tool):
+    """KMLOUT: the selected objects (or the whole model) as a KMZ that
+    opens in Google Earth with a double click."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "KMLOUT"
+        _georef_or_stop(self)
+
+    def selection_prompt(self) -> str:
+        return tr("Select objects to export (Enter for all):")
+
+    def on_selection(self, entities: list) -> None:
+        document = _document(self.ctx)
+        chosen = list(entities) if entities else list(document.doc.modelspace())
+        window = _window(self.ctx)
+        default = _document_stem(document) + ".kmz"
+        if window is not None:
+            from views import file_dialogs
+
+            path, _selected = file_dialogs.get_save_file(window, tr("Export to Google Earth"),
+                                                         default, tr(KMZ_FILTER))
+        else:
+            path = self.ctx.ask_text(tr("KMZ file:"), default)
+        if not path:
+            self.ctx.finish()
+            return
+        try:
+            written, skipped = actions.export_kmz(document, chosen, path, _document_stem(document))
+        except OSError as exc:
+            self.ctx.echo(tr("Cannot write {path}: {error}", path=path, error=exc))
+            self.ctx.finish()
+            return
+        if not written:
+            self.ctx.echo(tr("Nothing to export: points, lines, polylines, circles and texts go to Google Earth."))
+            self.ctx.finish()
+            return
+        self.ctx.echo(tr("{n} placemarks written to {path}: open it in Google Earth.", n=written, path=path))
+        if skipped:
+            self.ctx.echo(tr("{n} objects of other kinds were left out.", n=skipped))
+        self.ctx.finish()
+
+
+class KmlOverlayTool(_BoundaryTool):
+    """KMLOVERLAY: the plan inside a polygon (or a rectangle) rendered
+    with a transparent background and wrapped as a GroundOverlay KMZ
+    that Google Earth drapes on the terrain, with the opacity asked."""
+
+    def start(self) -> None:
+        self.name = "KMLOVERLAY"
+        self._begin()
+        self._width = 2048
+        self._opacity = 70
+        if not _georef_or_stop(self):
+            return
+        if not _in_model(_document(self.ctx)):
+            self.ctx.echo(tr("The overlay is rendered from model space."))
+            self.ctx.finish()
+
+    def _after_boundary(self) -> None:
+        self._stage = "width"
+        self.prompt("Image width in pixels <{w}>:", w=self._width)
+
+    def _ask_opacity(self) -> None:
+        self._stage = "opacity"
+        self.prompt("Opacity in percent <{o}>:", o=self._opacity)
+
+    def on_option(self, text: str) -> bool:
+        if self._stage not in ("width", "opacity"):
+            return False
+        try:
+            value = _number(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        if self._stage == "width":
+            self._width = int(max(64, min(8192, value)))
+            self._ask_opacity()
+        else:
+            self._opacity = int(max(0, min(100, value)))
+            self._run()
+        return True
+
+    def on_enter(self) -> None:
+        if self._stage == "width":
+            self._ask_opacity()
+        elif self._stage == "opacity":
+            self._run()
+        else:
+            self.ctx.finish()
+
+    def _run(self) -> None:
+        document = _document(self.ctx)
+        xs = [p[0] for p in self._polygon]
+        ys = [p[1] for p in self._polygon]
+        e0, e1, n0, n1 = min(xs), max(xs), min(ys), max(ys)
+        window = _window(self.ctx)
+        default = _document_stem(document) + "-overlay.kmz"
+        if window is not None:
+            from views import file_dialogs
+
+            path, _selected = file_dialogs.get_save_file(window, tr("Plan overlay for Google Earth"),
+                                                         default, tr("Google Earth KMZ (*.kmz)"))
+        else:
+            path = self.ctx.ask_text(tr("KMZ file:"), default)
+        if not path:
+            self.ctx.finish()
+            return
+        path = Path(path)
+        if path.suffix.lower() != ".kmz":
+            path = path.with_suffix(".kmz")
+        try:
+            png, width, height = actions.render_overlay(document, e0, n0, e1, n1, self._width)
+            overlay = kml_mod.Overlay("overlay.png", actions.overlay_quad(self._georef, e0, n0, e1, n1),
+                                      self._opacity / 100.0, _document_stem(document))
+            kml_mod.write_file(path, [], _document_stem(document), overlay, {"overlay.png": png})
+        except OSError as exc:
+            self.ctx.echo(tr("Cannot write {path}: {error}", path=path, error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.echo(tr("Overlay {w} x {h} px at {o}% opacity written to {path}: open it in Google Earth.",
+                         w=width, h=height, o=self._opacity, path=path))
+        self.ctx.finish()
+
+
 TOOL_CLASSES.update({"DEMPOINTS": DemPointsTool, "DEMPROFILE": DemProfileTool,
-                     "SATIMAGE": SatImageTool})
+                     "SATIMAGE": SatImageTool, "KMLIN": KmlInTool, "KMLOUT": KmlOutTool,
+                     "KMLOVERLAY": KmlOverlayTool})
