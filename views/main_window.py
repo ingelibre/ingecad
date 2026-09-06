@@ -1398,6 +1398,8 @@ class MainWindow(QMainWindow):
         ("ortho", "F8", "ORTHO", "Ortho mode"),
         ("polar", "F10", "POLAR", "Polar tracking"),
         ("osnap", "F3", "OSNAP", "Object snap"),
+        ("otrack", "F11", "OTRACK", "Object snap tracking"),
+        ("dyn", "F12", "DYN", "Dynamic input"),
         ("lwt", None, "LWT", "Show lineweight"),
     )
 
@@ -1451,6 +1453,9 @@ class MainWindow(QMainWindow):
         self._load_osnap_modes()
         self._load_display_settings()
         self._build_acad_shortcuts()
+        # dynamic input echoes what is being typed beside the cursor
+        self.command_line.input.textChanged.connect(
+            lambda _text: self.viewport.update() if self.tools.dyn_on else None)
 
     #: AutoCAD's default keyboard shortcuts (Command Reference, "Shortcut
     #: keys"), the ones IngeCAD has something to answer with. F3/F7/F8/F9/F10
@@ -1593,9 +1598,13 @@ class MainWindow(QMainWindow):
             value = self.tools.toggle(which)
             if which == "osnap":
                 self._save_osnap_modes()
+            if which == "otrack" and not value:
+                self.tools.clear_tracking()
+            self.viewport.update()
         self._update_mode_buttons()
         names = {"snap": tr("Snap"), "grid": tr("Grid"), "osnap": tr("Object snap"),
                  "ortho": tr("Ortho"), "polar": tr("Polar"),
+                 "otrack": tr("Object snap tracking"), "dyn": tr("Dynamic input"),
                  "lwt": tr("Lineweight display")}
         state = tr("on") if value else tr("off")
         self.command_line.echo(f"{names[which]}: {state}")

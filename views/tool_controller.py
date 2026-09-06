@@ -278,8 +278,22 @@ def _dim_grip_preview(entity, role, wx, wy):
             "text": f"{length:.2f}"}
 
 
+def _track_label(kind: str) -> str:
+    """AutoCAD's tooltip word for a tracking source: the snap mode's name
+    (Endpoint, Midpoint...) or Polar for the last point."""
+    from core import osnap as osnap_modes
+    from core.i18n import tr
+
+    if kind == "polar":
+        return tr("Polar")
+    label = osnap_modes.label_of(kind)
+    return tr(label) if label else kind.capitalize()
+
+
 class ToolController(QObject):
     changed = Signal()  # something visual changed: repaint the viewport
+    TRACK_DWELL_MS = 300          # pause on a snap point this long to acquire it
+    TRACK_MAX = 8                 # acquired points kept, oldest dropped first
 
     def __init__(self, window) -> None:
         super().__init__(window)
@@ -296,6 +310,25 @@ class ToolController(QObject):
         self.snap_on = False        # SNAP / F9: the cursor jumps by the grid
         self.shift_held = False     # AutoCAD: Shift held = ortho flipped for the moment
         self.cycling_on = True      # SELECTIONCYCLING (Ctrl+W)
+        # OTRACK / F11: object snap tracking. Pausing on an object snap
+        # point acquires it (a small +); dashed alignment paths run from
+        # every acquired point along the ortho (and polar) angles, and the
+        # cursor locks onto a path, or onto two paths' intersection.
+        self.otrack_on = False
+        self._track_points: list = []            # (x, y, kind) acquired
+        self._track_candidate = None
+        self._track_tolerance = 1.0
+        self.track_hint = None                   # (source, point, label) while locked
+        from PySide6.QtCore import QTimer
+
+        self._track_timer = QTimer(self)
+        self._track_timer.setSingleShot(True)
+        self._track_timer.setInterval(self.TRACK_DWELL_MS)
+        self._track_timer.timeout.connect(self.acquire_now)
+        # DYN / F12: dynamic input -- the prompt and the live coordinates
+        # beside the cursor, and bare coordinates relative after a first point
+        self.dyn_on = False
+        self.current_prompt = ""
         self.snap_engine: Optional[SnapEngine] = None
         self.snap_hit: Optional[SnapHit] = None
         self._cursor: Optional[tuple[float, float]] = None
@@ -447,7 +480,7 @@ class ToolController(QObject):
             self._crossing_rects = []
         ctx = ToolContext(
             execute=self._execute,
-            prompt=self.window.command_line.echo,
+            prompt=self._on_prompt,
             echo=self.window.command_line.echo,
             finish=self._finish,
             services=self,
@@ -924,9 +957,17 @@ class ToolController(QObject):
             if not b.name.startswith("*")
             and not would_recurse(document, b.name, editing))
 
+    def _on_prompt(self, text: str) -> None:
+        """A tool's prompt: to the command window, and remembered for the
+        dynamic-input tooltip beside the cursor."""
+        self.current_prompt = text
+        self.window.command_line.echo(text)
+
     def _finish(self) -> None:
         self.tool = None
         self.snap_hit = None
+        self.current_prompt = ""
+        self.clear_tracking()
         self._selecting_for = None
         self._window_anchor = None
         self.selection = set()  # command done: highlight goes off
@@ -1544,7 +1585,105 @@ class ToolController(QObject):
                 kinds=frozenset(self.osnap_modes),
                 from_point=self.tool.last_point if self.tool else None,
             )
+        self._track_tolerance = threshold_world
+        self._watch_for_acquisition()
         self._sync_ghost(wx, wy)
+
+    # -- object snap tracking (OTRACK) ----------------------------------------
+    def _watch_for_acquisition(self) -> None:
+        """Pausing the cursor on an object snap point acquires it (or lets
+        an acquired one go): the dwell timer fires only if the cursor is
+        still on the same point."""
+        hit = self.snap_hit
+        if not self.otrack_on or hit is None:
+            self._track_candidate = None
+            self._track_timer.stop()
+            return
+        key = (round(hit.x, 9), round(hit.y, 9))
+        if key != self._track_candidate:
+            self._track_candidate = key
+            self._track_timer.start()
+
+    def acquire_now(self) -> None:
+        """The dwell elapsed: acquire the snap point under the cursor, or
+        release it if it was acquired already."""
+        hit = self.snap_hit
+        if not self.otrack_on or hit is None or self._track_candidate is None:
+            return
+        if (round(hit.x, 9), round(hit.y, 9)) != self._track_candidate:
+            return
+        for i, (x, y, _kind) in enumerate(self._track_points):
+            if abs(x - hit.x) < 1e-9 and abs(y - hit.y) < 1e-9:
+                del self._track_points[i]
+                self.changed.emit()
+                return
+        self._track_points.append((hit.x, hit.y, hit.kind))
+        del self._track_points[:-self.TRACK_MAX]
+        self.changed.emit()
+
+    def track_points(self) -> list:
+        """The acquired points, ``(x, y, kind)``, for the overlay."""
+        return list(self._track_points)
+
+    def clear_tracking(self) -> None:
+        self._track_points = []
+        self._track_candidate = None
+        self._track_timer.stop()
+        self.track_hint = None
+
+    def _track_angles(self) -> list:
+        angles = [0.0, math.pi / 2]
+        if self.polar_on:
+            angles += [math.pi / 4, 3 * math.pi / 4]
+        return angles
+
+    def _tracked(self, wx: float, wy: float, anchor, ortho: bool):
+        """Where the alignment paths put the cursor: on the nearest path
+        within the aperture, or on the intersection of two paths from
+        different points when the cursor is near both. None if no path
+        is near. The last point counts as a source while ortho or polar
+        is on (AutoCAD's polar tracking joins object snap tracking)."""
+        tol = self._track_tolerance
+        sources = list(self._track_points)
+        if anchor is not None and (ortho or self.polar_on):
+            sources.append((anchor[0], anchor[1], "polar"))
+        if not sources:
+            return None
+        near = []
+        for sx, sy, kind in sources:
+            for ang in self._track_angles():
+                ux, uy = math.cos(ang), math.sin(ang)
+                dx, dy = wx - sx, wy - sy
+                along = dx * ux + dy * uy
+                px, py = sx + along * ux, sy + along * uy
+                dist = math.hypot(wx - px, wy - py)
+                if dist <= tol:
+                    near.append((dist, (sx, sy, kind), ang, (px, py)))
+        if not near:
+            return None
+        best = None
+        for i in range(len(near)):
+            for j in range(i + 1, len(near)):
+                a, b = near[i], near[j]
+                if a[1] is b[1] or a[1][:2] == b[1][:2]:
+                    continue
+                cross = math.cos(a[2]) * math.sin(b[2]) - math.sin(a[2]) * math.cos(b[2])
+                if abs(cross) < 1e-9:
+                    continue
+                (ax, ay), (bx, by) = a[1][:2], b[1][:2]
+                t = ((bx - ax) * math.sin(b[2]) - (by - ay) * math.cos(b[2])) / cross
+                ix, iy = ax + t * math.cos(a[2]), ay + t * math.sin(a[2])
+                d = math.hypot(wx - ix, wy - iy)
+                if d <= 2 * tol and (best is None or d < best[0]):
+                    best = (d, a[1], a[2], (ix, iy), b[1], b[2])
+        if best is not None:
+            _d, src, ang, point, other, other_ang = best
+            label = (f"{_track_label(src[2])}: <{math.degrees(ang):.0f}°, "
+                     f"{_track_label(other[2])}: <{math.degrees(other_ang):.0f}°")
+            return point, src, label
+        near.sort(key=lambda n: n[0])
+        _d, src, ang, point = near[0]
+        return point, src, f"{_track_label(src[2])}: <{math.degrees(ang):.0f}°"
 
     def _sync_ghost(self, wx: float, wy: float) -> None:
         """MOVE/COPY/PASTE drag preview: the tool exposes ghost_entities +
@@ -1674,6 +1813,7 @@ class ToolController(QObject):
                 self.changed.emit()
                 return
         self.tool.on_point(self.resolved_point(wx, wy))
+        self.clear_tracking()          # AutoCAD releases the acquired points with the point
         self.changed.emit()
 
     @property
@@ -1962,12 +2102,19 @@ class ToolController(QObject):
             return (wx, wy)  # object picking: raw cursor, no snap/ortho
         if self.snap_hit is not None:
             return (self.snap_hit.x, self.snap_hit.y)
+        self.track_hint = None
         if self.snap_on:
             step = self.snap_spacing()
             if step:
                 wx, wy = round(wx / step) * step, round(wy / step) * step
         ortho = self.ortho_on != self.shift_held
         anchor = self.tool.last_point if self.tool else None
+        if self.otrack_on and self._track_points:
+            tracked = self._tracked(wx, wy, anchor, ortho)
+            if tracked is not None:
+                point, source, label = tracked
+                self.track_hint = ((source[0], source[1]), point, label)
+                return point
         if anchor is not None and (ortho or self.polar_on):
             dx, dy = wx - anchor[0], wy - anchor[1]
             if self.polar_on and not ortho:
@@ -1981,6 +2128,44 @@ class ToolController(QObject):
                 return (wx, anchor[1])
             return (anchor[0], wy)
         return (wx, wy)
+
+    # -- dynamic input (DYN) -----------------------------------------------------
+    def dyn_lines(self) -> list:
+        """What the tooltip beside the cursor says: the prompt (while a
+        command runs), then what is being typed, or the live coordinates
+        -- absolute for a first point, ``distance < angle`` from the last
+        point after it, like AutoCAD's pointer input."""
+        if not self.dyn_on or self._cursor is None:
+            return []
+        lines = []
+        if self.tool is not None and self.current_prompt:
+            lines.append(self.current_prompt.rstrip(":").strip())
+        typed = ""
+        edit = getattr(getattr(self.window, "command_line", None), "input", None)
+        if edit is not None:
+            try:
+                typed = edit.text().strip()
+            except Exception:
+                typed = ""
+        if typed:
+            lines.append(typed)
+            return lines
+        units = getattr(self.window, "display_units", None)
+        units = units() if callable(units) else None
+        x, y = self.resolved_point(*self._cursor)
+        anchor = self.tool.last_point if self.tool else None
+        if anchor is not None:
+            d = math.hypot(x - anchor[0], y - anchor[1])
+            ang = math.degrees(math.atan2(y - anchor[1], x - anchor[0])) % 360.0
+            if units is not None:
+                lines.append(f"{units.length(d)} < {units.angle(ang)}")
+            else:
+                lines.append(f"{d:.4f} < {ang:.0f}")
+        elif units is not None:
+            lines.append(f"{units.length(x)}, {units.length(y)}")
+        else:
+            lines.append(f"{x:.4f}, {y:.4f}")
+        return lines
 
     # -- prompt input ----------------------------------------------------------
     def on_text(self, text: str) -> bool:
@@ -2008,7 +2193,7 @@ class ToolController(QObject):
             direction = math.atan2(constrained[1] - anchor[1],
                                    constrained[0] - anchor[0])
         try:
-            point = parse_point(stripped, anchor, direction)
+            point = parse_point(stripped, anchor, direction, relative_default=self.dyn_on)
         except CoordinateError as exc:
             self.window.command_line.echo(tr("Invalid point: {error}",
                                              error=str(exc)))

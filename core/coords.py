@@ -21,8 +21,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 _NUM = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
-_CARTESIAN = re.compile(rf"^(?P<rel>@)?(?P<x>{_NUM})\s*,\s*(?P<y>{_NUM})$")
-_POLAR = re.compile(rf"^(?P<rel>@)?(?P<d>{_NUM})\s*<\s*(?P<a>{_NUM})$")
+# ``@`` makes a point relative, ``#`` makes it absolute: with dynamic input
+# on, AutoCAD reads a bare second point as relative (DYNPICOORDS 0) and
+# ``#`` is how you insist on absolute there.
+_CARTESIAN = re.compile(rf"^(?P<rel>[@#])?(?P<x>{_NUM})\s*,\s*(?P<y>{_NUM})$")
+_POLAR = re.compile(rf"^(?P<rel>[@#])?(?P<d>{_NUM})\s*<\s*(?P<a>{_NUM})$")
 _DISTANCE = re.compile(rf"^(?P<d>{_NUM})$")
 
 
@@ -40,20 +43,30 @@ def parse_point(
     text: str,
     last_point: Optional[tuple[float, float]] = None,
     cursor_direction: Optional[float] = None,
+    relative_default: bool = False,
 ) -> Optional[ParsedPoint]:
     """Parse prompt input into a world point.
 
     ``last_point`` anchors relative (``@``) input and direct distances;
     ``cursor_direction`` (radians) gives direct distance its direction.
+    ``relative_default`` is dynamic input's rule: a bare ``x,y`` or ``d<a``
+    after a first point is relative to it (``#`` forces absolute).
     Returns None when the text is not coordinate-shaped at all (so callers
     can treat it as a keyword/option instead).
     """
     text = text.strip()
 
+    def relative(prefix) -> bool:
+        if prefix == "@":
+            return True
+        if prefix == "#":
+            return False
+        return relative_default and last_point is not None
+
     m = _CARTESIAN.match(text)
     if m:
         x, y = float(m.group("x")), float(m.group("y"))
-        if m.group("rel"):
+        if relative(m.group("rel")):
             if last_point is None:
                 raise CoordinateError("relative input needs a previous point")
             return ParsedPoint(last_point[0] + x, last_point[1] + y)
@@ -63,7 +76,7 @@ def parse_point(
     if m:
         d, ang = float(m.group("d")), math.radians(float(m.group("a")))
         dx, dy = d * math.cos(ang), d * math.sin(ang)
-        if m.group("rel"):
+        if relative(m.group("rel")):
             if last_point is None:
                 raise CoordinateError("relative input needs a previous point")
             return ParsedPoint(last_point[0] + dx, last_point[1] + dy)

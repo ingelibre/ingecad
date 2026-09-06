@@ -1363,5 +1363,9 @@
   "Selection cycling: {state}": "Ciclado de selección: {state}",
   "Coordinate display: {state}": "Visualización de coordenadas: {state}",
   "{n} object(s) selected.": "{n} objeto(s) seleccionado(s).",
-  "Show this plugin's toolbar": "Mostrar la barra de herramientas de este complemento"
+  "Show this plugin's toolbar": "Mostrar la barra de herramientas de este complemento",
+  "OTRACK": "RASTREO",
+  "DYN": "DIN",
+  "Object snap tracking": "Rastreo de referencia a objetos",
+  "Dynamic input": "Entrada dinámica"
 }

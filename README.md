@@ -135,6 +135,8 @@ tables, elevation profiles — as the first discipline plug-in. See
 | F8 / Ctrl+L | Ortho — and **Shift held** flips it for the moment |
 | F9 / Ctrl+B | Snap to grid (SNAP) |
 | F10 / Ctrl+U | Polar tracking |
+| F11 | Object snap tracking: pause on a snap point to acquire it, ride the alignment paths from it, lock on where two meet |
+| F12 | Dynamic input: the prompt and the live coordinates beside the cursor; a bare `x,y` is relative after a first point, `#x,y` absolute |
 | Ctrl+0 | Clean screen |
 | Ctrl+1 | Properties palette |
 | Ctrl+9 | Command line on / off |
@@ -151,8 +153,6 @@ tables, elevation profiles — as the first discipline plug-in. See
 | Ctrl+Tab | Next drawing window |
 | Ctrl+N / O / S / Shift+S / P / Q | New, open, save, save as, plot, quit |
 
-Not there yet, and they are features rather than keys: F11 (object snap
-tracking) and F12 (dynamic input).
 
 ## Install (Linux, x86_64)
 

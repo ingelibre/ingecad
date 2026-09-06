@@ -477,7 +477,7 @@ suite (`views/main_window.py`, tabla `_MODES` y `_build_menus`):
 ✅ **Hecho el 2026-09-06 (a2bdc1e): FORZC y toda la tabla de AutoCAD;
 ver la sesión «quater».**
 
-**4. Para la PRÓXIMA RELEASE (pedido de Marco, 2026-09-06): F11 y F12 como
+**4. ✅ Hechas el 2026-09-06 (ver la sesión «sexies»). Para la PRÓXIMA RELEASE (pedido de Marco, 2026-09-06): F11 y F12 como
 funciones.** **F11 = OTRACK** (rastreo de referencia a objetos: adquirir
 un punto de referencia pasando el cursor y trazar desde él líneas de
 rastreo ortogonales/polares) y **F12 = DYNMODE** (entrada dinámica: el
@@ -531,6 +531,50 @@ ventana falsa.
 **La regla queda, y es para todo lo que sigue: si dos sitios contestan la
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
+
+## 🗓 Sesión 2026-09-06 (sexies) — F11 y F12 como funciones: rastreo de referencia y entrada dinámica
+
+**Marco: «haz la 2».** Los dos modos que faltaban en la barra de estado
+de AutoCAD, en su orden (SNAP GRID ORTHO POLAR OSNAP **OTRACK DYN** LWT),
+con sus teclas y en español RASTREO y DIN.
+
+**OTRACK (F11), como lo usa un dibujante:** pasás el cursor por un punto
+de referencia (extremo, medio…) y lo dejás quieto un instante —300 ms, un
+`QTimer` de un disparo que sólo dispara si el cursor sigue sobre el mismo
+punto— y el punto queda **adquirido** (una cruz naranja). Desde cada
+punto adquirido salen **rutas de alineación** por los ángulos del orto
+(0° y 90°; con POLAR encendido también 45° y 135°), y cuando el cursor se
+acerca a una ruta dentro de la apertura de referencia se **bloquea en
+ella**; si está cerca de dos rutas de puntos distintos, en **su
+intersección** —que es el caso que vale: «el extremo de esa pared,
+alineado con el centro de aquella columna»—. El último punto del comando
+también genera rutas mientras ORTO o POLAR estén encendidos (así el
+rastreo polar de AutoCAD se combina con el de referencia). El tooltip dice
+lo que AutoCAD: «Endpoint: <90°», o «Endpoint: <90°, Endpoint: <0°» en
+una intersección. Volver a pausar sobre un punto adquirido lo suelta; un
+clic usa el punto y **libera todos los adquiridos**, como AutoCAD; apagar
+el modo también. Orden de prioridad, la de AutoCAD: referencia a objetos
+> rutas de rastreo > orto/polar.
+
+**DYN (F12), lo que cabe en un tooltip junto al cursor:** el prompt del
+comando y, debajo, lo que se está tecleando o —si no se teclea nada— la
+entrada de puntero: `x, y` absolutos antes del primer punto y
+`distancia < ángulo` desde el último después, con las unidades y la
+precisión del dibujo. **Y la regla que cambia la entrada:** con DIN
+encendido, un `10,5` tecleado después del primer punto es **relativo**
+(DYNPICOORDS 0) y `#10,5` fuerza absoluto; con DIN apagado, absoluto como
+siempre. Vive en `core/coords.parse_point(relative_default=…)`, un solo
+lugar, y el controlador pasa `self.dyn_on`.
+
+**Dónde vive cada cosa:** `ToolController` (`otrack_on`, `dyn_on`,
+`acquire_now`, `track_points`, `clear_tracking`, `_tracked`,
+`track_hint`, `dyn_lines`, `current_prompt` —el prompt de la herramienta
+pasa ahora por `_on_prompt`, que lo recuerda antes de mandarlo a la
+ventana de comandos—), el overlay del lienzo (`_draw_tracking`,
+`_draw_dyn_tooltip`), y los rótulos por `core.osnap.label_of` (un lugar).
+7 tests en `tests/test_otrack_dyn.py`, todos por el camino real:
+`on_hover` con apertura fija, `acquire_now` como el slot del timer,
+`on_click`, `on_text`, y F11/F12 pulsadas.
 
 ## 🗓 Sesión 2026-09-06 (quinquies) — el segfault del pre-calentador, cazado
 

@@ -1348,6 +1348,8 @@ class Viewport(QOpenGLWidget):
             self._draw_live_text(p)
         if self._cursor is not None and not self._panning:
             self._draw_crosshair(p, self._cursor, self._cursor_mode())
+            if self.tool_delegate is not None and getattr(self.tool_delegate, "dyn_on", False):
+                self._draw_dyn_tooltip(p, self._cursor)
         p.end()
 
     # AutoSnap marker glyphs (classic yellow), drawn in logical pixels.
@@ -1551,10 +1553,72 @@ class Viewport(QOpenGLWidget):
                 x1, y1 = self._space_to_screen(ax, ay)
                 x2, y2 = self._space_to_screen(bx, by)
                 p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+        self._draw_tracking(p, delegate)
         hit = delegate.snap_hit
         if hit is not None:
             sx, sy = self._space_to_screen(hit.x, hit.y)
             self._draw_snap_marker(p, hit.kind, sx, sy)
+
+    TRACK_COLOR = QColor(255, 170, 40)
+
+    def _draw_tracking(self, p: QPainter, delegate) -> None:
+        """OTRACK: a small + on every acquired point and, while the cursor
+        rides an alignment path, the dashed path from its point through the
+        cursor and a little past it, with AutoCAD's tooltip."""
+        if not getattr(delegate, "otrack_on", False):
+            return
+        points = delegate.track_points()
+        hint = getattr(delegate, "track_hint", None)
+        if not points and hint is None:
+            return
+        p.save()
+        p.setPen(QPen(self.TRACK_COLOR, 1))
+        for x, y, _kind in points:
+            sx, sy = self._space_to_screen(x, y)
+            p.drawLine(QPointF(sx - 5, sy), QPointF(sx + 5, sy))
+            p.drawLine(QPointF(sx, sy - 5), QPointF(sx, sy + 5))
+        if hint is not None:
+            (ax, ay), (bx, by), label = hint
+            x1, y1 = self._space_to_screen(ax, ay)
+            x2, y2 = self._space_to_screen(bx, by)
+            dx, dy = x2 - x1, y2 - y1
+            length = (dx * dx + dy * dy) ** 0.5
+            if length > 1e-6:
+                ex, ey = x2 + dx / length * 60.0, y2 + dy / length * 60.0
+                p.setPen(QPen(self.TRACK_COLOR, 1, Qt.DashLine))
+                p.drawLine(QPointF(x1, y1), QPointF(ex, ey))
+            # above the cursor: the dynamic-input tooltip sits below it
+            p.setPen(QPen(self.TRACK_COLOR, 1))
+            p.drawText(QPointF(x2 + 14, y2 - 10), label)
+        p.restore()
+
+    def _draw_dyn_tooltip(self, p: QPainter, pos: QPointF) -> None:
+        """DYN: the prompt and the live input beside the cursor."""
+        delegate = self.tool_delegate
+        if delegate is None:
+            return
+        lines = delegate.dyn_lines()
+        if not lines:
+            return
+        fm = p.fontMetrics()
+        width = max(fm.horizontalAdvance(line) for line in lines) + 12
+        height = fm.height() * len(lines) + 8
+        x = pos.x() + 18
+        y = pos.y() + 18
+        if x + width > self.width():
+            x = pos.x() - 18 - width
+        if y + height > self.height():
+            y = pos.y() - 18 - height
+        p.save()
+        p.setPen(QPen(QColor(90, 90, 90), 1))
+        p.setBrush(QColor(250, 250, 210, 230))
+        p.drawRect(QRectF(x, y, width, height))
+        p.setPen(QPen(QColor(20, 20, 20)))
+        baseline = y + 4 + fm.ascent()
+        for line in lines:
+            p.drawText(QPointF(x + 6, baseline), line)
+            baseline += fm.height()
+        p.restore()
 
     def _draw_dim_preview(self, p: QPainter, dim: dict, color: QColor) -> None:
         """A real-looking dimension preview: extension + dimension lines,
