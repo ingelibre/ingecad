@@ -44,28 +44,39 @@ class _Finalized:
 
 
 def test_a_worker_never_triggers_a_collection_but_the_main_thread_still_does():
+    """Deterministic on purpose: the garbage is made AFTER the worker has
+    paused the collector (the first version made it before, and on Python
+    3.12 the main thread's own allocations collected it before the worker
+    ever ran -- a green test on 3.14, a red one on the CI)."""
     old = gc.get_threshold()
     gc.set_threshold(10, 1, 1)                           # a collection every few allocations
     gc.collect()
     _Finalized.seen.clear()
+    paused = threading.Event()
+    go = threading.Event()
+    collected_in_worker = []
     try:
-        _Finalized("made on the main thread")           # cyclic garbage waiting for a collection
-        collected_in_worker = []
-
         def worker():
             with gc_guard.paused():
+                paused.set()
+                go.wait(5.0)
                 for _ in range(20000):
                     [object() for _ in range(3)]         # allocations that would cross the threshold
                 collected_in_worker.append(list(_Finalized.seen))
 
         thread = threading.Thread(target=worker)
         thread.start()
+        assert paused.wait(5.0)
+        assert not gc.isenabled()
+        _Finalized("made on the main thread")            # cyclic garbage, waiting for a collection
+        go.set()
         thread.join()
         assert collected_in_worker == [[]]               # nothing was finalized inside the worker
         assert gc.isenabled()
         gc.collect()                                     # the main thread collects, as it should
         assert _Finalized.seen == ["made on the main thread"]
     finally:
+        go.set()
         gc.set_threshold(*old)
         _Finalized.seen.clear()
 

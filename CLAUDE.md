@@ -552,7 +552,16 @@ todo `core` (`collect_submodules`) y las piezas de la biblioteca estándar
 que sólo los complementos usan, `tests/test_plugins.py` lo vigila, y el
 bundle congelado en local pasa `--check` con los dos complementos. El tag
 se movió al commit del arreglo; el Flatpak (que instala las fuentes) ya
-estaba publicado y no lo sufría.
+estaba publicado y no lo sufría. **Y el segundo build cayó en la suite del
+CI (Python 3.12, Xvfb): un test del guardián del GC creaba la basura
+cíclica ANTES de que el hilo pausara el recolector, y en 3.12 las
+asignaciones del hilo principal la recolectaban antes de que el hilo
+corriera —verde en 3.14 local, rojo en el CI—. El test crea ahora la
+basura después de la pausa, sincronizado con `Event`s. Tercer tag.
+⚠️ Mover un tag remoto convierte su release de GitHub en BORRADOR
+(notas y adjuntos sobreviven): `gh release edit vX --draft=false` después
+de re-pushearlo, o la release queda invisible mientras el CI le sube
+archivos.**
 
 ## 🗓 Sesión 2026-09-06 (sexies) — F11 y F12 como funciones: rastreo de referencia y entrada dinámica
 
