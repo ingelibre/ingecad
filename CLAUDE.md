@@ -454,6 +454,27 @@ reales, más el DWG con imagen en BricsCAD y los dos KMZ en Google Earth
 prueba (regla `[[preguntar-antes-de-release]]`). Redes (v0.7) no se abre
 antes.
 
+**3. En ese mismo dogfooding, los atajos de teclado (pedido de Marco,
+2026-09-06).** Lo que HAY hoy, para probarlo con los dedos y no con la
+suite (`views/main_window.py`, tabla `_MODES` y `_build_menus`):
+- Modos de la barra de estado con su tecla de AutoCAD: **F3** REFENT
+  (OSNAP), **F7** REJILLA (GRID), **F8** ORTO (ORTHO), **F10** POLAR;
+  **LWT** sólo con clic (no tiene tecla en AutoCAD tampoco). **F2** abre y
+  cierra la ventana de texto.
+- **Ctrl+R** cicla la ventana gráfica actual en una lámina; **Ctrl+0**
+  pantalla limpia; **Ctrl+Z / Ctrl+Y** deshacer y rehacer (también desde
+  la línea de comandos, donde un QLineEdit se los quedaría); **Ctrl+C /
+  Ctrl+X / Ctrl+V** con punto base como AutoCAD; **Supr** borra la
+  selección; **Ctrl+F** buscar texto; **Ctrl+N / Ctrl+O / Ctrl+S /
+  Ctrl+Shift+S / Ctrl+P / Ctrl+Q** archivo; **Esc** cancela; **Espacio o
+  Enter** ejecutan y **Enter en vacío repite el último comando**.
+- Lo que **NO** existe y AutoCAD sí tiene, para decidir si entra: **F9**
+  (FORZC, el salto a la rejilla: no hay modo SNAP de rejilla en absoluto),
+  **F11** (rastreo de referencia a objetos, OTRACK), **F12** (entrada
+  dinámica junto al cursor), F4/F5/F6 (tableta, isoplano, SCP dinámico:
+  fuera del filtro maestro). De esos, FORZC y OTRACK son memoria muscular
+  del que dibuja rápido; anotar en la prueba cuáles echa de menos Marco.
+
 ## 🗓 Sesión 2026-09-05 — una pregunta, un lugar (el pedido de Marco, hecho)
 
 **Lo que Marco pidió el 2026-08-29 —reducir conceptos duplicados antes que
