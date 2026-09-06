@@ -5,5 +5,11 @@
   },
   "LATLON": {
     "name": "GEOGRAFICAS"
+  },
+  "DEMPOINTS": {
+    "name": "PUNTOSDEM"
+  },
+  "DEMPROFILE": {
+    "name": "PERFILDEM"
   }
 }

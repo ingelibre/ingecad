@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel,
-                               QSpinBox, QWidget)
+                               QLineEdit, QSpinBox, QWidget)
 
 from core.i18n import tr
 
@@ -42,7 +42,27 @@ class TerrainOptionsPage(QWidget):
                          "Older plans of Peru are in PSAD56; GPS and Google Earth use WGS84."))
         note.setWordWrap(True)
         form.addRow(note)
+        # the DEM (G2)
+        source = prefs.dem_source()
+        self.dem_url = QLineEdit(self)
+        self.dem_url.setText(source.url_template)
+        self.dem_url.setPlaceholderText("https://.../{z}/{x}/{y}.png")
+        form.addRow(tr("DEM tiles URL ({z}/{x}/{y}):"), self.dem_url)
+        self.dem_encoding = QComboBox(self)
+        self.dem_encoding.addItem("Terrarium (AWS Terrain Tiles)", "terrarium")
+        self.dem_encoding.addItem("Mapbox Terrain-RGB", "mapbox")
+        self.dem_encoding.setCurrentIndex(max(0, self.dem_encoding.findData(source.encoding)))
+        form.addRow(tr("DEM encoding:"), self.dem_encoding)
+        self.dem_zoom = QSpinBox(self)
+        self.dem_zoom.setRange(8, 15)
+        self.dem_zoom.setValue(prefs.dem_zoom())
+        form.addRow(tr("DEM zoom level (13 = about 18 m per pixel):"), self.dem_zoom)
+        dem_note = QLabel(tr("AWS Terrain Tiles need no key; the data is a 30 m DEM (SRTM and others), "
+                             "for preliminary design only. Tiles are kept in the cache folder."))
+        dem_note.setWordWrap(True)
+        form.addRow(dem_note)
 
     def apply(self) -> None:
         prefs.save_defaults(self.zone.value(), self.hemisphere.currentData() == "N",
                             tuple(box.value() for box in self.shift))
+        prefs.save_dem(self.dem_url.text(), self.dem_encoding.currentData(), self.dem_zoom.value())

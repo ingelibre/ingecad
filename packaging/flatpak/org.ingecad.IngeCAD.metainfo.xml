@@ -24,6 +24,16 @@
       lleva y que IngeCAD no entiende se conserva intacto al guardar.
     </p>
     <p>
+      The Terrain plugin can fetch ground elevations from a public global
+      DEM (AWS Terrain Tiles) when you ask for them; that is the only use
+      IngeCAD makes of the network.
+    </p>
+    <p xml:lang="es">
+      El complemento Terreno puede obtener cotas del terreno de un DEM
+      global público (AWS Terrain Tiles) cuando se le pide; es el único uso
+      que IngeCAD hace de la red.
+    </p>
+    <p>
       Draw and edit with AutoCAD's muscle memory, blocks with a full Block
       Editor, layers, hatches, dimensions, layouts and printing to scale.
       Reads and writes DWG through LibreDWG, bundled.

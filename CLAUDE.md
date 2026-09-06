@@ -466,6 +466,56 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-06 — G2: el terreno sin levantamiento (cotas de un DEM global)
+
+**Dos comandos más en Terreno:** DEMPOINTS (un polígono cerrado —o dos
+esquinas— y un espaciado → una malla de POINT con la cota del DEM en
+`TERRENO-DEM`, alineada a múltiplos del espaciado para que dos corridas
+solapadas compartan nodos; lo que TIN y CONTOUR toman tal cual) y
+DEMPROFILE (el perfil longitudinal de un eje leído directo del DEM y
+dibujado con la maquinaria de perfiles de Topografía: `draw_profile` sólo
+pide `z_at`, así que una superficie DEM «de pato» lo alimenta sin TIN en
+el dibujo). Fuente: **AWS Terrain Tiles** (codificación terrarium, sin
+clave), portada de `ingetrazo/app/georef/dem.py` **sin Qt** (urllib +
+Pillow), con caché en disco atómica bajo `~/.cache/IngeCAD/dem` y
+muestreo **bilineal sobre la grilla global de píxeles**, así que un punto
+en la costura de dos teselas lee igual desde cualquier lado (test). URL,
+codificación (Mapbox Terrain-RGB también) y zoom en Opciones ▸ Terreno.
+
+**La honestidad va en la pantalla, cada vez:** «Cotas de AWS Terrain
+Tiles: unos 18 m por píxel sobre datos de 30 m. Sólo para anteproyecto,
+nunca para un levantamiento.» Es lo que advierte el propio distribuidor de
+CivilCAD, y es lo que un ingeniero necesita leer antes de firmar algo.
+
+**El DoD, medido sobre el lote de Arequipa en la ventana real:** 441
+puntos (210 × 210 m cada 10 m) en **1,7 s con la caché fría** (2 teselas,
+28 KB cada una); TIN de 800 triángulos más 37 curvas cada metro en 0,5 s;
+cotas 2 319,7–2 353,5 m donde el levantamiento sintético dice 2 334
+(SRTM en una ciudad con edificios). El test en vivo (`INGECAD_ONLINE=1`)
+baja y muestrea en 0,7 s; con la caché caliente 400 muestras cuestan nada.
+El resto de la suite corre sobre teselas sintéticas (un terreno analítico
+codificado a terrarium), sin red.
+
+⚠️ **Lo que la captura destapó, y no era del complemento:** las capas que
+crea un comando (TERRENO-DEM, TOPO-TIN, TOPO-CN-*) **no aparecían en la
+pestaña Capas** hasta que otra cosa la refrescaba. El control de capas de
+la barra sí se enteraba —se reconstruye cuando cambia el CONTENIDO de las
+tablas— pero el panel sólo se refrescaba desde sus propias acciones. Ahora
+las dos cosas preguntan por la misma llave (`_tables_key`, un lugar) y el
+panel se refresca por `tools.changed` sólo cuando esa llave cambia: cero
+costo mientras las tablas no se tocan, y una capa nueva o deshecha llega
+al panel en el mismo comando. ⚠️ Y el test del deshacer destapó la segunda
+mitad: **U y REDO no emitían `tools.changed`** —el control de capas, la
+pestaña Capas y Propiedades se enteraban del deshacer recién con el
+siguiente movimiento del mouse—. Ahora un deshacer avisa como un clic.
+
+**Lo que NO entró, dicho:** el respaldo Copernicus GLO-30 del plan es un
+GeoTIFF COG, y leerlo exige un lector TIFF por rangos HTTP que no tenemos;
+la URL configurable cubre cualquier servidor de teselas terrarium o
+Terrain-RGB. Y una malla de 441 puntos tarda 1,2 s con caché caliente: es
+el costo de 441 AddEntityCommand más la regeneración, no del DEM. 13 tests
+nuevos.
+
 ## 🗓 Sesión 2026-09-05 (decies) — G1: nace el complemento Terreno (georreferenciación)
 
 **Segundo complemento incluido, `plugins/terreno/` (v0.6.0), con dos

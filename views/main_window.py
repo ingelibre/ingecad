@@ -1805,6 +1805,7 @@ class MainWindow(QMainWindow):
         if self._layers_panel is not None:
             self._layers_panel.changed.connect(self._refresh_props_toolbar)
         self.tools.changed.connect(self._refresh_props_toolbar)
+        self.tools.changed.connect(self._refresh_layers_panel_if_tables_changed)
         self._refresh_props_toolbar()
 
     # Viewport scale list (the classic Viewports toolbar combo). Unitless
@@ -1998,6 +1999,29 @@ class MainWindow(QMainWindow):
         combo.setItemText(0, layout_ops.scale_label(factor))
         combo.setCurrentIndex(0)
 
+    def _tables_key(self):
+        """What the layer-driven controls show, as a value: the layers with
+        their colours and the linetypes. Same content, same key -- so a
+        refresh keyed on it costs nothing until a table really changes."""
+        from core import layers as layer_ops
+
+        if self.document is None:
+            return None
+        return (id(self.document),
+                tuple(layer_ops.layer_names_and_colors(self.document)),
+                tuple(layer_ops.available_linetypes(self.document)))
+
+    def _refresh_layers_panel_if_tables_changed(self) -> None:
+        """A command that creates or drops a layer (a plugin's grid on its
+        own layer, an undo of it) must reach the Layers tab like it reaches
+        the layer control -- and, like it, only when the tables changed."""
+        if self._layers_panel is None:
+            return
+        key = self._tables_key()
+        if key != getattr(self, "_layers_panel_key", object()):
+            self._layers_panel_key = key
+            self._layers_panel.refresh()
+
     def _refresh_props_toolbar(self) -> None:
         from core import layers as layer_ops
         from views.color_dialog import swatch_icon
@@ -2010,10 +2034,7 @@ class MainWindow(QMainWindow):
         # selection window. The key is the list CONTENT, not the revision: a
         # layer can be added without any command bumping it, and keying on
         # the revision left such a layer missing from the control.
-        key = (None if self.document is None else
-               (id(self.document),
-                tuple(layer_ops.layer_names_and_colors(self.document)),
-                tuple(layer_ops.available_linetypes(self.document))))
+        key = self._tables_key()
         if key != getattr(self, "_props_combo_key", object()):
             self._layer_combo.clear()
             self._color_combo.clear()
@@ -3282,6 +3303,9 @@ class MainWindow(QMainWindow):
         if command is not None:
             self.tools.after_history_change(command)
             self._sync_layout_tabs()
+            # an undo is a change like any click: the layer control, the
+            # Layers tab and the Properties tab hear it the same way
+            self.tools.changed.emit()
 
     def _cmd_redo(self, *args) -> None:
         command = self.history.redo()
@@ -3290,6 +3314,7 @@ class MainWindow(QMainWindow):
         if command is not None:
             self.tools.after_history_change(command)
             self._sync_layout_tabs()
+            self.tools.changed.emit()
 
     def _build_blockedit_toolbar(self) -> None:
         """The classic Block Editor toolbar, shown only during a session.

@@ -7,15 +7,19 @@ datum (WGS84, or PSAD56 with the shift Peru's older plans need), kept in
 the drawing itself as plain DXF; LATLON reads the geographic coordinates
 of picked points and places a point from typed ones. The UTM maths is
 its own (ported from IngeTrazo, checked against PROJ), so nothing new is
-installed. To come: G2 elevations from a global DEM, G3 satellite imagery,
-G4 KML/KMZ to and from Google Earth.
+installed. G2, the ground without a survey: DEMPOINTS lays a grid of
+points at the elevation of a global 30 m DEM (AWS Terrain Tiles, no key,
+cached on disk) inside a polygon, ready for TIN and CONTOUR; DEMPROFILE
+draws an axis' profile straight from the DEM. Both say, every time, that
+the numbers are for a preliminary design. To come: G3 satellite
+imagery, G4 KML/KMZ to and from Google Earth.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 from core.i18n import tr
-from core.plugins import MenuItem, PluginSpec
+from core.plugins import SEPARATOR, MenuItem, PluginSpec
 
 from .tools import TOOL_CLASSES
 
@@ -40,11 +44,15 @@ PLUGIN = PluginSpec(
     id="terreno",
     name="Terrain",
     version="0.6.0",
-    description="Georeference the drawing (UTM zone, WGS84 or PSAD56) and read or type geographic coordinates.",
+    description="Georeference the drawing (UTM zone, WGS84 or PSAD56), read or type geographic "
+                "coordinates, and take ground elevations from a global DEM.",
     tools=dict(TOOL_CLASSES),
     menu=(
         MenuItem("Georeference drawing...", "GEOREF"),
         MenuItem("Geographic coordinates...", "LATLON"),
+        SEPARATOR,
+        MenuItem("Elevation points from DEM...", "DEMPOINTS"),
+        MenuItem("Profile from DEM...", "DEMPROFILE"),
     ),
     options_page=_options_page,
     i18n_dir=Path(__file__).parent / "i18n",

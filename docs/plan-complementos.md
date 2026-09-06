@@ -310,6 +310,17 @@ Portar `georef/datum.py` (`utm_forward` / `utm_inverse`, sin pyproj).
 
 ### G2 — Cotas del terreno (1 sesión)
 
+> **Estado (2026-09-06): hecha.** DEMPOINTS (polígono o dos esquinas +
+> espaciado → POINT con cota en `TERRENO-DEM`, listos para TIN) y DEMPROFILE
+> (perfil del eje dibujado con la maquinaria de Topografía, sin TIN en el
+> dibujo). Fuente: AWS Terrain Tiles (terrarium), zoom 13, caché en
+> `~/.cache/IngeCAD/dem`; URL, codificación (terrarium / Mapbox Terrain-RGB)
+> y zoom en Opciones ▸ Terreno. Medido con caché fría sobre el lote de
+> Arequipa: 441 puntos en 1,7 s; TIN + curvas 0,5 s. El respaldo Copernicus
+> GLO-30 **no entró**: es un GeoTIFF COG y leerlo exige un lector TIFF que no
+> tenemos; la URL configurable cubre cualquier otro servidor de teselas.
+> El Flatpak lleva ya `--share=network` y el metainfo lo explica.
+
 `DEMPOINTS` (polígono + espaciado → puntos con cota de un DEM global; la
 malla se puede pasar directo a `TIN`), `DEMPROFILE` (perfil sin
 levantamiento). Fuente primaria: **AWS Terrain Tiles** (terrarium, sin

@@ -51,3 +51,40 @@ def save_defaults(zone: int, northern: bool, shift) -> None:
         settings.setValue(SETTING_SHIFT, ",".join(f"{float(v):g}" for v in shift))
     except Exception:
         pass
+
+
+# -- the DEM (G2) ---------------------------------------------------------------------------
+
+SETTING_DEM_URL = "terreno/dem_url"
+SETTING_DEM_ENCODING = "terreno/dem_encoding"
+SETTING_DEM_ZOOM = "terreno/dem_zoom"
+DEM_ZOOM_DEFAULT = 13          # ~18 m per pixel at Peru's latitudes: the 30 m data, not oversampled
+
+
+def dem_source():
+    """The tile source Options names, AWS Terrain Tiles unless changed."""
+    from .dem import AWS_TERRAIN, ENCODINGS, DemSource
+
+    url = _setting(SETTING_DEM_URL, "").strip()
+    encoding = _setting(SETTING_DEM_ENCODING, "terrarium").strip().lower()
+    if not url or url == AWS_TERRAIN.url_template:
+        return AWS_TERRAIN
+    if encoding not in ENCODINGS:
+        encoding = "terrarium"
+    return DemSource("custom", "custom DEM tiles", url, encoding, 15, "")
+
+
+def dem_zoom() -> int:
+    return int_pref(SETTING_DEM_ZOOM, DEM_ZOOM_DEFAULT, 8, 15)
+
+
+def save_dem(url: str, encoding: str, zoom: int) -> None:
+    try:
+        from PySide6.QtCore import QSettings
+
+        settings = QSettings()
+        settings.setValue(SETTING_DEM_URL, url.strip())
+        settings.setValue(SETTING_DEM_ENCODING, encoding)
+        settings.setValue(SETTING_DEM_ZOOM, int(zoom))
+    except Exception:
+        pass

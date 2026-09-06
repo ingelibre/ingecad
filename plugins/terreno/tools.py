@@ -258,3 +258,251 @@ class LatLonTool(Tool):
 
 
 TOOL_CLASSES = {"GEOREF": GeorefTool, "LATLON": LatLonTool}
+
+
+# ======================================================================
+# G2: elevations from the DEM
+# ======================================================================
+
+from core.hatch_boundary import boundary_polygon   # noqa: E402
+from . import dem as dem_mod                       # noqa: E402
+
+
+def _dem_of(ctx):
+    """The DEM to sample: an injected one (the suite), else Options'."""
+    injected = getattr(ctx.services, "dem", None)
+    return injected if injected is not None else dem_mod.default_dem()
+
+
+def _flush_ui() -> None:
+    """Let a 'downloading...' line reach the screen before a blocking fetch."""
+    try:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+    except Exception:
+        pass
+
+
+def _number(text: str) -> float:
+    return float(text.strip().replace(",", "."))
+
+
+def _ready(tool) -> bool:
+    """The checks both DEM tools open with; False (and finished) if not."""
+    document = _document(tool.ctx)
+    georef = actions.georef_of(document)
+    if georef is None:
+        tool.ctx.echo(tr("The drawing is not georeferenced: run GEOREF first."))
+        tool.ctx.finish()
+        return False
+    if not _in_model(document):
+        tool.ctx.echo(tr("DEM elevations are taken in model space."))
+        tool.ctx.finish()
+        return False
+    tool._georef = georef
+    return True
+
+
+class DemPointsTool(Tool):
+    """DEMPOINTS: a grid of points with ground elevation from the DEM
+    inside a polygon (or a rectangle by two corners) -- what TIN and
+    CONTOUR take as they are, for a site with no survey yet."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "DEMPOINTS"
+        self._polygon = None
+        self._corner = None
+        self._spacing = 30.0
+        self._stage = "select"
+        _ready(self)
+
+    def selection_prompt(self) -> str:
+        return tr("Select the boundary polygon (Enter for two corners):")
+
+    def on_selection(self, entities: list) -> None:
+        for entity in entities:
+            polygon = boundary_polygon(entity)
+            if polygon is not None and len(polygon) >= 3:
+                self._polygon = polygon
+                break
+        if self._polygon is not None:
+            self._ask_spacing()
+            return
+        self._stage = "corner1"
+        self.prompt("Specify first corner:")
+
+    def _ask_spacing(self) -> None:
+        self._stage = "spacing"
+        self.prompt("Grid spacing in metres <{s:g}>:", s=self._spacing)
+
+    def on_point(self, point) -> None:
+        if self._stage == "corner1":
+            self._corner = (point[0], point[1])
+            self.last_point = self._corner
+            self._stage = "corner2"
+            self.prompt("Specify opposite corner:")
+        elif self._stage == "corner2":
+            (x0, y0), (x1, y1) = self._corner, (point[0], point[1])
+            if abs(x1 - x0) < 1e-9 or abs(y1 - y0) < 1e-9:
+                self.ctx.echo(tr("The corners must make a rectangle."))
+                self.prompt("Specify opposite corner:")
+                return
+            self._polygon = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+            self._ask_spacing()
+
+    def on_option(self, text: str) -> bool:
+        if self._stage != "spacing":
+            return False
+        try:
+            value = _number(text)
+            if value <= 0:
+                raise ValueError(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        self._spacing = value
+        self._run()
+        return True
+
+    def on_enter(self) -> None:
+        if self._stage == "spacing":
+            self._run()
+        else:
+            self.ctx.finish()
+
+    def _run(self) -> None:
+        document = _document(self.ctx)
+        points = actions.grid_points(self._polygon, self._spacing)
+        if not points:
+            self.ctx.echo(tr("No grid node falls inside the polygon: use a smaller spacing."))
+            self.ctx.finish()
+            return
+        dem = _dem_of(self.ctx)
+        self.ctx.echo(tr("Fetching elevations for {n} points from {source}...",
+                         n=len(points), source=dem.source.name))
+        _flush_ui()
+        try:
+            samples = actions.dem_elevations(document, dem, points)
+        except dem_mod.DemError as exc:
+            self.ctx.echo(tr("Could not get elevations: {error}", error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.execute(actions.dem_points(document, samples, dem.source.id))
+        zs = [z for _x, _y, z in samples]
+        self.ctx.echo(tr("{n} elevation points on {layer}, from {z0:.1f} to {z1:.1f} m.",
+                         n=len(samples), layer=actions.LAYERS["dem"][0], z0=min(zs), z1=max(zs)))
+        lat, _lon = actions.datum.drawing_to_latlon(self._georef, *points[0])
+        self.ctx.echo(actions.honesty(dem, lat))
+        self.ctx.finish()
+
+
+class DemProfileTool(Tool):
+    """DEMPROFILE: the longitudinal profile of an axis over the DEM,
+    drawn by the Topography plugin's profile machinery -- no survey and
+    no surface in the drawing needed."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "DEMPROFILE"
+        self._axis = None
+        self._step = 20.0
+        self._hscale = 1.0
+        self._vscale = 10.0
+        self._stage = "select"
+        if not _ready(self):
+            return
+        self._topo = actions.topography()
+        if self._topo is None:
+            self.ctx.echo(tr("DEMPROFILE draws with the Topography plugin: turn it on in Tools > Plugins."))
+            self.ctx.finish()
+
+    def selection_prompt(self) -> str:
+        return tr("Select the axis:")
+
+    def on_selection(self, entities: list) -> None:
+        for entity in entities:
+            if entity.dxftype() in ("LINE", "LWPOLYLINE", "POLYLINE"):
+                self._axis = entity
+                break
+        if self._axis is None:
+            self.ctx.echo(tr("The selection has no axis."))
+            self.ctx.finish()
+            return
+        self._stage = "step"
+        self.prompt("Station step <{s:g}>:", s=self._step)
+
+    def on_option(self, text: str) -> bool:
+        if self._stage not in ("step", "hscale", "vscale"):
+            return False
+        try:
+            value = _number(text)
+            if value <= 0:
+                raise ValueError(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        if self._stage == "step":
+            self._step = value
+            self._ask_scales()
+        elif self._stage == "hscale":
+            self._hscale = 1000.0 / value
+            self._stage = "vscale"
+            self.prompt("Vertical scale 1:<{v:g}>:", v=1000.0 / self._vscale)
+        else:
+            self._vscale = 1000.0 / value
+            self._ask_point()
+        return True
+
+    def _ask_scales(self) -> None:
+        self._stage = "hscale"
+        self.prompt("Horizontal scale 1:<{h:g}>:", h=1000.0 / self._hscale)
+
+    def _ask_point(self) -> None:
+        self._stage = "point"
+        self.prompt("Specify the bottom-left corner of the profile:")
+
+    def on_enter(self) -> None:
+        if self._stage == "step":
+            self._ask_scales()
+        elif self._stage == "hscale":
+            self._stage = "vscale"
+            self.prompt("Vertical scale 1:<{v:g}>:", v=1000.0 / self._vscale)
+        elif self._stage == "vscale":
+            self._ask_point()
+        else:
+            self.ctx.finish()
+
+    def on_point(self, point) -> None:
+        if self._stage != "point":
+            return
+        document = _document(self.ctx)
+        dem = _dem_of(self.ctx)
+        axis = self._topo.axis_points(self._axis)
+        self.ctx.echo(tr("Fetching elevations along the axis from {source}...", source=dem.source.name))
+        _flush_ui()
+        try:
+            dem.prefetch(*actions.bbox_latlon(self._georef, [(p[0], p[1]) for p in axis]))
+            surface = actions.DemSurface(dem, self._georef)
+            command = self._topo.draw_profile(document, surface, self._axis, point,
+                                              self._step, self._hscale, self._vscale, 1.0)
+        except dem_mod.DemError as exc:
+            self.ctx.echo(tr("Could not get elevations: {error}", error=exc))
+            self.ctx.finish()
+            return
+        except ValueError as exc:
+            self.ctx.echo(tr("Cannot draw the profile: {error}", error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.execute(command)
+        lat, _lon = actions.datum.drawing_to_latlon(self._georef, axis[0][0], axis[0][1])
+        self.ctx.echo(actions.honesty(dem, lat))
+        self.ctx.finish()
+
+
+TOOL_CLASSES.update({"DEMPOINTS": DemPointsTool, "DEMPROFILE": DemProfileTool})

@@ -16,9 +16,13 @@ finish-args:
   - --share=ipc
   - --device=dri                 # the OpenGL canvas IS the application
   # The user's drawings live anywhere; a CAD that cannot open the plan a
-  # colleague sent to ~/Descargas is not a CAD. No network: IngeCAD needs
-  # none, and the sandbox should say so.
+  # colleague sent to ~/Descargas is not a CAD.
   - --filesystem=home
+  # Network, since the Terrain plugin (0.6): DEMPOINTS / DEMPROFILE fetch
+  # elevation tiles on request, and the coming satellite imagery and KML
+  # need it too. Nothing else in IngeCAD touches the network, and the
+  # metainfo says so.
+  - --share=network
 
 modules:
   # PySide6's Qt links QtNetwork/QtPdf against GSSAPI; the Freedesktop
