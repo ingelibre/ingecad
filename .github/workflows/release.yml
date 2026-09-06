@@ -31,8 +31,9 @@ jobs:
           # libegl/libgl for Qt, fuse for appimagetool, xvfb for the smoke test
           sudo apt-get install -y --no-install-recommends \
             build-essential curl file libegl1 libgl1 libxkbcommon-x11-0 \
-            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
-            libfuse2 xvfb
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libxcb-xkb1 libfuse2 xvfb
 
       - name: Python dependencies
         run: |
@@ -45,8 +46,15 @@ jobs:
       - name: Build vendor/libredwg
         run: tools/libredwg-patches/build-vendor.sh
 
+      # The same way tests.yml runs them: under Xvfb with the xcb platform.
+      # The offscreen platform degrades QOpenGLWidget and was left behind
+      # on 2026-08-23 for the tests workflow -- this step had stayed on it,
+      # and v0.6.0's tag build failed three ghost-tessellation waits here
+      # that passed in the tests workflow on the very same commit.
       - name: Tests
-        run: ./venv/bin/python -m pytest -q
+        env:
+          QT_QPA_PLATFORM: xcb
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" ./venv/bin/python -m pytest tests/ -q
 
       - name: Build the AppImage
         run: packaging/build-appimage.sh dist

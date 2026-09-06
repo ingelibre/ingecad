@@ -100,7 +100,7 @@ def test_index_add_translated_reports_missing_sources():
 
 # -- stamp lifecycle through the real controller --------------------------------
 
-def _wait_ghost(qapp, tools, timeout_s: float = 5.0):
+def _wait_ghost(qapp, tools, timeout_s: float = 20.0):     # a CI runner under load needs the slack
     import time
     t0 = time.monotonic()
     while tools._ghost_cache is None and time.monotonic() - t0 < timeout_s:

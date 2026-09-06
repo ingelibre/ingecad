@@ -561,7 +561,13 @@ basura después de la pausa, sincronizado con `Event`s. Tercer tag.
 ⚠️ Mover un tag remoto convierte su release de GitHub en BORRADOR
 (notas y adjuntos sobreviven): `gh release edit vX --draft=false` después
 de re-pushearlo, o la release queda invisible mientras el CI le sube
-archivos.**
+archivos.** **Y el tercer build cayó en tres esperas del fantasma de
+arrastre (`test_stamps`) que el workflow de tests había pasado en el
+mismo commit: el paso «Tests» del job del AppImage seguía corriendo la
+suite SIN Xvfb (plataforma offscreen), la configuración que el 2026-08-23
+se abandonó por inestable para `tests.yml` y que nadie alineó acá. Ahora
+las dos corren igual (Xvfb + xcb), y la espera del fantasma admite 20 s en
+vez de 5 para un runner cargado. Cuarto tag.**
 
 ## 🗓 Sesión 2026-09-06 (sexies) — F11 y F12 como funciones: rastreo de referencia y entrada dinámica
 
