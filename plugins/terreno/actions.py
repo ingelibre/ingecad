@@ -7,6 +7,7 @@ the drawing is plain DXF (a POINT and a TEXT on their layer, XDATA under
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 from core.actions import AddEntityCommand
 from core.commands import Command, CompositeCommand
@@ -210,3 +211,91 @@ class DemSurface:
     def z_at(self, x: float, y: float) -> float:
         lat, lon = datum.drawing_to_latlon(self.georef, x, y)
         return self.dem.elevation(lat, lon)
+
+
+# -- G3: the satellite image under the plan ------------------------------------------------------
+
+SAT_TAG = "SAT-IMAGE"
+LAYERS["sat"] = ("TERRENO-SAT", 7)
+
+
+def image_path(document, source_id: str, extension: str):
+    """Where the image file goes: beside the drawing, named after it and
+    the source, never over an existing file; an unsaved drawing keeps it
+    under the cache folder until it has a home (the path is absolute, so
+    the reference survives a Save As anywhere)."""
+    from core.recent import cache_dir
+
+    if getattr(document, "path", None):
+        # absolute on purpose: a drawing opened as "capturas/x.dwg" would
+        # otherwise reference "capturas/x-....jpg", which another CAD reads
+        # relative to ITS working folder, not the drawing's
+        home = Path(document.path).resolve()
+        folder, stem = home.parent, home.stem
+    else:
+        folder, stem = cache_dir() / "satimage", "untitled"
+    folder.mkdir(parents=True, exist_ok=True)
+    base = f"{stem}-{source_id}"
+    candidate = folder / f"{base}{extension}"
+    n = 2
+    while candidate.exists():
+        candidate = folder / f"{base}-{n}{extension}"
+        n += 1
+    return candidate
+
+
+def is_satellite(entity) -> bool:
+    if entity.dxftype() != "IMAGE" or not entity.has_xdata(APPID):
+        return False
+    values = [v for _c, v in entity.get_xdata(APPID)]
+    return bool(values) and values[0] == SAT_TAG
+
+
+def insert_satellite(document, placement, path, polygon, clip: bool, source,
+                     text_height: float | None = None) -> CompositeCommand:
+    """The image file written, then one undo step: the IMAGE on
+    TERRENO-SAT (clipped to the polygon when asked, transparent outside
+    it), the attribution the licence asks for as TEXT beside it, and the
+    image sent to the back so the plan stays on top."""
+    from core.actions import attach_image
+    from core.commands import DeferredCommand
+    from core.draworder import DrawOrderCommand
+    from . import imagery
+
+    imagery.save(placement, path)
+    layer = LAYERS["sat"][0]
+    attach = attach_image(str(path), (placement.width, placement.height), placement.insert,
+                          placement.pixel_size)
+    attach.layer = layer
+
+    def tag(_document):
+        from ezdxf.entities import Image
+
+        entity = attach.entity
+        ensure_appid(entity.doc)
+        entity.set_xdata(APPID, [(1000, SAT_TAG), (1000, source.id), (1070, int(placement.zoom)),
+                                 (1040, float(placement.pixel_size))])
+        if clip:
+            entity.set_boundary_path(placement.clip_boundary(polygon))
+            entity.dxf.flags |= Image.USE_CLIPPING_BOUNDARY
+        if placement.image.mode == "RGBA":
+            entity.dxf.flags |= Image.USE_TRANSPARENCY
+        return None
+
+    height = text_height or max(0.5, 0.02 * min(placement.width, placement.height) * placement.pixel_size)
+    caption = tr("Imagery: {attribution}", attribution=source.attribution)
+
+    def make_text(msp):
+        entity = msp.add_text(caption, height=height)
+        entity.set_placement((placement.insert[0] + height, placement.insert[1] + height))
+        return entity
+
+    def send_back(_document):
+        return DrawOrderCommand([attach.entity], "back")
+
+    return CompositeCommand("satellite image", layer_commands(document, ("sat",)) + [
+        attach,
+        DeferredCommand("clip and tag", tag),
+        AddEntityCommand("SAT-CAPTION", make_text, layer=layer),
+        DeferredCommand("send to back", send_back),
+    ])

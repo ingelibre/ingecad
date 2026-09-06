@@ -208,7 +208,8 @@ def test_the_window_runs_dempoints_from_the_command_line_and_the_layers_tab_foll
         menu = terrain.menu()
         labels = [a.text() for a in menu.actions() if a.text()]
         assert labels == ["Georeference drawing...", "Geographic coordinates...",
-                          "Elevation points from DEM...", "Profile from DEM..."]
+                          "Elevation points from DEM...", "Profile from DEM...",
+                          "Satellite image..."]
         win.new_document("m")
         win.tools._execute(SetGeorefCommand(Georef(19)))
         win.tools.dem = dem.Dem(dem.TileStore(dem.AWS_TERRAIN, tmp_path / "cache", FakeFetch()), 13)
@@ -225,5 +226,6 @@ def test_the_window_runs_dempoints_from_the_command_line_and_the_layers_tab_foll
         assert "TERRENO-DEM" not in win._layers_panel._rows
     finally:
         win.tools.dem = None
-        win.document.dirty = False
+        if win.document is not None:
+            win.document.dirty = False
         win.close()

@@ -466,6 +466,57 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-06 (bis) — G3: la imagen satelital bajo el plano
+
+**SATIMAGE, en Terreno:** un polígono cerrado (o dos esquinas), un nivel
+de zoom, la fuente —Esri World Imagery por defecto; Sentinel-2 cloudless
+de EOX, OpenStreetMap o una XYZ propia desde Opciones ▸ Terreno— y si se
+recorta al polígono. Sale una IMAGE en `TERRENO-SAT`, **al fondo** por
+DRAWORDER para que el plano siga encima, con la **atribución que exige
+la licencia escrita como TEXT** al pie de la imagen (Esri la pide; OSM y
+EOX también), el archivo **al lado del dibujo** (`<plano>-<fuente>.jpg`;
+PNG con transparencia si se recortó) referenciado por ruta absoluta.
+
+**La decisión que hace exacta la georreferencia: remuestrear, no rotar.**
+Un mosaico de teselas es un rectángulo en Web Mercator y en UTM es un
+rectángulo un poco girado y un poco estirado, y una IMAGE de DXF puede
+girar pero no cizallar. En vez de explicarle eso a la entidad, los píxeles
+se **redibujan sobre la grilla del dibujo** (`imagery.py`: la
+transformación exacta en una retícula de nodos cada 64 px y bilineal
+entre nodos, con el MESH de Pillow), así que la imagen queda alineada a
+los ejes a metros por píxel conocidos y sus esquinas donde dice la
+matemática. Verificado con teselas sintéticas pintadas con un campo
+`f(lat, lon)`: el píxel de la salida en un punto del dibujo tiene el color
+de `f` en ese punto (±15 de 255) en las cuatro esquinas y el centro.
+
+**Una pregunta, un lugar:** teselas, grilla Mercator, User-Agent, caché
+en disco y descarga viven ahora en `plugins/terreno/tiles.py`; el DEM de
+G2 se montó encima (misma caché `~/.cache/IngeCAD/tiles/<fuente>/z/x/y`).
+Y `core/commands.DeferredCommand` para el paso de un compuesto que sólo
+puede construirse cuando el paso anterior ya creó su entidad (recortar y
+etiquetar la IMAGE recién creada, mandarla al fondo) —se reconstruye en
+cada `do`, porque un rehacer crea otra entidad.
+
+**Medido sobre el lote de Arequipa con Esri al zoom 19:** 2 teselas,
+119 × 167 px a 0,29 m/px en 1,4 s; recortada al lindero; el DWG r2000
+por LibreDWG relee la IMAGE con su ruta, su bandera de recorte y sus 6
+vértices. **Entregable para que Marco lo abra en BricsCAD:**
+`capturas/levantamiento-arequipa-satelite.dwg` con
+`levantamiento-arequipa-esri_imagery.png` al lado.
+
+⚠️ **Lo que la captura destapó:** la primera IMAGE guardó la ruta
+*relativa* «capturas/…» porque el plano se había abierto por ruta
+relativa, y otro CAD la resuelve contra SU carpeta de trabajo. La ruta se
+guarda absoluta (lo que AutoCAD hace por defecto). Y el recorte por
+polígono **no lo pinta nuestro lienzo** (el backend GL dibuja el quad
+entero; sólo BricsCAD lo recorta): por eso una imagen recortada se guarda
+como PNG con alfa fuera del polígono además de la frontera de recorte de
+la IMAGE —se ve igual en IngeCAD y en BricsCAD—.
+
+**Fuera, a propósito:** Google no es una fuente incluida (sus condiciones
+no lo permiten); una URL propia va bajo la responsabilidad del usuario, y
+la página de Opciones lo dice. 10 tests nuevos.
+
 ## 🗓 Sesión 2026-09-06 — G2: el terreno sin levantamiento (cotas de un DEM global)
 
 **Dos comandos más en Terreno:** DEMPOINTS (un polígono cerrado —o dos

@@ -40,6 +40,28 @@ class Command(ABC):
         return space
 
 
+class DeferredCommand(Command):
+    """A step of a composite that can only be built once an earlier step
+    has run -- clip and tag the IMAGE that the step before just created,
+    send it to the back. ``factory(document)`` returns the real command;
+    it is called afresh on every ``do`` (a redo recreates the entity, so
+    the command must be rebuilt for the new one)."""
+
+    def __init__(self, name: str, factory) -> None:
+        self.name = name
+        self._factory = factory
+        self._inner = None
+
+    def do(self, document) -> None:
+        self._inner = self._factory(document)
+        if self._inner is not None:
+            self._inner.do(document)
+
+    def undo(self, document) -> None:
+        if self._inner is not None:
+            self._inner.undo(document)
+
+
 class CompositeCommand(Command):
     """Several sub-commands executed as ONE undo step (DIVIDE's n-1 points,
     REVCLOUD Object's erase+add). needs_regen because the members bypass

@@ -11,5 +11,8 @@
   },
   "DEMPROFILE": {
     "name": "PERFILDEM"
+  },
+  "SATIMAGE": {
+    "name": "IMAGENSATELITAL"
   }
 }

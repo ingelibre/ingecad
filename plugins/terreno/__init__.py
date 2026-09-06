@@ -11,8 +11,12 @@ installed. G2, the ground without a survey: DEMPOINTS lays a grid of
 points at the elevation of a global 30 m DEM (AWS Terrain Tiles, no key,
 cached on disk) inside a polygon, ready for TIN and CONTOUR; DEMPROFILE
 draws an axis' profile straight from the DEM. Both say, every time, that
-the numbers are for a preliminary design. To come: G3 satellite
-imagery, G4 KML/KMZ to and from Google Earth.
+the numbers are for a preliminary design. G3: SATIMAGE puts the
+satellite image of a polygon under the plan -- a licensed tile source
+(Esri World Imagery, Sentinel-2 cloudless, OpenStreetMap, or the user's
+own XYZ), resampled into the drawing's UTM grid, saved beside the drawing
+and referenced as a plain IMAGE with its attribution. To come: G4 KML/KMZ
+to and from Google Earth.
 """
 from __future__ import annotations
 
@@ -45,7 +49,8 @@ PLUGIN = PluginSpec(
     name="Terrain",
     version="0.6.0",
     description="Georeference the drawing (UTM zone, WGS84 or PSAD56), read or type geographic "
-                "coordinates, and take ground elevations from a global DEM.",
+                "coordinates, take ground elevations from a global DEM, and put the satellite "
+                "image under the plan.",
     tools=dict(TOOL_CLASSES),
     menu=(
         MenuItem("Georeference drawing...", "GEOREF"),
@@ -53,6 +58,8 @@ PLUGIN = PluginSpec(
         SEPARATOR,
         MenuItem("Elevation points from DEM...", "DEMPOINTS"),
         MenuItem("Profile from DEM...", "DEMPROFILE"),
+        SEPARATOR,
+        MenuItem("Satellite image...", "SATIMAGE"),
     ),
     options_page=_options_page,
     i18n_dir=Path(__file__).parent / "i18n",

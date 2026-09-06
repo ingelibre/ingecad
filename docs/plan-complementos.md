@@ -334,6 +334,19 @@ clave; ya en `georef/dem.py`); de respaldo, **Copernicus GLO-30** por HTTPS
 
 ### G3 — Imagen satelital (1-2 sesiones)
 
+> **Estado (2026-09-06): hecha.** SATIMAGE (polígono o dos esquinas, zoom,
+> fuente —Esri World Imagery, Sentinel-2 cloudless de EOX, OpenStreetMap o
+> XYZ propia desde Opciones— y recorte opcional). El mosaico Web Mercator se
+> **remuestrea a la grilla UTM del dibujo** (`plugins/terreno/imagery.py`),
+> así que la IMAGE queda alineada a los ejes con metros por píxel exactos;
+> se guarda al lado del dibujo (JPG; PNG con transparencia si se recorta),
+> con la atribución de la licencia como TEXT, en `TERRENO-SAT` y al fondo.
+> Teselas y caché compartidas con el DEM (`plugins/terreno/tiles.py`).
+> Medido sobre el lote de Arequipa con Esri al zoom 19: 119 × 167 px a
+> 0,29 m/px en 1,4 s; el DWG r2000 relee la IMAGE con su recorte y su
+> ruta. Entregable para BricsCAD: `capturas/levantamiento-arequipa-satelite.dwg`
+> + `…-esri_imagery.png`.
+
 `SATIMAGE` (polígono → mosaico de teselas al zoom pedido, insertado como
 **IMAGE georreferenciada** en su capa, recortado al polígono opcionalmente;
 fuentes con licencia para este uso: Esri World Imagery, EOX Sentinel-2,

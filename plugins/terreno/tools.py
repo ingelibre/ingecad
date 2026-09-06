@@ -306,20 +306,17 @@ def _ready(tool) -> bool:
     return True
 
 
-class DemPointsTool(Tool):
-    """DEMPOINTS: a grid of points with ground elevation from the DEM
-    inside a polygon (or a rectangle by two corners) -- what TIN and
-    CONTOUR take as they are, for a site with no survey yet."""
+class _BoundaryTool(Tool):
+    """The opening both area commands share: a closed polygon selected,
+    or, with nothing closed selected, a rectangle by two corners; then
+    :meth:`_after_boundary`."""
 
     wants_selection = True
 
-    def start(self) -> None:
-        self.name = "DEMPOINTS"
+    def _begin(self) -> None:
         self._polygon = None
         self._corner = None
-        self._spacing = 30.0
         self._stage = "select"
-        _ready(self)
 
     def selection_prompt(self) -> str:
         return tr("Select the boundary polygon (Enter for two corners):")
@@ -331,14 +328,10 @@ class DemPointsTool(Tool):
                 self._polygon = polygon
                 break
         if self._polygon is not None:
-            self._ask_spacing()
+            self._after_boundary()
             return
         self._stage = "corner1"
         self.prompt("Specify first corner:")
-
-    def _ask_spacing(self) -> None:
-        self._stage = "spacing"
-        self.prompt("Grid spacing in metres <{s:g}>:", s=self._spacing)
 
     def on_point(self, point) -> None:
         if self._stage == "corner1":
@@ -353,7 +346,25 @@ class DemPointsTool(Tool):
                 self.prompt("Specify opposite corner:")
                 return
             self._polygon = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
-            self._ask_spacing()
+            self._after_boundary()
+
+    def _after_boundary(self) -> None: ...
+
+
+class DemPointsTool(_BoundaryTool):
+    """DEMPOINTS: a grid of points with ground elevation from the DEM
+    inside a polygon (or a rectangle by two corners) -- what TIN and
+    CONTOUR take as they are, for a site with no survey yet."""
+
+    def start(self) -> None:
+        self.name = "DEMPOINTS"
+        self._begin()
+        self._spacing = 30.0
+        _ready(self)
+
+    def _after_boundary(self) -> None:
+        self._stage = "spacing"
+        self.prompt("Grid spacing in metres <{s:g}>:", s=self._spacing)
 
     def on_option(self, text: str) -> bool:
         if self._stage != "spacing":
@@ -505,4 +516,136 @@ class DemProfileTool(Tool):
         self.ctx.finish()
 
 
-TOOL_CLASSES.update({"DEMPOINTS": DemPointsTool, "DEMPROFILE": DemProfileTool})
+# ======================================================================
+# G3: the satellite image under the plan
+# ======================================================================
+
+from . import imagery, tiles as tiles_mod     # noqa: E402
+
+
+def _tiles_of(ctx, source):
+    """A tile cache for ``source``: an injected factory (the suite), else
+    the shared disk cache."""
+    factory = getattr(ctx.services, "tiles", None)
+    return factory(source) if factory is not None else tiles_mod.TileCache(source)
+
+
+class SatImageTool(_BoundaryTool):
+    """SATIMAGE: the satellite image of a polygon (or a rectangle) from a
+    licensed tile source, resampled into the drawing's grid, saved beside
+    the drawing and inserted on TERRENO-SAT at the back, with the
+    attribution the licence asks for."""
+
+    SOURCE_KEYS = {"E": "esri_imagery", "S": "s2cloudless", "O": "osm"}
+
+    def start(self) -> None:
+        self.name = "SATIMAGE"
+        self._begin()
+        self._source = prefs.imagery_source()
+        self._zoom = min(18, self._source.max_zoom)
+        self._clip = True
+        _ready(self)
+
+    def _after_boundary(self) -> None:
+        self._ask_zoom()
+
+    def _ask_zoom(self) -> None:
+        self._stage = "zoom"
+        self.prompt("Zoom level (1-{max}) or [Source] <{z}>:", max=self._source.max_zoom, z=self._zoom)
+
+    def _ask_source(self) -> None:
+        self._stage = "source"
+        self.prompt("Source [Esri/Sentinel/Osm/Custom] <{name}>:", name=self._source.name)
+
+    def _ask_clip(self) -> None:
+        self._stage = "clip"
+        self.prompt("Clip the image to the polygon? [Yes/No] <{d}>:",
+                    d=tr("Yes") if self._clip else tr("No"))
+
+    def on_option(self, text: str) -> bool:
+        stage = self._stage
+        if stage == "zoom":
+            if self.option(text) == "S":
+                self._ask_source()
+                return True
+            try:
+                zoom = int(text.strip())
+            except ValueError:
+                zoom = 0
+            if not 1 <= zoom <= self._source.max_zoom:
+                self.ctx.echo(tr("{source} serves zoom levels 1 to {max}.",
+                                 source=self._source.name, max=self._source.max_zoom))
+                self._ask_zoom()
+                return True
+            self._zoom = zoom
+            self._ask_clip()
+            return True
+        if stage == "source":
+            key = self.option(text)
+            if key == "C":
+                custom = prefs.imagery_source()
+                if custom.id.startswith("custom"):
+                    self._source = custom
+                else:
+                    self.ctx.echo(tr("No custom XYZ source is set: Options > Terrain."))
+            elif key in self.SOURCE_KEYS:
+                self._source = tiles_mod.PRESETS[self.SOURCE_KEYS[key]]
+            self._zoom = min(self._zoom, self._source.max_zoom)
+            self._ask_zoom()
+            return True
+        if stage == "clip":
+            key = self.option(text)
+            if key not in ("Y", "N"):
+                self._ask_clip()
+                return True
+            self._clip = key == "Y"
+            self._run()
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        if self._stage == "zoom":
+            self._ask_clip()
+        elif self._stage == "source":
+            self._ask_zoom()
+        elif self._stage == "clip":
+            self._run()
+        else:
+            self.ctx.finish()
+
+    def _run(self) -> None:
+        document = _document(self.ctx)
+        count = imagery.tile_count(self._georef, self._polygon, self._zoom)
+        if count > imagery.MAX_TILES:
+            self.ctx.echo(tr("That is {n} tiles at zoom {z}: lower the zoom or shrink the area.",
+                             n=count, z=self._zoom))
+            self.ctx.finish()
+            return
+        cache = _tiles_of(self.ctx, self._source)
+        self.ctx.echo(tr("Fetching {n} tiles from {source}...", n=count, source=self._source.name))
+        _flush_ui()
+        try:
+            placement = imagery.satellite_image(self._georef, self._polygon, self._zoom, cache, self._clip)
+        except tiles_mod.TileError as exc:
+            self.ctx.echo(tr("Could not get the image: {error}", error=exc))
+            self.ctx.finish()
+            return
+        path = actions.image_path(document, self._source.id, imagery.file_extension(placement))
+        try:
+            command = actions.insert_satellite(document, placement, path, self._polygon, self._clip,
+                                               self._source)
+        except OSError as exc:
+            self.ctx.echo(tr("Could not write the image file: {error}", error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.execute(command)
+        self.ctx.echo(tr("Satellite image {w} x {h} px at {res:.2f} m/px on {layer}, file {path}.",
+                         w=placement.width, h=placement.height, res=placement.pixel_size,
+                         layer=actions.LAYERS["sat"][0], path=path))
+        self.ctx.echo(tr("Attribution the licence asks for, kept on the drawing: {attribution}",
+                         attribution=self._source.attribution))
+        self.ctx.finish()
+
+
+TOOL_CLASSES.update({"DEMPOINTS": DemPointsTool, "DEMPROFILE": DemProfileTool,
+                     "SATIMAGE": SatImageTool})

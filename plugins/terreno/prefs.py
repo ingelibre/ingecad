@@ -88,3 +88,34 @@ def save_dem(url: str, encoding: str, zoom: int) -> None:
         settings.setValue(SETTING_DEM_ZOOM, int(zoom))
     except Exception:
         pass
+
+
+# -- imagery (G3) ---------------------------------------------------------------------------
+
+SETTING_IMG_SOURCE = "terreno/imagery_source"
+SETTING_IMG_URL = "terreno/imagery_url"
+SETTING_IMG_MAXZOOM = "terreno/imagery_maxzoom"
+
+
+def imagery_source():
+    """The tile source Options names: a preset, or the user's own XYZ."""
+    from .tiles import DEFAULT_SOURCE_ID, PRESETS, custom_source
+
+    chosen = _setting(SETTING_IMG_SOURCE, DEFAULT_SOURCE_ID).strip()
+    if chosen == "custom":
+        url = _setting(SETTING_IMG_URL, "").strip()
+        if url:
+            return custom_source(url, int_pref(SETTING_IMG_MAXZOOM, 19, 1, 22))
+    return PRESETS.get(chosen, PRESETS[DEFAULT_SOURCE_ID])
+
+
+def save_imagery(source_id: str, url: str, max_zoom: int) -> None:
+    try:
+        from PySide6.QtCore import QSettings
+
+        settings = QSettings()
+        settings.setValue(SETTING_IMG_SOURCE, source_id)
+        settings.setValue(SETTING_IMG_URL, url.strip())
+        settings.setValue(SETTING_IMG_MAXZOOM, int(max_zoom))
+    except Exception:
+        pass

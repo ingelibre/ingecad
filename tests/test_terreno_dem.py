@@ -116,7 +116,7 @@ def test_errors_name_the_tile(tmp_path):
     d, _fetch = _dem(tmp_path, broken=True)
     with pytest.raises(dem.DemError, match=r"13/2468/4475\.png: not a DEM tile"):
         d.elevation(*AREQUIPA)
-    assert not (tmp_path / "cache" / "aws_terrarium").exists()   # nothing bad was cached
+    assert not d.store.path(13, 2468, 4475).exists()            # nothing bad was kept
 
     def refuse(url):
         raise dem.DemError(f"{url}: HTTP 403")

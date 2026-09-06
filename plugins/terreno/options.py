@@ -62,7 +62,32 @@ class TerrainOptionsPage(QWidget):
         dem_note.setWordWrap(True)
         form.addRow(dem_note)
 
+        # imagery (G3)
+        from .tiles import PRESETS
+
+        source = prefs.imagery_source()
+        self.img_source = QComboBox(self)
+        for preset in PRESETS.values():
+            self.img_source.addItem(preset.name, preset.id)
+        self.img_source.addItem(tr("Custom XYZ tiles"), "custom")
+        chosen = "custom" if source.id.startswith("custom") else source.id
+        self.img_source.setCurrentIndex(max(0, self.img_source.findData(chosen)))
+        form.addRow(tr("Satellite image source:"), self.img_source)
+        self.img_url = QLineEdit(self)
+        self.img_url.setText(source.url_template if chosen == "custom" else prefs._setting(prefs.SETTING_IMG_URL, ""))
+        self.img_url.setPlaceholderText("https://.../{z}/{x}/{y}.jpg")
+        form.addRow(tr("Custom XYZ URL ({z}/{x}/{y}):"), self.img_url)
+        self.img_maxzoom = QSpinBox(self)
+        self.img_maxzoom.setRange(1, 22)
+        self.img_maxzoom.setValue(prefs.int_pref(prefs.SETTING_IMG_MAXZOOM, 19, 1, 22))
+        form.addRow(tr("Custom source's maximum zoom:"), self.img_maxzoom)
+        img_note = QLabel(tr("The presets are licensed for this use and their attribution is written on "
+                             "the drawing. A custom source's terms are yours to check."))
+        img_note.setWordWrap(True)
+        form.addRow(img_note)
+
     def apply(self) -> None:
         prefs.save_defaults(self.zone.value(), self.hemisphere.currentData() == "N",
                             tuple(box.value() for box in self.shift))
         prefs.save_dem(self.dem_url.text(), self.dem_encoding.currentData(), self.dem_zoom.value())
+        prefs.save_imagery(self.img_source.currentData(), self.img_url.text(), self.img_maxzoom.value())
