@@ -326,3 +326,43 @@ def test_every_package_ships_the_plugins_folder():
     assert " plugins " in copy_line
     spec = (root / "packaging" / "ingecad.spec").read_text()
     assert '(str(ROOT / "plugins"), "plugins")' in spec
+
+
+def test_the_frozen_build_carries_everything_the_bundled_plugins_import():
+    """Plugins ride the PyInstaller bundle as data, loaded by path, so the
+    analysis never sees their imports: v0.6.0's first tag build shipped
+    both plugins "UNAVAILABLE: No module named core.georef". The spec
+    freezes every core module and the standard-library pieces only the
+    plugins use; this keeps the two lists honest as plugins grow."""
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    spec = (root / "packaging" / "ingecad.spec").read_text(encoding="utf-8")
+    assert 'collect_submodules("core")' in spec
+    block = spec[spec.index("hiddenimports = ["):spec.index("excludes = [")]
+    hidden = set(re.findall(r'"([A-Za-z_][\w.]*)"', block))
+    app_imports, std_imports = set(), set()
+    app_packages = ("core", "views", "tools", "formats", "render")
+    for path in sorted((root / "plugins").rglob("*.py")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"\s*from ([\w.]+) import|\s*import ([\w.]+)", line)
+            if not m:
+                continue
+            module = m.group(1) or m.group(2)
+            top = module.split(".")[0]
+            if top in app_packages:
+                app_imports.add(module)
+            elif top in ("xml", "zipfile", "urllib", "secrets"):
+                std_imports.add(module if top != "xml" else "xml.etree.ElementTree")
+    # every core module is collected wholesale; the other packages the
+    # plugins reach are imported by the app itself (a plugin never imports
+    # a views/tools/formats module the core does not already load)
+    app_tree = "\n".join(p.read_text(encoding="utf-8") for pkg in app_packages
+                         for p in (root / pkg).rglob("*.py")) + (root / "main.py").read_text(encoding="utf-8")
+    for module in sorted(app_imports):
+        if module.startswith("core."):
+            continue
+        assert re.search(rf"(from|import) {re.escape(module)}\b", app_tree), (
+            f"{module}: only a plugin imports it; add it to the spec's hiddenimports")
+    for module in sorted(std_imports):
+        assert module in hidden, f"{module}: a plugin needs it and the spec does not freeze it"

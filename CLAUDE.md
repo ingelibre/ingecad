@@ -543,6 +543,17 @@ complementos, los paneles que no seguían a los comandos). Detalle en
 sobre planos reales quedó para después de la publicación por decisión
 suya; lo que encuentre va a la 0.6.1.
 
+⚠️ **El primer build del tag falló, y bien:** el bundle de PyInstaller
+lleva los complementos como DATOS (se cargan por ruta), así que el
+análisis nunca ve lo que importan, y `core.georef` / `core.xdata` —que
+sólo los complementos importan— no se congelaron: los dos complementos
+salían «UNAVAILABLE» y `--check` tumbó el trabajo. El spec congela ahora
+todo `core` (`collect_submodules`) y las piezas de la biblioteca estándar
+que sólo los complementos usan, `tests/test_plugins.py` lo vigila, y el
+bundle congelado en local pasa `--check` con los dos complementos. El tag
+se movió al commit del arreglo; el Flatpak (que instala las fuentes) ya
+estaba publicado y no lo sufría.
+
 ## 🗓 Sesión 2026-09-06 (sexies) — F11 y F12 como funciones: rastreo de referencia y entrada dinámica
 
 **Marco: «haz la 2».** Los dos modos que faltaban en la barra de estado

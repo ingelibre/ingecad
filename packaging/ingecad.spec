@@ -47,6 +47,16 @@ hiddenimports = [
     "ezdxf.addons.drawing.unified_text_renderer",
     "ezdxf.render.hatching",
 ]
+# The bundled plugins ship as DATA (loaded by path at run time), so nothing
+# they import is seen by the analysis either. v0.6.0's first tag build
+# shipped both plugins UNAVAILABLE -- "No module named core.georef" -- and
+# only `--check` caught it. Every core module is frozen, whether or not
+# the core itself imports it, plus the standard-library pieces only the
+# plugins touch; tests/test_plugins.py holds this list to plugins/.
+from PyInstaller.utils.hooks import collect_submodules
+
+hiddenimports += collect_submodules("core")
+hiddenimports += ["xml.etree.ElementTree", "zipfile", "urllib.request", "urllib.error", "secrets"]
 
 # Qt ships far more than a 2D CAD viewport needs. Everything here is verified
 # absent from the source: grep for "from PySide6." lists only QtCore, QtGui,
