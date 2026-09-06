@@ -281,6 +281,9 @@ class ToolController(QObject):
         self.osnap_modes = set(osnap_modes.from_bits(osnap_modes.DEFAULT_BITS))
         self.ortho_on = False
         self.polar_on = False
+        self.snap_on = False        # SNAP / F9: the cursor jumps by the grid
+        self.shift_held = False     # AutoCAD: Shift held = ortho flipped for the moment
+        self.cycling_on = True      # SELECTIONCYCLING (Ctrl+W)
         self.snap_engine: Optional[SnapEngine] = None
         self.snap_hit: Optional[SnapHit] = None
         self._cursor: Optional[tuple[float, float]] = None
@@ -497,6 +500,9 @@ class ToolController(QObject):
         if self.index is None:
             return None
         tolerance = self._pick_tolerance
+        if not self.cycling_on:                  # SELECTIONCYCLING off: the first answer, always
+            handles = self.index.pick_all(point, tolerance)
+            return handles[0] if handles else None
         cycle = self._cycle
         if cycle is not None:
             (px, py), handles, position = cycle
@@ -584,6 +590,30 @@ class ToolController(QObject):
         self._sel_entities_cache = (key, out)
         return out
 
+    def select_all(self) -> int:
+        """Ctrl+A: every selectable entity of the current space -- what is
+        on a layer that is on, thawed and unlocked, and not isolated away."""
+        document = getattr(self.window, "document", None)
+        if document is None:
+            return 0
+        layers = document.doc.layers
+        hidden = getattr(document, "_isolated_hidden", None) or set()
+        handles = set()
+        for entity in document.current_space():
+            handle = entity.dxf.get("handle")
+            if not handle or handle in hidden:
+                continue
+            name = entity.dxf.get("layer", "0")
+            layer = layers.get(name) if name in layers else None
+            if layer is not None and (layer.is_off() or layer.is_frozen() or layer.is_locked()):
+                continue
+            handles.add(handle)
+        self.selection = handles
+        self._highlight_cache = None
+        self._grips_cache = None
+        self.changed.emit()
+        return len(handles)
+
     def clear_selection(self) -> None:
         self.reset_pick_cycle()
         self.selection = set()
@@ -602,8 +632,9 @@ class ToolController(QObject):
         self.clear_selection()
         return True
 
-    def copy_selection(self, cut: bool = False) -> bool:
-        """Ctrl+C / Ctrl+X: stash copies of the selection with a base point."""
+    def copy_selection(self, cut: bool = False, base=None) -> bool:
+        """Ctrl+C / Ctrl+X: stash copies of the selection with a base point
+        -- the selection's lower-left corner, or the one COPYBASE asked for."""
         entities = self._selection_entities()
         if not entities:
             return False
@@ -611,7 +642,9 @@ class ToolController(QObject):
         # contents recursively and cost ~1.6 s on a big selection
         bounds = (self.index.bounds_of(self.selection)
                   if self.index is not None else None)
-        if bounds is not None:
+        if base is not None:
+            base = (float(base[0]), float(base[1]))
+        elif bounds is not None:
             base = (bounds[0], bounds[1])
         else:
             try:
@@ -1899,16 +1932,33 @@ class ToolController(QObject):
         tool.on_selection(entities)
         self.changed.emit()
 
+    def snap_spacing(self):
+        """The grid the cursor jumps by in SNAP mode: the one on screen
+        (adaptive, like BricsCAD's), so what you see is what you get."""
+        viewport = getattr(self.window, "viewport", None)
+        spacing = getattr(viewport, "_grid_spacing", None)
+        try:
+            value = float(spacing()) if callable(spacing) else 0.0
+        except Exception:
+            value = 0.0
+        return value if value > 0 else None
+
     def resolved_point(self, wx: float, wy: float) -> tuple[float, float]:
-        """Snap wins over ortho/polar, AutoCAD-style."""
+        """Object snap wins over grid snap, which wins over ortho/polar --
+        AutoCAD's order; Shift held flips ortho for as long as it is held."""
         if self.tool is not None and self.tool.entity_picker:
             return (wx, wy)  # object picking: raw cursor, no snap/ortho
         if self.snap_hit is not None:
             return (self.snap_hit.x, self.snap_hit.y)
+        if self.snap_on:
+            step = self.snap_spacing()
+            if step:
+                wx, wy = round(wx / step) * step, round(wy / step) * step
+        ortho = self.ortho_on != self.shift_held
         anchor = self.tool.last_point if self.tool else None
-        if anchor is not None and (self.ortho_on or self.polar_on):
+        if anchor is not None and (ortho or self.polar_on):
             dx, dy = wx - anchor[0], wy - anchor[1]
-            if self.polar_on and not self.ortho_on:
+            if self.polar_on and not ortho:
                 ang = math.atan2(dy, dx)
                 step = math.radians(45.0)
                 ang = round(ang / step) * step

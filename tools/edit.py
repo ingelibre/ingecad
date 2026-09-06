@@ -988,9 +988,61 @@ class PasteTool(Tool):
         self.ctx.finish()
 
 
+class CopyBaseTool(Tool):
+    """COPYBASE (Ctrl+Shift+C): copy the selection to the clipboard with a
+    base point of your choosing -- Ctrl+C takes the lower-left corner."""
+
+    wants_selection = True
+
+    def start(self) -> None:
+        self.name = "COPYBASE"
+
+    def on_selection(self, entities: list) -> None:
+        if not entities:
+            self.ctx.finish()
+            return
+        self.prompt("Specify base point:")
+
+    def on_point(self, point: Point) -> None:
+        services = self.ctx.services
+        if services is not None and services.copy_selection(base=(point[0], point[1])):
+            self.ctx.echo(tr("Copied to clipboard with base point."))
+        self.ctx.finish()
+
+
+class PasteBlockTool(PasteTool):
+    """PASTEBLOCK (Ctrl+Shift+V): paste the clipboard as one block, named
+    the way AutoCAD names them (A$C plus eight hex digits)."""
+
+    def start(self) -> None:
+        super().start()
+        self.name = "PASTEBLOCK"
+
+    def on_point(self, point: Point) -> None:
+        import secrets
+
+        from core.commands import CompositeCommand, DeferredCommand
+
+        dx, dy = point[0] - self._base[0], point[1] - self._base[1]
+        paste = actions.PasteCommand(self._sources, dx, dy)
+
+        def block(document):
+            doc = document.doc
+            name = "A$C" + secrets.token_hex(4).upper()
+            while name in doc.blocks:
+                name = "A$C" + secrets.token_hex(4).upper()
+            return actions.create_block(name, (point[0], point[1]), list(paste.copies))
+
+        command = CompositeCommand("PASTEBLOCK", [paste, DeferredCommand("block", block)])
+        self.ctx.execute(command)
+        self.ctx.finish()
+
+
 EDIT_TOOL_CLASSES = {
     "ERASE": EraseTool,
     "PASTECLIP": PasteTool,
+    "COPYBASE": CopyBaseTool,
+    "PASTEBLOCK": PasteBlockTool,
     "MOVE": MoveTool,
     "COPY": CopyTool,
     "ROTATE": RotateTool,

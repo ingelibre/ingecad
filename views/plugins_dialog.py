@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QLabel,
@@ -39,6 +40,10 @@ class PluginsDialog(QDialog):
         self.details.setWordWrap(True)
         self.details.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self.details)
+        # The toolbar is the user's call, plugin by plugin: off until asked.
+        self.toolbar_box = QCheckBox(tr("Show this plugin's toolbar"), self)
+        self.toolbar_box.toggled.connect(self._toolbar_toggled)
+        layout.addWidget(self.toolbar_box)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close, self)
         buttons.rejected.connect(self.reject)
@@ -76,6 +81,21 @@ class PluginsDialog(QDialog):
     def _toggled(self, item: QListWidgetItem) -> None:
         pid = item.data(Qt.UserRole)
         self.manager.set_enabled(pid, item.checkState() == Qt.Checked)
+        if item is self.list.currentItem():
+            self._sync_toolbar_box(pid)
+
+    def _sync_toolbar_box(self, pid: str) -> None:
+        box = self.toolbar_box
+        box.blockSignals(True)
+        offered = self.manager.has_toolbar(pid) and self.manager.is_active(pid)
+        box.setEnabled(offered)
+        box.setChecked(offered and self.manager.toolbar_enabled(pid))
+        box.blockSignals(False)
+
+    def _toolbar_toggled(self, checked: bool) -> None:
+        item = self.list.currentItem()
+        if item is not None:
+            self.manager.set_toolbar_enabled(item.data(Qt.UserRole), checked)
 
     def _describe(self, item: QListWidgetItem | None) -> None:
         if item is None:
@@ -83,6 +103,7 @@ class PluginsDialog(QDialog):
         loaded = self.manager.loaded.get(item.data(Qt.UserRole))
         if loaded is None:
             return
+        self._sync_toolbar_box(item.data(Qt.UserRole))
         lines = []
         if loaded.spec is not None and loaded.spec.description:
             lines.append(tr(loaded.spec.description))

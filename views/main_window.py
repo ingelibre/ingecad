@@ -769,6 +769,15 @@ class MainWindow(QMainWindow):
     def _build_menus(self) -> None:
         menu_bar = self._menu_bar
         menu_bar.clear()
+        # The canvas actions (Ctrl+C/X/V, Delete, Ctrl+A...) hang off the
+        # viewport, which outlives the menus. Every rebuild -- one per plugin
+        # turned on or off -- added a fresh copy beside the old, and Qt
+        # answers an ambiguous shortcut by firing NONE: with two plugins on,
+        # Ctrl+C on the canvas silently did nothing. The old ones go first.
+        for stale in getattr(self, "_canvas_actions", []):
+            self.viewport.removeAction(stale)
+            stale.deleteLater()
+        self._canvas_actions = []
 
         def item(menu, label, slot, shortcut=None, icon=None):
             from views.icons import command_icon
@@ -859,6 +868,7 @@ class MainWindow(QMainWindow):
             act.triggered.connect(slot)
             edit_menu.addAction(act)
             self.viewport.addAction(act)
+            self._canvas_actions.append(act)
             return act
 
         canvas_action(tr("Cut"), self._cmd_cut, QKeySequence.Cut,
@@ -869,10 +879,16 @@ class MainWindow(QMainWindow):
                       icon="PASTECLIP")
         canvas_action(tr("Delete"), self._cmd_delete, QKeySequence.Delete,
                       icon="ERASE")
+        # AutoCAD's Ctrl+Shift+C / Ctrl+Shift+V: COPYBASE and PASTEBLOCK
+        canvas_action(tr("Copy with Base Point"),
+                      lambda: self._invoke_command("COPYBASE"), QKeySequence("Ctrl+Shift+C"))
+        canvas_action(tr("Paste as Block"),
+                      lambda: self._invoke_command("PASTEBLOCK"), QKeySequence("Ctrl+Shift+V"))
+        canvas_action(tr("Select All"), self._cmd_select_all, QKeySequence("Ctrl+A"))
         edit_menu.addSeparator()
         # "Menu: Edit > Find" (p. 808), with the platform's own key.
-        find = item(edit_menu, tr("Find..."), self._cmd_find)
-        find.setShortcut(QKeySequence.Find)
+        # (no key: in AutoCAD Ctrl+F toggles object snap, see _build_acad_shortcuts)
+        item(edit_menu, tr("Find..."), self._cmd_find)
         edit_menu.addSeparator()
         cmd_item(edit_menu, tr("Erase"), "ERASE")
         cmd_item(edit_menu, tr("Move"), "MOVE")
@@ -1076,6 +1092,7 @@ class MainWindow(QMainWindow):
              lambda: self.command_line.input.setFocus())
 
         help_menu = menu_bar.addMenu(tr("Help"))
+        item(help_menu, tr("Help (ingecad.org)"), self._cmd_help, QKeySequence("F1"))
         item(help_menu, tr("Report a Problem..."), self._report_problem)
         help_menu.addSeparator()
         item(help_menu, tr("About IngeCAD"), self._show_about)
@@ -1364,6 +1381,7 @@ class MainWindow(QMainWindow):
     # -- drafting mode toggles (classic status bar buttons) ---------------------
     # AutoCAD status bar: clickable toggle buttons + their F-keys.
     _MODES = (
+        ("snap", "F9", "SNAP", "Snap to grid"),
         ("grid", "F7", "GRID", "Grid display"),
         ("ortho", "F8", "ORTHO", "Ortho mode"),
         ("polar", "F10", "POLAR", "Polar tracking"),
@@ -1420,6 +1438,109 @@ class MainWindow(QMainWindow):
                           lambda k=key: self._toggle_mode(k))
         self._load_osnap_modes()
         self._load_display_settings()
+        self._build_acad_shortcuts()
+
+    #: AutoCAD's default keyboard shortcuts (Command Reference, "Shortcut
+    #: keys"), the ones IngeCAD has something to answer with. F3/F7/F8/F9/F10
+    #: live on the status-bar buttons above; F2 on the text window; the
+    #: clipboard, Delete and Ctrl+A on the canvas actions of the Edit menu;
+    #: Ctrl+N/O/S/P/Q/Z/Y on the menus. Missing on purpose: F11 (object snap
+    #: tracking) and F12 (dynamic input), which are features IngeCAD does
+    #: not have yet, and F4/F5/F6/Ctrl+D/E/T (3D snap, isoplanes, dynamic
+    #: UCS, tablet), which the product's own filter keeps out.
+    _ACAD_SHORTCUTS = (
+        ("Ctrl+B", "snap"),           # SNAP, like F9
+        ("Ctrl+G", "grid"),           # GRID, like F7
+        ("Ctrl+L", "ortho"),          # ORTHO, like F8
+        ("Ctrl+U", "polar"),          # POLAR, like F10
+        ("Ctrl+F", "osnap"),          # OSNAP, like F3
+    )
+
+    def _build_acad_shortcuts(self) -> None:
+        from PySide6.QtGui import QShortcut
+
+        self._acad_shortcuts = []
+
+        def bind(keys: str, slot) -> None:
+            self._acad_shortcuts.append(QShortcut(QKeySequence(keys), self, slot))
+
+        for keys, mode in self._ACAD_SHORTCUTS:
+            bind(keys, lambda m=mode: self._toggle_mode(m))
+        bind("Ctrl+1", self.toggle_properties_panel)          # PROPERTIES palette
+        bind("Ctrl+9", self._toggle_command_line)             # COMMANDLINE / COMMANDLINEHIDE
+        bind("Ctrl+W", self._toggle_selection_cycling)        # SELECTIONCYCLING
+        bind("Ctrl+I", self._toggle_coords)                   # COORDS
+        bind("Ctrl+J", self._repeat_last_command)             # like Enter
+        bind("Ctrl+M", self._repeat_last_command)
+        bind("Ctrl+[", self._on_prompt_cancelled)             # like Esc
+        bind("Ctrl+\\", self._on_prompt_cancelled)
+        bind("Ctrl+PgUp", lambda: self._step_layout(-1))      # previous layout tab
+        bind("Ctrl+PgDown", lambda: self._step_layout(1))     # next layout tab
+        bind("Ctrl+Tab", self._next_window)                   # next drawing window
+
+    def _toggle_command_line(self) -> None:
+        dock = self._command_dock
+        if dock.isVisible():
+            dock.hide()
+        else:
+            dock.show()
+            self.command_line.input.setFocus()
+            self.command_line.echo(tr("Command line shown (Ctrl+9 hides it)."))
+
+    def _toggle_selection_cycling(self) -> None:
+        self.tools.cycling_on = not self.tools.cycling_on
+        self.tools.reset_pick_cycle()
+        self.command_line.echo(tr("Selection cycling: {state}",
+                                  state=tr("on") if self.tools.cycling_on else tr("off")))
+
+    def _toggle_coords(self) -> None:
+        self._coords_on = not getattr(self, "_coords_on", True)
+        self._coords_label.setVisible(self._coords_on)
+        self.command_line.echo(tr("Coordinate display: {state}",
+                                  state=tr("on") if self._coords_on else tr("off")))
+
+    def _repeat_last_command(self) -> None:
+        """Ctrl+J / Ctrl+M: exactly what Enter does at the prompt."""
+        if self.tools.active() or self.tools._selecting_for is not None:
+            if not self.tools.on_text(""):
+                self.dispatcher.submit("")
+            return
+        self.dispatcher.submit("")
+
+    def _step_layout(self, delta: int) -> None:
+        """Ctrl+PgUp / Ctrl+PgDown: the previous / next layout tab."""
+        if self.document is None:
+            return
+        names = list(self._layout_names())
+        if len(names) < 2 or self._active_layout not in names:
+            return
+        index = (names.index(self._active_layout) + delta) % len(names)
+        self.switch_layout(names[index])
+
+    def _next_window(self) -> None:
+        """Ctrl+Tab: the next open drawing window."""
+        from PySide6.QtWidgets import QApplication
+
+        windows = [w for w in QApplication.topLevelWidgets()
+                   if isinstance(w, MainWindow) and w.isVisible()]
+        if self in windows and len(windows) > 1:
+            other = windows[(windows.index(self) + 1) % len(windows)]
+            other.raise_()
+            other.activateWindow()
+
+    def _cmd_select_all(self) -> None:
+        count = self.tools.select_all()
+        self.command_line.echo(tr("{n} object(s) selected.", n=count))
+        self.viewport.update()
+
+    def _cmd_help(self, *args) -> None:
+        """HELP / F1: the product's site, where the documentation lives."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        url = "https://ingecad.org"
+        QDesktopServices.openUrl(QUrl(url))
+        self.command_line.echo(tr("Help: {url}", url=url))
 
     def _toggle_space(self) -> None:
         if self.document is None or self._active_layout == "Model":
@@ -1461,7 +1582,7 @@ class MainWindow(QMainWindow):
             if which == "osnap":
                 self._save_osnap_modes()
         self._update_mode_buttons()
-        names = {"grid": tr("Grid"), "osnap": tr("Object snap"),
+        names = {"snap": tr("Snap"), "grid": tr("Grid"), "osnap": tr("Object snap"),
                  "ortho": tr("Ortho"), "polar": tr("Polar"),
                  "lwt": tr("Lineweight display")}
         state = tr("on") if value else tr("off")
@@ -2370,6 +2491,7 @@ class MainWindow(QMainWindow):
         d.register("CURSORSIZE", self._cmd_cursorsize)
         d.register("PICKBOX", self._cmd_pickbox)
         d.register("PLUGINS", self._cmd_plugins)
+        d.register("HELP", self._cmd_help)
         d.register("BEDIT", self._cmd_bedit)
         d.register("-BEDIT", self._cmd_bedit)
         d.register("BSAVE", self._cmd_bsave)
@@ -2400,7 +2522,7 @@ class MainWindow(QMainWindow):
         d.register("VPLOCK", self._cmd_vplock)
         d.register("PAGESETUP", self._cmd_pagesetup)
         # Phase 4 drawing + Phase 5 editing tools.
-        for name in ("LINE", "CIRCLE", "ARC", "PLINE", "RECTANG", "POLYGON",
+        for name in ("LINE", "CIRCLE", "ARC", "COPYBASE", "PASTEBLOCK", "PLINE", "RECTANG", "POLYGON",
                      "SPLINE",
                      "ELLIPSE", "POINT", "TEXT", "MTEXT",
                      "ERASE", "MOVE", "COPY", "ROTATE", "SCALE", "MIRROR",

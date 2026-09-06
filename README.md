@@ -124,6 +124,36 @@ Planned next (v0.5): survey-point import with elevations, coordinate
 tables, elevation profiles — as the first discipline plug-in. See
 `CLAUDE.md` for the roadmap.
 
+## Keyboard — the AutoCAD one
+
+| Key | Does |
+|---|---|
+| F1 | Help (ingecad.org) |
+| F2 | Text window |
+| F3 / Ctrl+F | Object snap (OSNAP) |
+| F7 / Ctrl+G | Grid |
+| F8 / Ctrl+L | Ortho — and **Shift held** flips it for the moment |
+| F9 / Ctrl+B | Snap to grid (SNAP) |
+| F10 / Ctrl+U | Polar tracking |
+| Ctrl+0 | Clean screen |
+| Ctrl+1 | Properties palette |
+| Ctrl+9 | Command line on / off |
+| Ctrl+A | Select all |
+| Ctrl+C / Ctrl+X / Ctrl+V, Delete | Clipboard and erase |
+| Ctrl+Shift+C / Ctrl+Shift+V | Copy with base point / paste as block |
+| Ctrl+Z / Ctrl+Y, U | Undo / redo |
+| Ctrl+J, Ctrl+M, Enter, Space | Repeat the last command |
+| Ctrl+[ , Ctrl+\ , Esc | Cancel |
+| Ctrl+W | Selection cycling |
+| Ctrl+I | Coordinate display |
+| Ctrl+R | Next viewport in a layout |
+| Ctrl+PgUp / Ctrl+PgDn | Previous / next layout tab |
+| Ctrl+Tab | Next drawing window |
+| Ctrl+N / O / S / Shift+S / P / Q | New, open, save, save as, plot, quit |
+
+Not there yet, and they are features rather than keys: F11 (object snap
+tracking) and F12 (dynamic input).
+
 ## Install (Linux, x86_64)
 
 **Flatpak (recommended)** — one click, updates arrive on their own:

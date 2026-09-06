@@ -1741,6 +1741,7 @@ class Viewport(QOpenGLWidget):
 
     # -- input -----------------------------------------------------------------
     def mousePressEvent(self, event) -> None:
+        self._track_shift(event.modifiers())
         if self._pan_mode:
             if event.button() == Qt.LeftButton:
                 self._panning = True   # grab: closed hand, pan follows cursor
@@ -1864,8 +1865,28 @@ class Viewport(QOpenGLWidget):
             return
         super().mouseReleaseEvent(event)
 
+    def _track_shift(self, modifiers) -> None:
+        """AutoCAD flips ortho while Shift is held: the controller reads
+        the flag wherever it resolves a point."""
+        delegate = self.tool_delegate
+        if delegate is not None:
+            delegate.shift_held = bool(modifiers & Qt.ShiftModifier)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Shift:
+            self._track_shift(event.modifiers() | Qt.ShiftModifier)
+            self.update()
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:
+        if event.key() == Qt.Key_Shift:
+            self._track_shift(event.modifiers() & ~Qt.ShiftModifier)
+            self.update()
+        super().keyReleaseEvent(event)
+
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
+        self._track_shift(event.modifiers())
         # Self-healing: if the button that started a pan was released where
         # we could not see it (over the floating MTEXT editor, another
         # widget, outside the window), the release never arrives and the

@@ -1350,5 +1350,18 @@
   "Bundled with IngeCAD": "Incluido con IngeCAD",
   "Installed by you": "Instalado por vos",
   "Location: {path}": "Ubicación: {path}",
-  "No plugins found.": "No se encontró ningún complemento."
+  "No plugins found.": "No se encontró ningún complemento.",
+  "Snap to grid": "Forzar el cursor a la rejilla",
+  "SNAP": "FORZC",
+  "Snap": "Forzcursor",
+  "Copy with Base Point": "Copiar con punto base",
+  "Paste as Block": "Pegar como bloque",
+  "Copied to clipboard with base point.": "Copiado al portapapeles con punto base.",
+  "Help (ingecad.org)": "Ayuda (ingecad.org)",
+  "Help: {url}": "Ayuda: {url}",
+  "Command line shown (Ctrl+9 hides it).": "Línea de comandos visible (Ctrl+9 la oculta).",
+  "Selection cycling: {state}": "Ciclado de selección: {state}",
+  "Coordinate display: {state}": "Visualización de coordenadas: {state}",
+  "{n} object(s) selected.": "{n} objeto(s) seleccionado(s).",
+  "Show this plugin's toolbar": "Mostrar la barra de herramientas de este complemento"
 }

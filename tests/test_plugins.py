@@ -131,7 +131,14 @@ def test_turning_a_plugin_on_gives_it_everything_it_declared(qapp):
         assert "Sample" in titles                            # the menu
         labels = _menu_labels(win, "Sample")
         assert labels[0] == "Say hello" and labels[1] == "" and labels[2] == "Points"
+        # the toolbar is the user's choice, off by default (Marco, 2026-09-06)
+        assert "plugin_ejemplo_toolbar" not in _snapshot(win)["toolbars"]
+        assert win.plugins.has_toolbar("ejemplo") and not win.plugins.toolbar_enabled("ejemplo")
+        win.plugins.set_toolbar_enabled("ejemplo", True)
         assert "plugin_ejemplo_toolbar" in _snapshot(win)["toolbars"]
+        assert win.plugins.toolbar_enabled("ejemplo")
+        win.plugins.set_toolbar_enabled("ejemplo", False)
+        assert "plugin_ejemplo_toolbar" not in _snapshot(win)["toolbars"]
         assert Path(FIXTURE / "ejemplo" / "i18n") in i18n.pack_dirs()
     finally:
         win.plugins.deactivate("ejemplo")

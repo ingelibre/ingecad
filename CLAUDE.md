@@ -522,6 +522,57 @@ ventana falsa.
 misma pregunta, tarde o temprano contestan distinto.** La búsqueda no está
 cerrada —esta sesión sólo cubrió los cuatro que ya se habían visto.
 
+## 🗓 Sesión 2026-09-06 (quater) — el teclado de AutoCAD, y las barras de los complementos apagadas
+
+**Marco, tras lanzar la app con Topografía y Terreno:** *«no me gusta que
+esté ese toolbar de los complementos activado por defecto… el usuario
+debería elegir a su gusto»* y *«implementa atajos de teclado, recuerda que
+tiene que ser igual a AutoCAD»*.
+
+**Barras de complementos: apagadas por defecto.** Un complemento agrega su
+menú; la barra la enciende el usuario en Herramientas ▸ Complementos…
+(«Mostrar la barra de herramientas de este complemento») y la elección se
+recuerda (`plugins/<id>/toolbar`). `PluginManager.set_toolbar_enabled`
+la agrega o la quita al instante; el test de «cero rastro» sigue valiendo.
+
+**El teclado, tecla por tecla de la tabla de AutoCAD, y pulsado de verdad
+en los tests** (`tests/test_keyboard_shortcuts.py`, `QTest.keySequence`
+sobre la ventana mostrada y activada, como el test de Ctrl+Z):
+
+| tecla | qué hace | dónde vive |
+|---|---|---|
+| **F9 / Ctrl+B** | **FORZC** (nuevo): el cursor salta por la rejilla **que se ve** (la adaptativa 1-2-5 del lienzo, como BricsCAD); la referencia a objetos le gana, el orto/polar se aplica después | `ToolController.snap_on`, `snap_spacing`, `resolved_point`; botón SNAP primero en la barra de estado, orden de AutoCAD |
+| **Shift mantenido** | orto invertido mientras se sostiene (con ORTO apagado lo enciende, con ORTO encendido lo suelta) | `shift_held`, leído en cada movimiento, clic y tecla del lienzo |
+| Ctrl+G / Ctrl+L / Ctrl+U / **Ctrl+F** | REJILLA / ORTO / POLAR / **REFENT** — Ctrl+F ya no es Buscar (AutoCAD no le da tecla a FIND) | `_ACAD_SHORTCUTS` |
+| Ctrl+1 / Ctrl+9 | paleta de Propiedades / ocultar y mostrar la línea de comandos | |
+| Ctrl+A (lienzo) | seleccionar todo lo seleccionable: capas apagadas, congeladas o bloqueadas y objetos aislados quedan fuera | `ToolController.select_all` |
+| Ctrl+W / Ctrl+I | ciclado de selección / visualización de coordenadas | |
+| Ctrl+J / Ctrl+M | Enter: repite el último comando | |
+| Ctrl+[ / Ctrl+\ | Esc | |
+| Ctrl+RePág / Ctrl+AvPág | lámina anterior / siguiente (cíclico) | |
+| Ctrl+Tab | siguiente ventana de dibujo | |
+| **Ctrl+Shift+C / Ctrl+Shift+V** | **COPYBASE** (copiar con punto base) y **PASTEBLOCK** (pegar como bloque `A$C…`, nombrado como AutoCAD; un `DeferredCommand` crea el bloque con las copias recién pegadas) | `tools/edit.py` |
+| F1 | Ayuda: ingecad.org (también el comando HELP) | |
+
+Lo que ya estaba: F2, F3, F7, F8, F10, Ctrl+R, Ctrl+0, Ctrl+Z/Y, Ctrl+C/X/V,
+Supr, Ctrl+N/O/S/Shift+S/P/Q, Esc, Espacio/Enter. **Lo que falta y se dice:**
+**F11** (rastreo de referencia a objetos) y **F12** (entrada dinámica) son
+funciones que IngeCAD no tiene, no teclas que falten; F4/F5/F6 y
+Ctrl+D/E/T (3D, isoplano, SCP dinámico, tableta) quedan fuera por el filtro
+maestro.
+
+⚠️ **El bug que destapó probar las teclas de verdad, y es viejo y grave:**
+las acciones del lienzo (Ctrl+C/X/V, Supr) se agregaban al viewport en
+**cada** reconstrucción de menús, y los complementos reconstruyen los
+menús al activarse: con dos complementos había **tres copias de Ctrl+C**, y
+Qt contesta a un atajo ambiguo **sin disparar ninguno**. Es decir: desde
+P0, con Topografía y Terreno encendidos, **Ctrl+C sobre el lienzo no
+copiaba nada**, en silencio. Es la familia del Ctrl+Y del 2026-08-23. Las
+acciones viejas se retiran del viewport antes de crear las nuevas, y hay
+un test que activa y desactiva los complementos y exige UNA acción por
+tecla y que Ctrl+C copie. Ninguna prueba de «existe el atajo» lo habría
+visto; lo vio **pulsar la tecla**.
+
 ## 🗓 Sesión 2026-09-06 (ter) — G4: ida y vuelta con Google Earth — **Terreno v0.6 completo**
 
 **Tres comandos en Terreno, y con ellos se cierra el plan de la v0.6

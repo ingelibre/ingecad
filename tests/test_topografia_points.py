@@ -360,7 +360,9 @@ def test_the_plugin_is_bundled_on_and_reachable(qapp):
             assert name in d._commands
         assert d.resolve_name("PIM") == "PIMPORT"
         assert d.resolve_name("PBY") == "PBY"
-        assert "plugin_topografia_toolbar" in [
+        # the plugin declares a toolbar, but it is off until the user asks
+        assert win.plugins.has_toolbar("topografia")
+        assert "plugin_topografia_toolbar" not in [
             t.objectName() for t in win.findChildren(type(win._draw_toolbar))]
     finally:
         win.close()

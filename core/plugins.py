@@ -214,6 +214,10 @@ class PluginManager:
     """
 
     SETTING = "plugins/{id}/enabled"
+    #: A plugin's toolbar is OFF by default: the menu is what a plugin adds,
+    #: the toolbar is the user's to switch on (Tools > Plugins). Nobody who
+    #: only draws should find a strip of survey buttons on their screen.
+    TOOLBAR_SETTING = "plugins/{id}/toolbar"
 
     def __init__(self, host=None, bundled_dir: Optional[Path] = None,
                  user_dir: Optional[Path] = None) -> None:
@@ -286,6 +290,40 @@ class PluginManager:
     def is_active(self, plugin_id: str) -> bool:
         return plugin_id in self._active
 
+    # -- the toolbar, the user's choice -----------------------------------------------
+    def has_toolbar(self, plugin_id: str) -> bool:
+        loaded = self.loaded.get(plugin_id)
+        return bool(loaded and loaded.spec is not None and loaded.spec.toolbar)
+
+    def toolbar_enabled(self, plugin_id: str) -> bool:
+        """Does the user want this plugin's toolbar shown? Off until asked."""
+        try:
+            from PySide6.QtCore import QSettings
+
+            raw = QSettings().value(self.TOOLBAR_SETTING.format(id=plugin_id), None)
+        except Exception:
+            raw = None
+        return str(raw).lower() in ("true", "1", "yes") if raw is not None else False
+
+    def set_toolbar_enabled(self, plugin_id: str, flag: bool) -> None:
+        """Persist the choice and show or hide the toolbar at once."""
+        try:
+            from PySide6.QtCore import QSettings
+
+            QSettings().setValue(self.TOOLBAR_SETTING.format(id=plugin_id),
+                                 "true" if flag else "false")
+        except Exception:
+            pass
+        record = self._active.get(plugin_id)
+        if record is None or self.host is None or not self.has_toolbar(plugin_id):
+            return
+        if flag and not record.toolbar:
+            self.host.add_toolbar(self.loaded[plugin_id].spec)
+            record.toolbar = True
+        elif not flag and record.toolbar:
+            self.host.remove_toolbar(plugin_id)
+            record.toolbar = False
+
     def active_specs(self) -> list[PluginSpec]:
         """The specs currently on, in id order (menu order, toolbar order)."""
         return [self.loaded[pid].spec for pid in sorted(self._active)]
@@ -333,7 +371,7 @@ class PluginManager:
             if spec.i18n_dir is not None and Path(spec.i18n_dir).is_dir():
                 host.add_pack_dir(Path(spec.i18n_dir))
                 record.pack_dir = Path(spec.i18n_dir)
-            if spec.toolbar:
+            if spec.toolbar and self.toolbar_enabled(spec.id):
                 host.add_toolbar(spec)
                 record.toolbar = True
             host.menus_changed()

@@ -8,7 +8,9 @@ turned off, removes exactly that. The test suite holds every bundled plugin
 to "no trace left" (`tests/test_plugins.py`).
 
 Bundled plugins live in `plugins/<id>/` and ship with the app, on by
-default. A user's own live in `~/.config/IngeCAD/plugins/<id>/`, off until
+default. A plugin's **toolbar is off by default** -- the menu is what a
+plugin adds; the user switches the toolbar on in **Tools ▸ Plugins…**
+("Show this plugin's toolbar"), and the choice is remembered. A user's own live in `~/.config/IngeCAD/plugins/<id>/`, off until
 enabled in **Tools ▸ Plugins…** (command `PLUGINS`).
 
 ## The smallest plugin
