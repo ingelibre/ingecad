@@ -45,6 +45,20 @@ What works today:
   from a global DEM, the satellite image under the plan, and Google Earth
   both ways by KML/KMZ. Plugins are managed in Tools ▸ Plugins; the
   contract for writing one is in `docs/plugins.md`.
+
+  ![Topography: the construction chart and contours](docs/images/topografia.jpeg)
+
+  > *A survey's points, the boundary drawn on them with its bearings and
+  > distances, the construction chart IngeCAD computed from it (1 523.77 m²,
+  > 156.70 m) and contours every 0.25 m. Everything on the drawing is plain
+  > DXF — POINT, TEXT, LWPOLYLINE, 3DFACE — that any CAD opens.*
+
+  ![Terrain: the satellite image under the survey](docs/images/terreno.jpeg)
+
+  > *The same survey with Esri World Imagery underneath at 0.29 m/pixel,
+  > fetched for the polygon asked for and resampled into the drawing's own
+  > UTM grid, saved beside the drawing with the attribution its licence
+  > requires written on the plan.*
 - **Faithful viewer** for real-world DWG/DXF: nested blocks, MTEXT, hatches
   (patterns + solids), linetypes, dimensions, OCS, paperspace layouts —
   smooth pan/zoom even on cadastre-scale drawings (90k+ entities).
