@@ -220,6 +220,17 @@ def main() -> int:
     QCoreApplication.setOrganizationName("IngeCAD")
     _configure_surface_format()
     app = QApplication(sys.argv)
+    # A driver that cannot serve the format we just asked for takes the
+    # whole app down with it, window included — and Qt's own "wayland;xcb"
+    # list never retries, because it is spent before the first context.
+    # Ask for less, or come back under XCB; the call does not return when
+    # it restarts us. See core/gl_fallback.py.
+    from core.gl_fallback import ensure_gl_context
+    gl_fallback = ensure_gl_context(app)
+    app.setProperty("gl_fallback", gl_fallback)
+    if gl_fallback == "failed":
+        print("IngeCAD: no OpenGL 3.3 context on this machine — the canvas "
+              "will not draw.", file=sys.stderr)
     # Wayland matches the running window to its .desktop entry by this name.
     app.setDesktopFileName("ingecad")
     from PySide6.QtGui import QIcon

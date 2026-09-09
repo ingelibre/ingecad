@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Would not open at all with an NVIDIA driver on Wayland.** That EGL
+  cannot serve the OpenGL 3.3 context the canvas asks for (`Failed to
+  create context: 3009` — `EGL_BAD_MATCH`), and since that is the
+  *default* surface format it took Qt's own window painting down with it:
+  not a broken canvas, an app that does not start. The same driver serves
+  the same request through GLX under X11 without a complaint, so IngeCAD
+  now checks at startup and either asks for a leaner format (line
+  smoothing off) or restarts itself under X11. The Flatpak asks for
+  `--socket=x11` so that restart has somewhere to go.
+- **Library warnings on AppImage startup.** The host's GIO modules clash
+  with the glib inside the bundle and printed two `undefined symbol`
+  lines before the app existed. The AppImage no longer loads them.
+
 ## v0.6.0 — 2026-09-06
 
 The release the plan called v0.5 and v0.6 together: the first two
