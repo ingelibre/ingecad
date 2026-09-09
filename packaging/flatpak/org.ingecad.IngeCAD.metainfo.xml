@@ -45,6 +45,18 @@
   <url type="vcs-browser">https://github.com/ingelibre/ingecad</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.1" date="2026-09-09">
+      <description>
+        <p>Starts on machines whose graphics driver refuses the OpenGL
+        context the canvas asks for. On an NVIDIA card under Wayland the
+        application did not open at all; it now asks for a leaner format,
+        or comes back under X11, by itself.</p>
+        <p xml:lang="es">Arranca en equipos cuyo driver gráfico rechaza el
+        contexto OpenGL que pide el lienzo. Con una tarjeta NVIDIA sobre
+        Wayland la aplicación no abría siquiera; ahora pide un formato más
+        modesto, o vuelve bajo X11, ella sola.</p>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-09-06">
       <description>
         <p>Two discipline plugins on a new plugin system: Topography (survey

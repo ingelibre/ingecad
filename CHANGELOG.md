@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.6.1 — 2026-09-09
+
+The first report from outside: a machine with an NVIDIA card on Wayland
+where IngeCAD — and IngeTrazo beside it — did not open at all.
 
 ### Fixed
 - **Would not open at all with an NVIDIA driver on Wayland.** That EGL
