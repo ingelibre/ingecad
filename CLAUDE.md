@@ -485,6 +485,59 @@ prompt y las cotas junto al cursor). Son funciones, no teclas: cuando
 existan, la tecla se agrega a `_MODES` / `_build_acad_shortcuts` y al test
 de teclado. Van después del dogfooding de Terreno y antes de publicar.
 
+## 🗓 Sesión 2026-09-16 — el reporte de Rafael: tanda A (tipos ISO, cota Ø, ejes de centro)
+
+**Rafael (segundo probador, dibuja a norma ISO/UNE) mandó 10 puntos; el
+plan quedó en cuatro tandas (memoria `[[rafael-feedback-2026-09]]`) y
+Marco dijo «empieza por la tanda A».** Tres cosas, las tres con causa
+medida antes de tocar:
+
+- **#4 Tipos de línea ISO (952e8aa):** `LoadLinetypesCommand` le pasaba a
+  ezdxf la lista de trazos pelada y `linetypes.add()` espera
+  `[longitud_total, trazo, …]`: el primer trazo se comía como longitud.
+  ISO02 `[12,-3]` quedaba `[-3]` (ezdxf lo dibuja **sólido**: «no lo
+  cargó») e ISO04 punteada («lo cargó con otro nombre»). Los 20 nombres
+  que un dibujo nuevo no trae. ⚠️ El test que existía **conocía el
+  formato** (`pattern=[9.0, 6.0, -3.0]` en su propio fixture) y sólo
+  comprobaba que la entrada existiera. Ahora carga la biblioteca entera y
+  exige `pattern_of == biblioteca`, más un render que cuenta vértices
+  (134, no 2).
+- **#6 Cota de diámetro (4316044):** dos bugs. El texto caía **al lado
+  opuesto del clic** —`add_diameter_dim(angle=…)` mide el ángulo al primer
+  defpoint y pone el texto pasado el segundo; DIMRADIUS no lo sufría—, y
+  las dos flechas salían con **la misma rotación** (una dentro apuntando
+  afuera, otra fuera apuntando adentro). La norma y la ISO-25 de AutoCAD
+  (DIMTOFL on): línea a través del círculo, **dos flechas dentro** con la
+  punta en el círculo, texto fuera sobre la prolongación; si no caben,
+  fuera apuntando adentro. ezdxf 1.4 no dibuja ninguna de las dos (con
+  location y DIMTMOVE 0/1 le falta la flecha lejana), así que
+  `core/ezdxf_patches.py` toma el caso «texto fuera + DIMTOFL» en los dos
+  renderers, camino default y de usuario (un `dim.render()` posterior
+  olvida el user location). ⚠️ ezdxf lee un DIMTMOVE ausente como 2 donde
+  AutoCAD vale 0: el parche lo lee con el default de AutoCAD, y la semilla
+  ISO-25 escribe ahora los flags de acadiso explícitos.
+- **#9 Ejes de centro (16cd366):** CENTERMARK / CENTERLINE (AutoCAD
+  2017+) como LINEs en `CENTER2` (cargado en el mismo paso de deshacer,
+  gracias al #4), cruz 0.1x + hueco 0.05x + ejes hasta CENTEREXE pasado el
+  círculo; las seis variables CENTER* tecleables (QSettings; DXF no tiene
+  cabecera para ellas). **CENTEREXE se guarda en mm de hoja y se convierte
+  por el estilo de cota actual** (dimtxt × dimscale = 2,5 mm), no por
+  $INSUNITS: el plano del colega en metros suele decir INSUNITS 0 y su
+  texto de 0,20 sí dice la verdad. DIMCENTER sigue haciendo lo de DIMCEN.
+
+**Verificado mirando la captura** (render a PNG con la Y volteada — el
+QGraphicsScene conserva la Y del mundo): Ø100 con flechas dentro y texto
+del lado del clic, Ø8 con flechas fuera, R50/R3, y las marcas de centro
+trazo-punto. Suite entera: 1293 passed (21 min en `offscreen`; esta
+máquina no tiene `xvfb-run`). Sin publicar: la 0.6.2 espera la tanda B y
+el OK de Marco.
+
+**Lo que sigue (tanda B):** #7 panear dentro de una ventana borra el
+dibujo —hipótesis: `_vp_live_stop()` retira la matriz viva con la copia
+horneada aún oculta y la regen es asíncrona; reproducir primero sobre
+`Planos Constructivos.dwg`— y #8 snap desde la hoja a través de la
+ventana **más DIMLFAC = 1/escala** para que la cota lea el modelo.
+
 ## 🗓 Sesión 2026-09-05 — una pregunta, un lugar (el pedido de Marco, hecho)
 
 **Lo que Marco pidió el 2026-08-29 —reducir conceptos duplicados antes que
