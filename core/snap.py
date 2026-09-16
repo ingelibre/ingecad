@@ -44,8 +44,10 @@ import numpy as np
 
 # Lower = wins when within threshold.
 PRIORITY = {"END": 0, "INT": 1, "MID": 2, "CEN": 3, "GCE": 4, "NOD": 5,
-            "QUA": 6, "INS": 7, "PER": 8, "TAN": 9, "NEA": 10}
-ALL_KINDS = frozenset(PRIORITY)
+            "ORI": 6, "QUA": 7, "INS": 8, "PER": 9, "TAN": 10, "NEA": 11}
+#: Every snap a drawing's geometry offers. The origin (ORI) is not one of
+#: them: it is a point no entity owns, offered only when the user ticks it.
+ALL_KINDS = frozenset(k for k in PRIORITY if k != "ORI")
 
 # Point targets share one table with a kind column, so a curve can offer an
 # end, a midpoint, a centre and four quadrants without four more arrays.
@@ -564,6 +566,9 @@ class SnapEngine:
             i = int(np.argmin(d2))
             offer(kind, float(rows[i, 0]), float(rows[i, 1]))
 
+        if "ORI" in kinds:
+            # the origin of the space: no entity owns it, it is always there
+            offer("ORI", 0.0, 0.0)
         if "END" in kinds and len(segs):
             for exy in (segs[:, 0:2], segs[:, 2:4]):
                 d2 = (exy[:, 0] - cx) ** 2 + (exy[:, 1] - cy) ** 2

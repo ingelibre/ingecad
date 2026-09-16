@@ -192,6 +192,15 @@ class Viewport(QOpenGLWidget):
         self._cursor: Optional[QPointF] = None
         self._panning = False
         self._pan_last_screen = None
+        #: The cursor the CANVAS paints -- None for the crosshair, or
+        #: "open_hand" / "closed_hand" / "cross". The OS pointer stays
+        #: blank over the canvas at all times: a system cursor over a GL
+        #: surface that flips sixty times a second flickers on some
+        #: driver/compositor pairs (NVIDIA under XWayland is the classic
+        #: one), which is what a tester saw as "el puntero parpadea al
+        #: panear" -- the closed hand the pan used to hand the OS. Painted
+        #: into the frame, a cursor cannot flicker apart from it.
+        self._soft_cursor = None
         # MSPACE navigation: the model tessellated once, drawn through the
         # active viewport with nothing but a matrix change per frame.
         self._live_vp = None
@@ -309,7 +318,7 @@ class Viewport(QOpenGLWidget):
     def start_pan_mode(self) -> None:
         self._pan_mode = True
         self._cursor = None            # hide the crosshair; show the hand
-        self.setCursor(Qt.OpenHandCursor)
+        self._set_soft_cursor("open_hand")
         self.update()
 
     def stop_pan_mode(self) -> None:
@@ -317,7 +326,7 @@ class Viewport(QOpenGLWidget):
             return
         self._pan_mode = False
         self._panning = False
-        self.setCursor(Qt.BlankCursor)
+        self._set_soft_cursor(None)
         # PAN ends where the hand was, so that is where the crosshair goes —
         # not back to wherever it was before the command started.
         last = getattr(self, "_pan_last_screen", None)
@@ -468,7 +477,7 @@ class Viewport(QOpenGLWidget):
     def start_zoom_window(self) -> None:
         """Next left-drag on the canvas picks the zoom window."""
         self._zoom_window = True
-        self.setCursor(Qt.CrossCursor)
+        self._set_soft_cursor("cross")
 
     def scene_bounds(self) -> tuple[float, float, float, float]:
         """World bounds to fit on Zoom Extents.
@@ -1369,7 +1378,11 @@ class Viewport(QOpenGLWidget):
                 else:
                     self._draw_dim_preview(p, grip_dim, color)
             self._draw_live_text(p)
-        if self._cursor is not None and not self._panning:
+        if self._soft_cursor is not None:
+            pos = self._soft_cursor_pos()
+            if pos is not None:
+                self._draw_soft_cursor(p, pos)
+        elif self._cursor is not None and not self._panning:
             self._draw_crosshair(p, self._cursor, self._cursor_mode())
             if self.tool_delegate is not None and getattr(self.tool_delegate, "dyn_on", False):
                 self._draw_dyn_tooltip(p, self._cursor)
@@ -1704,6 +1717,10 @@ class Viewport(QOpenGLWidget):
             p.drawEllipse(QPointF(x, y), s, s)
             p.drawLine(QPointF(x - s, y - s), QPointF(x + s, y + s))
             p.drawLine(QPointF(x - s, y + s), QPointF(x + s, y - s))
+        elif kind == "ORI":     # circle with a + : the UCS icon's origin
+            p.drawEllipse(QPointF(x, y), s, s)
+            p.drawLine(QPointF(x - s, y), QPointF(x + s, y))
+            p.drawLine(QPointF(x, y - s), QPointF(x, y + s))
         elif kind == "INS":     # two offset squares
             p.drawRect(x - s, y - s, 1.6 * s, 1.6 * s)
             p.drawRect(x - 0.4 * s, y - 0.4 * s, 1.6 * s, 1.6 * s)
@@ -1764,6 +1781,53 @@ class Viewport(QOpenGLWidget):
             return False
         r, g, b, _a = self._scene.background
         return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 0.5
+
+    def _set_soft_cursor(self, kind) -> None:
+        if kind != self._soft_cursor:
+            self._soft_cursor = kind
+            self.update()
+
+    def _soft_cursor_pos(self):
+        """Where the painted cursor goes: the pointer's last position."""
+        if self._pan_mode:
+            return self._pan_last_screen or self._cursor
+        return self._cursor
+
+    def _draw_soft_cursor(self, p: QPainter, pos: QPointF) -> None:
+        """The pan hands and the zoom-window cross, drawn like the
+        crosshair is: part of the frame, never an OS cursor."""
+        kind = self._soft_cursor
+        x, y = pos.x(), pos.y()
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        if kind == "cross":
+            color = self._crosshair_color
+            if color is None:
+                color = (CROSSHAIR_COLOR_LIGHT if self._light_background()
+                         else CROSSHAIR_COLOR)
+            p.setPen(QPen(color, 1))
+            p.drawLine(QPointF(x - 10, y), QPointF(x + 10, y))
+            p.drawLine(QPointF(x, y - 10), QPointF(x, y + 10))
+            p.restore()
+            return
+        # a hand: a palm with four fingers and a thumb, open (fingers up)
+        # or closed (curled onto the palm), about the size of the OS one
+        outline = QPen(QColor(20, 20, 20), 1.5)
+        fill = QColor(245, 245, 245)
+        p.setPen(outline)
+        p.setBrush(fill)
+        if kind == "open_hand":
+            for fx, top, height in ((-6.5, -9, 12), (-2.5, -12, 15),
+                                    (1.5, -12, 15), (5.5, -9, 12)):
+                p.drawRoundedRect(x + fx - 1.8, y + top, 3.6, height, 1.8, 1.8)
+            p.drawRoundedRect(x - 12, y - 2, 6, 9, 3, 3)            # thumb
+            p.drawRoundedRect(x - 8, y - 3, 16, 14, 4, 4)           # palm
+        else:
+            p.drawRoundedRect(x - 12, y - 1, 6, 8, 3, 3)            # thumb
+            p.drawRoundedRect(x - 8, y - 4, 16, 13, 4, 4)           # palm
+            for fx in (-6.5, -2.5, 1.5, 5.5):                       # knuckles
+                p.drawRoundedRect(x + fx - 1.8, y - 8, 3.6, 6, 1.8, 1.8)
+        p.restore()
 
     def _cursor_mode(self) -> str:
         delegate = self.tool_delegate
@@ -1832,7 +1896,7 @@ class Viewport(QOpenGLWidget):
             if event.button() == Qt.LeftButton:
                 self._panning = True   # grab: closed hand, pan follows cursor
                 self._last_pos = event.position()
-                self.setCursor(Qt.ClosedHandCursor)
+                self._set_soft_cursor("closed_hand")
                 return
             if event.button() == Qt.RightButton:
                 self.stop_pan_mode()   # right-click ends PAN, like AutoCAD
@@ -1841,7 +1905,7 @@ class Viewport(QOpenGLWidget):
             window = getattr(self.tool_delegate, "window", None)
             if self._zoom_window:
                 self._zoom_window = False        # right-click cancels the pick
-                self.setCursor(Qt.BlankCursor)
+                self._set_soft_cursor(None)
                 if self._rubber is not None:
                     self._rubber.hide()
             elif self.tool_delegate._grip_drag is not None:
@@ -1862,7 +1926,7 @@ class Viewport(QOpenGLWidget):
         if event.button() == Qt.MiddleButton:
             self._panning = True
             self._last_pos = event.position()
-            self.setCursor(Qt.ClosedHandCursor)
+            self._set_soft_cursor("closed_hand")
             self.update()
             return
         if event.button() == Qt.LeftButton and self.tool_delegate is not None:
@@ -1896,11 +1960,11 @@ class Viewport(QOpenGLWidget):
         if self._pan_mode and event.button() == Qt.LeftButton:
             self._panning = False           # release: back to open hand
             self._pan_last_screen = event.position()
-            self.setCursor(Qt.OpenHandCursor)
+            self._set_soft_cursor("open_hand")
             return
         if self._zoom_window and event.button() == Qt.LeftButton:
             self._zoom_window = False
-            self.setCursor(Qt.BlankCursor)
+            self._set_soft_cursor(None)
             if self._rubber is not None:
                 self._rubber.hide()
             pos = event.position()
@@ -1926,7 +1990,7 @@ class Viewport(QOpenGLWidget):
             # the crosshair comes back exactly under the pointer, not where
             # the last move event happened to land
             self._cursor = event.position()
-            self.setCursor(Qt.BlankCursor)
+            self._set_soft_cursor(None)
             if self.tool_delegate is not None:
                 wx, wy = self.view.screen_to_world(self._cursor.x(),
                                                    self._cursor.y())

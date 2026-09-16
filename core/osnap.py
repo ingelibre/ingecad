@@ -11,7 +11,11 @@ intersection, 64 insertion, 128 perpendicular, 256 tangent, 512 nearest,
 user who pressed F3 from a user who unticked every box.
 
 Geometric Center is newer than the reference we work from and has no
-documented bit there, so it takes the next free one (32768).
+documented bit there, so it takes the next free one (32768). Origin is
+IngeCAD's own -- no CAD has it, a tester insisted it is elementary, and
+it is: the (0, 0) of the current space as a snappable point. It takes the
+bit after that (65536). Both live only in the user's settings, never in a
+drawing's $OSMODE.
 
 Modes that are listed but not yet implemented are marked ``available=False``:
 they appear in the menu greyed out with the reason, rather than offering a
@@ -39,6 +43,7 @@ MODES: tuple[Mode, ...] = (
     Mode("CEN", 4, "Center"),
     Mode("GCE", 32768, "Geometric Center"),
     Mode("NOD", 8, "Node"),
+    Mode("ORI", 65536, "Origin"),
     Mode("QUA", 16, "Quadrant"),
     Mode("INT", 32, "Intersection"),
     Mode("EXT", 4096, "Extension", False,

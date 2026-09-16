@@ -452,6 +452,23 @@ class LayersPanel(QWidget):
                 lineweight=base.lineweight))
         else:
             self._execute(layer_ops.NewLayerCommand(name))
+        # The new layer is the selected row, with its name open for typing
+        # (AutoCAD's Layer Properties Manager does the same). Before, the
+        # highlight stayed on whatever ROW INDEX was current, and after the
+        # re-sort that row was another layer -- Defpoints, typically, which
+        # does not plot: a tester read its crossed-out printer as his new
+        # layer's and reported "capas nuevas nacen no imprimibles".
+        self._select_and_edit(name)
+
+    def _select_and_edit(self, name: str) -> None:
+        rows = getattr(self, "_rows", [])
+        if name not in rows:
+            return
+        row = rows.index(name)
+        self.table.setCurrentCell(row, 1)
+        item = self.table.item(row, 1)
+        if item is not None:
+            self.table.editItem(item)
 
     def _delete_layer(self) -> None:
         row = self.table.currentRow()

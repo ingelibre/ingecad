@@ -40,6 +40,19 @@ it hurt.
   edited through them. The projection is now ezdxf's own matrix, verified
   on all thirty.
 
+- **The pointer flickered while panning.** The app changed the system
+  cursor exactly twice per drag (measured); what flickered was the
+  system cursor itself — a closed hand — over a GL surface repainting
+  sixty times a second, an artefact some driver/compositor pairs show
+  (NVIDIA under XWayland is the classic one). The pan hands and the
+  zoom-window cross are now painted into the frame, like the crosshair
+  always was; the canvas never hands the OS a cursor.
+- **A new layer looked non-plottable.** After New, the highlighted row was
+  whatever row index had been current before the list re-sorted — often
+  Defpoints, which does not plot, and whose crossed-out printer read as
+  the new layer's. The new layer is now the selected row with its name
+  open for typing, as AutoCAD's Layer Properties Manager does. (Every
+  new layer did plot; the file was never wrong.)
 - **The grid jumped when zooming.** The 1-2-5 ladder re-flowed the whole
   lattice at each step (going from 1 to 2 drops the major line at 15).
   The grid is now AutoCAD's nested adaptive grid: GRIDUNIT times a power
@@ -54,6 +67,16 @@ it hurt.
   AutoCAD's polar tracking does, and shows the path with its angle.
 
 ### Added
+- **Origin as an object snap.** No CAD has it and a tester insisted it is
+  elementary: tick *Origin* among the running object snaps and the (0, 0)
+  of the current space snaps like a node, with a marker of its own
+  (a circle with a +). Off by default; it lives in your settings, never in
+  a drawing's $OSMODE.
+- **`0` and Enter at the first point is the origin**, as in AutoCAD: a
+  direct distance or a relative `@` entered before a command has a point
+  of its own is measured from the last point entered (LASTPOINT), which a
+  new drawing starts at (0, 0). `5` puts the point five units from it
+  toward the cursor.
 - **Drafting Settings** (Tools ▸ Drafting Settings…, DSETTINGS / DS, and
   Settings… on the right-click of the status-bar toggles), AutoCAD's
   dialog with its Snap and Grid, Polar Tracking and Object Snap tabs:

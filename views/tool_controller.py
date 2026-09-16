@@ -393,6 +393,7 @@ class ToolController(QObject):
         self.snap_engine = SnapEngine(document)
         self._model_snap_engine = None
         self._through_vp = {}
+        self.lastpoint = (0.0, 0.0)
         self.index = GeometryIndex(document)
         self._ghost_cache = None
         self._ghost_wanted = None
@@ -1695,11 +1696,15 @@ class ToolController(QObject):
         return 0.0
 
     _recent_points: list = []
+    #: AutoCAD's LASTPOINT: the last point entered, in any command. A new
+    #: drawing starts it at the origin; it outlives the command it came from.
+    lastpoint: tuple = (0.0, 0.0)
 
     def _note_point(self, point) -> None:
         """A point a tool just took: the trail relative polar angles are
-        measured along. Cleared when the command ends."""
+        measured along (cleared when the command ends) and LASTPOINT."""
         self._recent_points = (self._recent_points + [tuple(point)])[-2:]
+        self.lastpoint = (float(point[0]), float(point[1]))
 
     def _tracked(self, wx: float, wy: float, anchor, ortho: bool):
         """Where the alignment paths put the cursor: on the nearest path
@@ -2380,12 +2385,26 @@ class ToolController(QObject):
             return True
         direction = None
         anchor = self.tool.last_point
-        if anchor is not None and self._cursor is not None:
+        first_point = anchor is None
+        if first_point:
+            # AutoCAD's LASTPOINT: before a command has a point of its own,
+            # a direct distance and a relative @ are measured from the last
+            # point entered -- (0, 0) in a fresh drawing. That is why "0"
+            # and Enter at "Specify first point:" means the origin (a
+            # tester: "en AutoCAD escribir 0 + Intro ya significa 0,0"),
+            # and "5" five units from it toward the cursor.
+            anchor = self.lastpoint
+        if self._cursor is not None:
             constrained = self.resolved_point(*self._cursor)
             direction = math.atan2(constrained[1] - anchor[1],
                                    constrained[0] - anchor[0])
+        else:
+            direction = 0.0     # no pointer yet: along +X, as AutoCAD
         try:
-            point = parse_point(stripped, anchor, direction, relative_default=self.dyn_on)
+            # dynamic input's relative default is for the SECOND point on:
+            # the first is absolute (DYNPICOORDS), LASTPOINT or not
+            point = parse_point(stripped, anchor, direction,
+                                relative_default=self.dyn_on and not first_point)
         except CoordinateError as exc:
             self.window.command_line.echo(tr("Invalid point: {error}",
                                              error=str(exc)))

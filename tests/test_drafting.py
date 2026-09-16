@@ -365,3 +365,164 @@ def test_the_typed_variables(qapp):
         drafting.set_polar_additional([])
     finally:
         win.close()
+
+
+# -- tanda D: the origin snap and LASTPOINT ---------------------------------------
+
+def test_the_origin_is_a_snap_when_ticked_and_not_otherwise(qapp):
+    """No CAD has it; a tester insisted it is elementary. The (0, 0) of the
+    current space snaps like a node when Origin is ticked -- and is not on
+    offer at all when it is not, so nobody's plan gains a phantom point."""
+    from core import osnap as osnap_modes
+    from core.snap import ALL_KINDS
+
+    assert "ORI" in osnap_modes.AVAILABLE and "ORI" not in ALL_KINDS
+    win, t = _line_started(qapp)
+    try:
+        t.osnap_on = True
+        t.osnap_modes = {"END", "MID"}
+        t.on_hover(0.3, -0.2, threshold_world=1.0)
+        assert t.snap_hit is None or t.snap_hit.kind != "ORI"
+        t.osnap_modes = {"END", "MID", "ORI"}
+        t.on_hover(0.3, -0.2, threshold_world=1.0)
+        assert t.snap_hit is not None and t.snap_hit.kind == "ORI"
+        assert (t.snap_hit.x, t.snap_hit.y) == (0.0, 0.0)
+        assert t.resolved_point(0.3, -0.2) == (0.0, 0.0)
+        # it is a mode of the dialog and the dropdown like any other, with
+        # a marker of its own
+        from views.osnap_dialog import marker_icon
+        assert not marker_icon("ORI").isNull()
+        assert osnap_modes.label_of("ORI") == "Origin"
+    finally:
+        win.close()
+
+
+def test_zero_and_enter_at_the_first_point_is_the_origin(qapp):
+    """AutoCAD's LASTPOINT: a direct distance before the command has a
+    point of its own is measured from the last point entered -- the
+    origin in a fresh drawing. So "0" at "Specify first point:" IS (0, 0),
+    and "5" is five units from it toward the cursor."""
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    win.new_document()
+    _wait_regen(qapp, win)
+    t = win.tools
+    t.osnap_on = False
+    t.ortho_on = False
+    try:
+        t.start_tool("LINE")
+        t.on_hover(30.0, 40.0, threshold_world=0.5)
+        assert t.on_text("0")
+        assert t.tool.last_point == (0.0, 0.0)
+        assert t.on_text("10,0")
+        assert t.tool.last_point == (10.0, 0.0)
+        t.cancel()
+        # LASTPOINT outlives the command: the next LINE's "@" and direct
+        # distance start from (10, 0)
+        assert t.lastpoint == (10.0, 0.0)
+        t.start_tool("LINE")
+        t.on_hover(10.0, 100.0, threshold_world=0.5)       # straight up
+        assert t.on_text("5")
+        assert t.tool.last_point == pytest.approx((10.0, 5.0))
+        t.cancel()
+        t.start_tool("LINE")
+        assert t.on_text("@3,4")
+        assert t.tool.last_point == pytest.approx((13.0, 9.0))
+        t.cancel()
+        # a fresh drawing starts LASTPOINT over
+        win.new_document()
+        _wait_regen(qapp, win)
+        assert win.tools.lastpoint == (0.0, 0.0)
+    finally:
+        win.close()
+
+
+def test_a_new_layer_is_the_selected_row_and_plots(qapp):
+    """The row highlighted after New was whatever index was current before
+    the re-sort -- another layer, Defpoints typically, which does not plot.
+    A tester read that crossed-out printer as his new layer's. The new layer
+    is now the current row, its name open for typing, and it plots."""
+    from core import layers as layer_ops
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    win.new_document()
+    _wait_regen(qapp, win)
+    try:
+        if win._layers_panel is None:
+            win.toggle_layers_panel()
+        panel = win._layers_panel
+        panel.refresh()
+        defpoints = panel._rows.index("Defpoints")
+        panel.table.setCurrentCell(defpoints, 8)      # the plot column, even
+        panel._new_layer()
+        qapp.processEvents()
+        row = panel.table.currentRow()
+        name = panel._row_layer(row)
+        assert name.startswith("Layer"), f"the current row is {name!r}"
+        assert panel.table.item(row, 8).text() == "🖶"
+        info = next(i for i in layer_ops.layer_list(win.document) if i.name == name)
+        assert info.plot
+        assert win.document.doc.layers.get(name).dxf.get("plot", 1) == 1
+    finally:
+        win.close()
+
+
+def test_the_canvas_never_hands_the_os_a_cursor_while_panning(qapp):
+    """A tester: "el puntero parpadea al panear". The app changed the OS
+    cursor exactly twice per drag (closed hand on press, blank on release)
+    -- measured -- so the flicker is the system cursor itself over a GL
+    surface flipping sixty times a second, a known artefact of some
+    driver/compositor pairs (NVIDIA under XWayland). The hands and the
+    zoom cross are now painted into the frame like the crosshair; the OS
+    pointer over the canvas stays blank at all times."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    win.new_document()
+    _wait_regen(qapp, win)
+    vp = win.viewport
+    shapes = []
+    original = vp.setCursor
+    vp.setCursor = lambda c: (shapes.append(c.shape()), original(c))
+    try:
+        def send(kind, x, y, button=Qt.NoButton, buttons=Qt.NoButton):
+            qapp.sendEvent(vp, QMouseEvent(kind, QPointF(x, y), button,
+                                           buttons, Qt.NoModifier))
+
+        send(QEvent.MouseMove, 200, 200)
+        send(QEvent.MouseButtonPress, 200, 200, Qt.MiddleButton, Qt.MiddleButton)
+        assert vp._soft_cursor == "closed_hand"
+        assert vp._soft_cursor_pos() is not None
+        for i in range(1, 30):
+            send(QEvent.MouseMove, 200 + 3 * i, 200 + i, buttons=Qt.MiddleButton)
+        assert vp._soft_cursor == "closed_hand"
+        send(QEvent.MouseButtonRelease, 290, 230, Qt.MiddleButton)
+        assert vp._soft_cursor is None, "the crosshair is back"
+        assert shapes == [], f"the OS cursor was changed: {shapes}"
+        assert vp.cursor().shape() == Qt.BlankCursor
+
+        # the PAN command: open hand, closed while dragging, open again
+        vp.start_pan_mode()
+        assert vp._soft_cursor == "open_hand"
+        send(QEvent.MouseButtonPress, 150, 150, Qt.LeftButton, Qt.LeftButton)
+        assert vp._soft_cursor == "closed_hand"
+        send(QEvent.MouseButtonRelease, 160, 160, Qt.LeftButton)
+        assert vp._soft_cursor == "open_hand"
+        vp.stop_pan_mode()
+        assert vp._soft_cursor is None
+        # ZOOM Window's cross too
+        vp.start_zoom_window()
+        assert vp._soft_cursor == "cross"
+        vp._zoom_window = False
+        vp._set_soft_cursor(None)
+        assert shapes == []
+    finally:
+        win.document.dirty = False
+        win.close()
