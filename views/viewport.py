@@ -1173,16 +1173,36 @@ class Viewport(QOpenGLWidget):
     GRID_MINOR_LIGHT = (214, 214, 214, 255)
     GRID_MAJOR_LIGHT = (189, 189, 189, 255)
 
+    #: GRIDUNIT / GRIDMAJOR of the drawing on screen and the grid behaviour
+    #: bits, pushed by the window (set_grid_settings) -- the canvas does
+    #: not read the document. The level is the adaptive grid's state.
+    _grid_unit = 10.0
+    _grid_major = 5
+    _grid_adaptive = True
+    _grid_subdivide = True
+    _grid_level = None
+
+    def set_grid_settings(self, unit: float, major: int,
+                          adaptive: bool = True, subdivide: bool = True) -> None:
+        self._grid_unit = float(unit) if unit and unit > 0 else 10.0
+        self._grid_major = max(2, int(major))
+        self._grid_adaptive = bool(adaptive)
+        self._grid_subdivide = bool(subdivide)
+        self._grid_level = None
+        self.update()
+
     def _grid_spacing(self) -> float:
-        """Adaptive 1-2-5 spacing that keeps cells ~25-90 px on screen."""
-        import math
-        raw = 35.0 / max(self.view.scale, 1e-12)
-        exp = math.floor(math.log10(raw)) if raw > 0 else 0
-        for m in (1.0, 2.0, 5.0, 10.0):
-            s = m * 10.0 ** exp
-            if s * self.view.scale >= 25.0:
-                return s
-        return 10.0 ** (exp + 1)
+        """The spacing of the grid on screen: GRIDUNIT times a power of
+        GRIDMAJOR (AutoCAD's nested adaptive grid), so zooming adds or
+        drops lines without moving any -- the 1-2-5 ladder before re-flowed
+        the lattice at every step. 0 when the grid is too dense to draw."""
+        from core import drafting
+
+        spacing, level = drafting.grid_level(
+            self._grid_unit, self._grid_major, self.view.scale,
+            self._grid_adaptive, self._grid_subdivide, self._grid_level)
+        self._grid_level = level
+        return spacing or 0.0
 
     def _draw_grid(self, gl) -> None:
         """Reference grid under the drawing (GRID / F7), BricsCAD-style lines.
@@ -1193,10 +1213,12 @@ class Viewport(QOpenGLWidget):
         """
         x0, y0, x1, y1 = self._view_world_rect()
         s = self._grid_spacing()
+        if not s:
+            return                  # too dense to display, and may not adapt
         i0, i1 = int(np.floor(x0 / s)), int(np.ceil(x1 / s))
         j0, j1 = int(np.floor(y0 / s)), int(np.ceil(y1 / s))
         light = self._light_background()
-        key = (s, i0, i1, j0, j1, light)
+        key = (s, i0, i1, j0, j1, light, self._grid_major)
         if self._grid_buf is None or self._grid_buf[3] != key:
             if self._grid_buf is not None:
                 self._grid_buf[0].destroy()
@@ -1210,12 +1232,13 @@ class Viewport(QOpenGLWidget):
             major = self.GRID_MAJOR_LIGHT if light else self.GRID_MAJOR
             minor = self.GRID_MINOR_LIGHT if light else self.GRID_MINOR
             verts = []
+            every = self._grid_major
             for i in range(i0, i1 + 1):
-                color = major if i % 5 == 0 else minor
+                color = major if i % every == 0 else minor
                 verts.append((i * s - ox, gy0, color))
                 verts.append((i * s - ox, gy1, color))
             for j in range(j0, j1 + 1):
-                color = major if j % 5 == 0 else minor
+                color = major if j % every == 0 else minor
                 verts.append((gx0, j * s - oy, color))
                 verts.append((gx1, j * s - oy, color))
             data = np.zeros(len(verts), dtype=VERTEX_DTYPE)
@@ -1565,12 +1588,11 @@ class Viewport(QOpenGLWidget):
         """OTRACK: a small + on every acquired point and, while the cursor
         rides an alignment path, the dashed path from its point through the
         cursor and a little past it, with AutoCAD's tooltip."""
-        if not getattr(delegate, "otrack_on", False):
-            return
-        points = delegate.track_points()
         hint = getattr(delegate, "track_hint", None)
+        points = delegate.track_points() \
+            if getattr(delegate, "otrack_on", False) else []
         if not points and hint is None:
-            return
+            return       # a polar lock shows its path with OTRACK off too
         p.save()
         p.setPen(QPen(self.TRACK_COLOR, 1))
         for x, y, _kind in points:

@@ -637,6 +637,71 @@ class MainWindow(QMainWindow):
         self.viewport.refresh_cursor_prefs()
         self.command_line.echo(tr("{name} = {value}", name=name, value=value))
 
+    def _cmd_drafting_var(self, name: str, *args) -> Prompt | None:
+        """The Drafting Settings variables, typed: POLARANG (degrees),
+        POLARADDANG (angles separated by ;), POLARMODE (bits), GRIDUNIT,
+        SNAPUNIT (0 = follow the grid on screen) and GRIDMAJOR."""
+        from core import drafting
+
+        drawing = self.document.doc if self.document is not None else None
+        current = {
+            "POLARANG": drafting.polar_increment(),
+            "POLARADDANG": ";".join(f"{a:g}" for a in drafting.polar_additional()),
+            "POLARMODE": drafting.polar_mode(),
+            "GRIDUNIT": drafting.grid_unit(drawing) if drawing is not None else 0,
+            "SNAPUNIT": drafting.snap_unit(drawing) if drawing is not None else 0,
+            "GRIDMAJOR": drafting.grid_major(drawing) if drawing is not None else 5,
+        }[name]
+        text = str(args[0]).strip() if args and str(args[0]).strip() else ""
+        if not text:
+            return Prompt(
+                tr("Enter new value for {name} <{value}>:",
+                   name=name, value=current),
+                lambda value: self._cmd_drafting_var(name, value))
+        if name == "POLARADDANG":
+            drafting.set_polar_additional(drafting.parse_angles(text))
+            value = ";".join(f"{a:g}" for a in drafting.polar_additional())
+        elif name == "POLARMODE":
+            try:
+                value = int(text)
+            except ValueError:
+                self.command_line.echo(tr("Requires an integer value."))
+                return
+            drafting.set_polar_mode(value)
+        elif name == "GRIDMAJOR":
+            try:
+                value = int(text)
+            except ValueError:
+                self.command_line.echo(tr("Requires an integer value."))
+                return
+            if not 2 <= value <= 100:
+                self.command_line.echo(
+                    tr("Value must be between {min} and {max}.", min=2, max=100))
+                return
+            if self.document is not None:
+                self.history.execute(drafting.SetGridCommand(major=value))
+        else:
+            try:
+                value = float(text.replace(",", "."))
+            except ValueError:
+                self.command_line.echo(tr("Requires a numeric value."))
+                return
+            if name == "POLARANG":
+                if not 0.0 < value <= 90.0:
+                    self.command_line.echo(
+                        tr("Value must be between {min} and {max}.",
+                           min=0, max=90))
+                    return
+                drafting.set_polar_increment(value)
+            elif value < 0.0 or (name == "GRIDUNIT" and value <= 0.0):
+                self.command_line.echo(tr("Value must be positive."))
+                return
+            elif self.document is not None:
+                self.history.execute(drafting.SetGridCommand(
+                    **{"grid" if name == "GRIDUNIT" else "snap": value}))
+        self.refresh_grid_settings()
+        self.command_line.echo(tr("{name} = {value}", name=name, value=value))
+
     def _cmd_center_var(self, name: str, *args) -> None:
         """The CENTERMARK / CENTERLINE variables (AutoCAD 2017+): bare name
         shows the value, a value sets it. CENTEREXE is a length in drawing
@@ -1149,8 +1214,10 @@ class MainWindow(QMainWindow):
             lang_group.addAction(act)
             lang_menu.addAction(act)
         tools_menu.addSeparator()
-        # Where the classic pre-ribbon AutoCAD kept it, and the last entry
-        # of the menu as it has always been.
+        # Where the classic pre-ribbon AutoCAD kept them, and Options the
+        # last entry of the menu as it has always been.
+        item(tools_menu, tr("Drafting Settings..."),
+             lambda: self._drafting_settings(0))
         item(tools_menu, tr("Options..."), self._cmd_options)
 
         # -- Window / Help ----------------------------------------------------
@@ -1490,6 +1557,9 @@ class MainWindow(QMainWindow):
             b.setToolTip(tr(tip) + (f" ({fkey})" if fkey else ""))
             b.setFocusPolicy(Qt.NoFocus)   # clicks must not steal the canvas
             b.clicked.connect(lambda _=False, k=key: self._toggle_mode(k))
+            b.setContextMenuPolicy(Qt.CustomContextMenu)
+            b.customContextMenuRequested.connect(
+                lambda pos, k=key: self._mode_context_menu(k, pos))
             self._mode_buttons[key] = b
             self.statusBar().addPermanentWidget(b)
             if key == "osnap":
@@ -1740,16 +1810,85 @@ class MainWindow(QMainWindow):
                state=tr("on") if on else tr("off")))
 
     def _osnap_settings(self) -> None:
-        from views.osnap_dialog import OsnapSettingsDialog
+        from views.drafting_dialog import TAB_OSNAP
 
-        dialog = OsnapSettingsDialog(self, self.tools.osnap_modes,
-                                     self.tools.osnap_on)
+        self._drafting_settings(TAB_OSNAP)
+
+    def refresh_grid_settings(self) -> None:
+        """GRIDUNIT / GRIDMAJOR of the drawing on screen, and the grid
+        behaviour, into the canvas -- at open, and after DSETTINGS."""
+        from core import drafting
+
+        drawing = self.document.doc if self.document is not None else None
+        if drawing is None:
+            self.viewport.set_grid_settings(10.0, 5, drafting.grid_adaptive(),
+                                            drafting.grid_subdivide())
+            return
+        self.viewport.set_grid_settings(
+            drafting.grid_unit(drawing), drafting.grid_major(drawing),
+            drafting.grid_adaptive(), drafting.grid_subdivide())
+
+    def _drafting_settings(self, tab: int = 0) -> None:
+        """DSETTINGS: Snap and Grid / Polar Tracking / Object Snap."""
+        from core import drafting
+        from views.drafting_dialog import DraftingSettingsDialog
+
+        dialog = DraftingSettingsDialog(
+            self, self.document, osnap_modes=self.tools.osnap_modes,
+            osnap_on=self.tools.osnap_on, polar_on=self.tools.polar_on,
+            snap_on=self.tools.snap_on, grid_on=self.viewport.grid_on, tab=tab)
         if not dialog.exec():
             return
+        # object snap
         self.tools.osnap_modes = set(dialog.modes())
         self.tools.osnap_on = dialog.osnap_on()
         self._save_osnap_modes()
+        # polar tracking
+        polar = dialog.polar
+        drafting.set_polar_increment(polar.increment_value())
+        drafting.set_polar_additional(polar.additional_values())
+        drafting.set_polar_mode(polar.mode_value())
+        self.tools.polar_on = polar.polar_on.isChecked()
+        # snap and grid
+        values = dialog.snap_grid.values()
+        self.tools.snap_on = values["snap_on"]
+        self.viewport.grid_on = values["grid_on"]
+        drafting.set_grid_behaviour(values["adaptive"], values["subdivide"])
+        if self.document is not None:
+            drawing = self.document.doc
+            changed = {}
+            if abs(values["grid"] - drafting.grid_unit(drawing)) > 1e-12:
+                changed["grid"] = values["grid"]
+            if abs(values["snap"] - drafting.snap_unit(drawing)) > 1e-12:
+                changed["snap"] = values["snap"]
+            if values["major"] != drafting.grid_major(drawing):
+                changed["major"] = values["major"]
+            if changed:
+                self.history.execute(drafting.SetGridCommand(**changed))
+        self.refresh_grid_settings()
         self._update_mode_buttons()
+        self.viewport.update()
+
+    @staticmethod
+    def _mode_settings_tab(key: str):
+        """The Drafting Settings tab a status-bar toggle's Settings...
+        opens (AutoCAD: Snap, Grid, Polar, Osnap and Otrack offer it), or
+        None for a toggle with no page."""
+        from views.drafting_dialog import TAB_OSNAP, TAB_POLAR, TAB_SNAP_GRID
+
+        return {"snap": TAB_SNAP_GRID, "grid": TAB_SNAP_GRID,
+                "polar": TAB_POLAR, "otrack": TAB_POLAR,
+                "osnap": TAB_OSNAP}.get(key)
+
+    def _mode_context_menu(self, key: str, pos) -> None:
+        """Right-click on a status-bar toggle: Settings..., on its tab."""
+        tab = self._mode_settings_tab(key)
+        if tab is None:
+            return
+        button = self._mode_buttons[key]
+        menu = QMenu(self)
+        menu.addAction(tr("Settings..."), lambda: self._drafting_settings(tab))
+        menu.exec(button.mapToGlobal(pos))
 
     def _update_mode_buttons(self) -> None:
         for key, b in self._mode_buttons.items():
@@ -1836,6 +1975,7 @@ class MainWindow(QMainWindow):
         self._refresh_layout_tabs()
         self.viewport.set_scene(None)
         self.tools.attach_document(self.document)
+        self.refresh_grid_settings()
         self.plugins.document_opened(self.document)
         if self._layers_panel is not None:
             self._layers_panel.refresh()
@@ -2578,6 +2718,11 @@ class MainWindow(QMainWindow):
         d.register("VIEWRES", self._cmd_viewres)
         d.register("CURSORSIZE", self._cmd_cursorsize)
         d.register("PICKBOX", self._cmd_pickbox)
+        d.register("DSETTINGS", lambda *a: self._drafting_settings(0))
+        d.register("OSNAP", lambda *a: self._osnap_settings())
+        for var in ("POLARANG", "POLARADDANG", "POLARMODE",
+                    "GRIDUNIT", "SNAPUNIT", "GRIDMAJOR"):
+            d.register(var, lambda *a, v=var: self._cmd_drafting_var(v, *a))
         for var in ("CENTEREXE", "CENTERLTYPE", "CENTERCROSSSIZE",
                     "CENTERCROSSGAP", "CENTERLAYER", "CENTERMARKEXE"):
             d.register(var, lambda *a, v=var: self._cmd_center_var(v, *a))
@@ -4232,6 +4377,7 @@ class MainWindow(QMainWindow):
         self._layout_scenes[self._active_layout] = (document.revision, scene)
         self.viewport.zoom_extents()
         self.tools.attach_document(document, flatten=scene.flatten)
+        self.refresh_grid_settings()
         self.plugins.document_opened(document)
         if self._layers_panel is not None:
             self._layers_panel.refresh()   # show the opened drawing's layers

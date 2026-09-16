@@ -40,7 +40,30 @@ it hurt.
   edited through them. The projection is now ezdxf's own matrix, verified
   on all thirty.
 
+- **The grid jumped when zooming.** The 1-2-5 ladder re-flowed the whole
+  lattice at each step (going from 1 to 2 drops the major line at 15).
+  The grid is now AutoCAD's nested adaptive grid: GRIDUNIT times a power
+  of GRIDMAJOR, so zooming adds or drops lines and never moves one, with
+  a band around each threshold so a wheel notch at the boundary does not
+  flip it back and forth. GRIDUNIT, SNAPUNIT and GRIDMAJOR are read from
+  and saved into the drawing (its *Active VPORT), as AutoCAD does — a
+  colleague's plan brings its own grid.
+- **Polar tracking rounded every point.** With POLAR on the cursor was
+  forced to the nearest 45°, so a 30° line could not be drawn; the 45°
+  could not be changed. It now locks only near an alignment path, as
+  AutoCAD's polar tracking does, and shows the path with its angle.
+
 ### Added
+- **Drafting Settings** (Tools ▸ Drafting Settings…, DSETTINGS / DS, and
+  Settings… on the right-click of the status-bar toggles), AutoCAD's
+  dialog with its Snap and Grid, Polar Tracking and Object Snap tabs:
+  the increment angle (90, 45, 30, 22.5, 18, 15, 10, 5 or typed), the
+  additional angles, absolute or relative-to-last-segment measurement,
+  object snap tracking along all polar angles, the grid and snap
+  spacings, the major-line frequency and the adaptive/subdivision
+  behaviour. Typed as POLARANG, POLARADDANG, POLARMODE, GRIDUNIT,
+  SNAPUNIT and GRIDMAJOR too. The snap spacing follows the grid on
+  screen unless the drawing fixes one.
 - **Object snap from the sheet through its viewports**, and dimensions
   that read the model: on a layout the cursor over a viewport now snaps
   to the model geometry it shows (endpoints, midpoints, centres…), and a

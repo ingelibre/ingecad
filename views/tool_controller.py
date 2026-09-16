@@ -983,6 +983,7 @@ class ToolController(QObject):
         self.tool = None
         self.snap_hit = None
         self.current_prompt = ""
+        self._recent_points = []
         self.clear_tracking()
         self._selecting_for = None
         self._window_anchor = None
@@ -1658,10 +1659,47 @@ class ToolController(QObject):
         self.track_hint = None
 
     def _track_angles(self) -> list:
-        angles = [0.0, math.pi / 2]
-        if self.polar_on:
-            angles += [math.pi / 4, 3 * math.pi / 4]
-        return angles
+        """The alignment directions (radians) tracking paths run along:
+        orthogonal only, or -- POLARMODE's "track using all polar angle
+        settings", with POLAR on -- the polar increment and its additional
+        angles (Drafting Settings, Polar Tracking tab)."""
+        from core import drafting
+
+        if self.polar_on and drafting.polar_mode() & drafting.POLAR_OTRACK_ALL:
+            return [math.radians(a) for a in self._polar_angles()]
+        return [0.0, math.pi / 2]
+
+    def _polar_angles(self) -> list:
+        """POLARANG's multiples plus POLARADDANG when in use, degrees."""
+        from core import drafting
+
+        mode = drafting.polar_mode()
+        return drafting.polar_angles(
+            drafting.polar_increment(), drafting.polar_additional(),
+            bool(mode & drafting.POLAR_ADDITIONAL))
+
+    def _polar_base(self) -> float:
+        """Where polar angles are measured from: 0 (absolute, the UCS) or
+        the direction of the last segment drawn (POLARMODE bit 1) -- the
+        tool's last point and the one before it, as this controller saw
+        them go by."""
+        from core import drafting
+
+        if not (drafting.polar_mode() & drafting.POLAR_RELATIVE):
+            return 0.0
+        points = self._recent_points
+        if len(points) >= 2:
+            (x0, y0), (x1, y1) = points[-2], points[-1]
+            if abs(x1 - x0) > 1e-12 or abs(y1 - y0) > 1e-12:
+                return math.degrees(math.atan2(y1 - y0, x1 - x0))
+        return 0.0
+
+    _recent_points: list = []
+
+    def _note_point(self, point) -> None:
+        """A point a tool just took: the trail relative polar angles are
+        measured along. Cleared when the command ends."""
+        self._recent_points = (self._recent_points + [tuple(point)])[-2:]
 
     def _tracked(self, wx: float, wy: float, anchor, ortho: bool):
         """Where the alignment paths put the cursor: on the nearest path
@@ -1838,7 +1876,9 @@ class ToolController(QObject):
                 self._window_anchor = (wx, wy)
                 self.changed.emit()
                 return
-        self.tool.on_point(self.resolved_point(wx, wy))
+        point = self.resolved_point(wx, wy)
+        self._note_point(point)
+        self.tool.on_point(point)
         self.clear_tracking()          # AutoCAD releases the acquired points with the point
         self.changed.emit()
 
@@ -2215,8 +2255,19 @@ class ToolController(QObject):
         self.changed.emit()
 
     def snap_spacing(self):
-        """The grid the cursor jumps by in SNAP mode: the one on screen
+        """The grid the cursor jumps by in SNAP mode: SNAPUNIT when the
+        drawing sets one (AutoCAD's fixed spacing), else the grid on screen
         (adaptive, like BricsCAD's), so what you see is what you get."""
+        from core import drafting
+
+        document = getattr(self.window, "document", None)
+        if document is not None:
+            try:
+                fixed = drafting.snap_unit(document.doc)
+            except Exception:
+                fixed = 0.0
+            if fixed > 0:
+                return fixed
         viewport = getattr(self.window, "viewport", None)
         spacing = getattr(viewport, "_grid_spacing", None)
         try:
@@ -2246,18 +2297,28 @@ class ToolController(QObject):
                 point, source, label = tracked
                 self.track_hint = ((source[0], source[1]), point, label)
                 return point
-        if anchor is not None and (ortho or self.polar_on):
+        if anchor is not None and ortho:
             dx, dy = wx - anchor[0], wy - anchor[1]
-            if self.polar_on and not ortho:
-                ang = math.atan2(dy, dx)
-                step = math.radians(45.0)
-                ang = round(ang / step) * step
-                d = math.hypot(dx, dy)
-                return (anchor[0] + d * math.cos(ang),
-                        anchor[1] + d * math.sin(ang))
             if abs(dx) >= abs(dy):
                 return (wx, anchor[1])
             return (anchor[0], wy)
+        if anchor is not None and self.polar_on:
+            # Polar tracking, as AutoCAD's: the cursor is caught by an
+            # alignment path only when it comes within the aperture of one,
+            # and is free everywhere else. Rounding every point to the
+            # nearest polar angle -- what this did before -- made a 30°
+            # line impossible with POLAR on, and the increment was a 45°
+            # nobody could change (a tester wanted 5°).
+            from core import drafting
+
+            tol = self._track_tolerance or self.px_to_space(SNAP_PX)
+            locked = drafting.polar_lock(anchor, (wx, wy), self._polar_angles(),
+                                         tol, self._polar_base())
+            if locked is not None:
+                point, direction = locked
+                self.track_hint = ((anchor[0], anchor[1]), point,
+                                   f"{_track_label('polar')}: <{direction:g}°")
+                return point
         return (wx, wy)
 
     # -- dynamic input (DYN) -----------------------------------------------------
@@ -2332,6 +2393,7 @@ class ToolController(QObject):
         if point is None:
             self.window.command_line.echo(tr("Invalid input."))
             return True
+        self._note_point((point.x, point.y))
         self.tool.on_point((point.x, point.y))
         self.changed.emit()
         return True
