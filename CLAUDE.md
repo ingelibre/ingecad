@@ -485,6 +485,52 @@ prompt y las cotas junto al cursor). Son funciones, no teclas: cuando
 existan, la tecla se agrega a `_MODES` / `_build_acad_shortcuts` y al test
 de teclado. Van después del dogfooding de Terreno y antes de publicar.
 
+## 🗓 Sesión 2026-09-16 (quater) — tanda D: origen, LASTPOINT, cursor pintado, la fila de la capa nueva
+
+**Marco: «hagamos la tanda D» (7fbeb97).** Los tres puntos que quedaban
+del reporte de Rafael, con esto cierran los diez:
+
+- **#10 Origen y `0 ↵`.** *Origen* como referencia a objetos (`core.osnap`
+  ORI, bit 65536 sólo en QSettings —el `$OSMODE` de un dibujo nunca lo ve—,
+  apagado por defecto; `ALL_KINDS` del motor lo excluye a propósito: es un
+  punto sin dueño, se ofrece sólo si se marca). Y **LASTPOINT** en el
+  controlador: una distancia directa o un `@` antes de que el comando tenga
+  punto propio se mide desde el último punto introducido (ref. p. 2134),
+  que un dibujo nuevo empieza en el origen → `0 ↵` = (0,0), `5 ↵` = a 5 del
+  último punto hacia el cursor. Antes las dos daban «Invalid point». El
+  default relativo de DIN sigue siendo para el segundo punto en adelante.
+- **#2 El puntero parpadea al panear.** Medido con un arrastre real de 60
+  movimientos: la app cambia el cursor del sistema **exactamente dos
+  veces** (mano cerrada al apretar, blanco al soltar). Lo que parpadea es
+  el cursor del sistema sobre una superficie GL que redibuja a 60 Hz —
+  NVIDIA bajo XWayland, el caso clásico, y la 0.6.1 acaba de mandar a
+  XWayland justamente la máquina con NVIDIA—. Las dos manos y la cruz de
+  ZOOM Ventana se **pintan en el cuadro** (`_soft_cursor`,
+  `_draw_soft_cursor`), como la mira desde siempre; queda un solo
+  `setCursor` en el lienzo, el Blank del constructor. ⚠️ No se puede ver
+  el parpadeo desde acá: la prueba es que no queda cursor del sistema que
+  pueda parpadear. Rafael tiene que confirmarlo.
+- **#3 Capas «no imprimibles».** No reproducible por ningún camino (panel
+  con nada / Defpoints / 0 seleccionado, dibujo nuevo y DWG real de
+  LibreDWG, `-LAYER N`, `NewLayerCommand`): toda capa nueva nace con
+  plot=1. Lo que sí: tras «Nueva» **la fila resaltada era el índice de
+  antes del reordenamiento** —Defpoints en un dibujo nuevo, que no imprime
+  y muestra 🚫— y leerla como «mi capa nueva» ES el reporte. Ahora la capa
+  nueva queda seleccionada con el nombre en edición (AutoCAD hace lo
+  mismo).
+
+⚠️ **Método:** el #2 y el #3 no se reprodujeron como bugs y se arreglaron
+igual, midiendo lo que la app hace de verdad (dos `setCursor` por
+arrastre; qué fila queda resaltada) en vez de discutir el reporte. Y
+dos trampas de arnés: el `open_path` sobre un documento sucio abre un
+QMessageBox modal que cuelga el script en offscreen (`maybe_save_changes
+= lambda: True`), y `os._exit` sin `print(..., flush=True)` se traga las
+líneas. Suite: 1330 passed, 1 skipped (en cuatro procesos).
+
+**Los diez puntos de Rafael están resueltos y commiteados; nada
+publicado.** La 0.6.2 va con el OK de Marco, idealmente tras una segunda
+pasada de Rafael con sus archivos (#2 y #3 sólo los puede confirmar él).
+
 ## 🗓 Sesión 2026-09-16 (ter) — tanda C: Parámetros de dibujo (polar y rejilla)
 
 **Marco: «sigue la tanda c» (ac36d79).** Dos puntos de Rafael, y debajo
