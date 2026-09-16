@@ -64,13 +64,19 @@ class SnapHit:
     x: float
     y: float
     kind: str
+    #: The VIEWPORT (handle) this hit was reached through, when a paper-space
+    #: cursor snapped to model geometry a viewport shows; None otherwise.
+    via: Optional[str] = None
 
 
 class SnapEngine:
-    """Snappable-geometry cache over a Document's modelspace."""
+    """Snappable-geometry cache over a Document's current space -- or over
+    ``space`` when one is given (the true modelspace, for snapping from a
+    sheet to what its viewports show)."""
 
-    def __init__(self, document) -> None:
+    def __init__(self, document, space=None) -> None:
         self.document = document
+        self._space = space
         self._dirty = True
         self._owners: list[str] = []
         self._owner_ids: dict[str, int] = {}
@@ -330,7 +336,9 @@ class SnapEngine:
         curve_o: list = []
         targets: list = []
         target_o: list = []
-        for e in self.document.modelspace():
+        space = self._space if self._space is not None \
+            else self.document.modelspace()
+        for e in space:
             try:
                 oid = self._intern(e.dxf.handle)
             except Exception:

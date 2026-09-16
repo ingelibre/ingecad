@@ -516,20 +516,71 @@ def viewport_rect(vp) -> tuple[float, float, float, float]:
 #     model = R(-twist) * (paper - centre) / scale + view_centre
 
 
+def _twist_radians(vp) -> float:
+    return math.radians(float(vp.dxf.get("view_twist_angle", 0.0) or 0.0))
+
+
+def _target_xy(vp) -> tuple[float, float]:
+    try:
+        target = vp.dxf.get("view_target_point", None)
+        if target is None:
+            return (0.0, 0.0)
+        return (float(target.x), float(target.y))
+    except Exception:
+        return (0.0, 0.0)
+
+
+def view_centre_wcs(vp) -> tuple[float, float]:
+    """The MODEL point a viewport shows at its centre, in WCS.
+
+    The DXF does not store it as such. Group 12/22 (view_center_point) is
+    the centre in the *display* coordinate system -- the model frame turned
+    by the view twist -- and relative to the view target (17/27), which is
+    a WCS point. Read as a WCS point it is only right for a viewport with
+    no twist and a zero target; a colleague's plan had eight of thirty
+    viewports with a UTM target of (529 876, 8 573 039) and a view centre of
+    (-528 160, -8 572 730), which read raw put the "model under the window"
+    half a million units off -- picking, snapping and editing through them
+    reached nothing. This is ezdxf's own transformation matrix, inverted:
+    ``target + R(-twist) * view_center``.
+    """
+    vcx, vcy = float(vp.dxf.view_center_point.x), float(vp.dxf.view_center_point.y)
+    tx, ty = _target_xy(vp)
+    twist = _twist_radians(vp)
+    if twist:
+        cos_a, sin_a = math.cos(-twist), math.sin(-twist)
+        vcx, vcy = vcx * cos_a - vcy * sin_a, vcx * sin_a + vcy * cos_a
+    return (tx + vcx, ty + vcy)
+
+
+def dcs_view_center(vp, wcs_point) -> tuple[float, float]:
+    """The group 12/22 value that puts ``wcs_point`` at the viewport's
+    centre: the inverse of :func:`view_centre_wcs`, for the writers that
+    compute a centre from model geometry (fit, ZOOM Window)."""
+    tx, ty = _target_xy(vp)
+    dx, dy = float(wcs_point[0]) - tx, float(wcs_point[1]) - ty
+    twist = _twist_radians(vp)
+    if twist:
+        cos_a, sin_a = math.cos(twist), math.sin(twist)
+        dx, dy = dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a
+    return (dx, dy)
+
+
 def viewport_view(vp) -> Optional[tuple]:
     """(centre, view_centre, scale, twist_radians) of a viewport, or None.
 
-    None means "this viewport cannot state a projection" -- a missing or
-    degenerate view, a non-finite number -- and every caller then refuses
-    rather than inventing coordinates.
+    ``view_centre`` is the WCS model point under the viewport's centre (see
+    :func:`view_centre_wcs`), not the raw DXF value. None means "this
+    viewport cannot state a projection" -- a missing or degenerate view, a
+    non-finite number -- and every caller then refuses rather than
+    inventing coordinates.
     """
     try:
         centre = (float(vp.dxf.center.x), float(vp.dxf.center.y))
-        view_centre = (float(vp.dxf.view_center_point.x),
-                       float(vp.dxf.view_center_point.y))
+        view_centre = view_centre_wcs(vp)
         height = float(vp.dxf.height)
         view_height = float(vp.dxf.view_height)
-        twist = math.radians(float(vp.dxf.get("view_twist_angle", 0.0) or 0.0))
+        twist = _twist_radians(vp)
     except Exception:
         return None
     if not (math.isfinite(view_height) and view_height > 0.0):
@@ -623,7 +674,11 @@ class SetViewportViewCommand(Command):
     Undoable — the view lives in the DXF entity, so it is a document
     mutation. ``old_center``/``old_height`` override the captured "before"
     state for gestures that already mutated the entity live (wheel/pan
-    bursts commit ONE command at the end, like AutoCAD groups zooms)."""
+    bursts commit ONE command at the end, like AutoCAD groups zooms).
+
+    ``view_center`` is the DXF value (group 12/22, display coordinates
+    relative to the view target), not a WCS point: a caller holding a
+    model point converts it with :func:`dcs_view_center` first."""
 
     needs_regen = True
 
@@ -685,9 +740,9 @@ def zoom_window_command(vp, x0: float, y0: float, x1: float, y1: float):
     view_height = max(height, width / aspect)
     if not (math.isfinite(view_height) and view_height > 0.0):
         return None
+    centre = ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0)
     return SetViewportViewCommand(
-        vp, ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0),
-        view_height, name="ZOOM Window")
+        vp, dcs_view_center(vp, centre), view_height, name="ZOOM Window")
 
 
 def is_viewport_locked(vp) -> bool:
@@ -731,7 +786,12 @@ def zoom_viewport_view(vp, factor: float, anchor=None) -> None:
     """Wheel zoom inside an active viewport (live, no Command): scale the
     view about the model point under ``anchor`` (paper coords), so the
     geometry under the cursor stays under the cursor — same feel as the
-    paper-space wheel."""
+    paper-space wheel.
+
+    All in display coordinates on purpose: the DCS axes are the paper's
+    (turned with the view), so a paper offset over the scale IS a DCS
+    offset, twist or no twist, and the raw group 12/22 value can be moved
+    directly. The same holds for :func:`pan_viewport_view`."""
     scale = viewport_scale(vp)
     cx, cy = vp.dxf.center.x, vp.dxf.center.y
     vcx, vcy = vp.dxf.view_center_point.x, vp.dxf.view_center_point.y
@@ -761,7 +821,7 @@ def viewport_fit_command(document, vp) -> SetViewportViewCommand:
     """ZOOM Extents inside an active viewport: fit the whole model."""
     center, view_height = model_fit_view(
         document, float(vp.dxf.width), float(vp.dxf.height))
-    return SetViewportViewCommand(vp, view_center=center,
+    return SetViewportViewCommand(vp, view_center=dcs_view_center(vp, center),
                                   view_height=view_height, name="ZOOM Extents")
 
 

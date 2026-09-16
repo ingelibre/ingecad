@@ -58,8 +58,8 @@ class _CacheWarmer(QThread):
     """Build the snap/pick caches off the UI thread right after a document
     opens — the first click on a cadastre paid a 5-8 s synchronous walk."""
 
-    # document, index, snap, revision, space name
-    done = Signal(object, object, object, int, str)
+    # document, index, snap, revision, space name, model snap (sheet only)
+    done = Signal(object, object, object, int, str, object)
 
     def __init__(self, document) -> None:
         super().__init__()
@@ -83,12 +83,21 @@ class _CacheWarmer(QThread):
         space = self._document.space_name
         index = GeometryIndex(self._document)
         engine = SnapEngine(self._document)
+        # On a sheet the cursor also snaps THROUGH the viewports to the
+        # model: that engine is warmed here too, or the first hover over a
+        # viewport of a big plan would pay the whole model walk in the GUI.
+        model_engine = None
         try:
             index._build()
             engine._build()
+            if space != "Model" and not getattr(self._document, "edit_block", None):
+                model_engine = SnapEngine(
+                    self._document, space=self._document.doc.modelspace())
+                model_engine._build()
         except Exception:
-            index = engine = None   # doc mutated mid-walk: discard
-        self.done.emit(self._document, index, engine, revision, space)
+            index = engine = model_engine = None   # doc mutated mid-walk
+        self.done.emit(self._document, index, engine, revision, space,
+                       model_engine)
 
 
 class _GhostWorker(QThread):
@@ -382,6 +391,8 @@ class ToolController(QObject):
     # -- document lifecycle ----------------------------------------------------
     def attach_document(self, document, flatten: Optional[float] = None) -> None:
         self.snap_engine = SnapEngine(document)
+        self._model_snap_engine = None
+        self._through_vp = {}
         self.index = GeometryIndex(document)
         self._ghost_cache = None
         self._ghost_wanted = None
@@ -392,10 +403,7 @@ class ToolController(QObject):
         self.window.viewport.clear_stamps()
         # warm the caches in the background so the FIRST pick/hover on a big
         # drawing does not pay the full modelspace walk synchronously
-        warmer = _CacheWarmer(document)
-        warmer.done.connect(self._on_caches_warm)
-        self._warmers.add(warmer)
-        warmer.start()
+        self._start_warmer(document)
         self.selection = set()
         self._selecting_for = None
         self._window_anchor = None
@@ -410,8 +418,14 @@ class ToolController(QObject):
         self.window.history.clear()
         self._refresh_overlay()
 
+    def _start_warmer(self, document) -> None:
+        warmer = _CacheWarmer(document)
+        warmer.done.connect(self._on_caches_warm)
+        self._warmers.add(warmer)
+        warmer.start()
+
     def _on_caches_warm(self, document, index, engine, revision,
-                        space) -> None:
+                        space, model_engine=None) -> None:
         worker = self.sender()
         if worker in self._warmers:
             worker.wait()   # thread has emitted; joins immediately
@@ -429,6 +443,8 @@ class ToolController(QObject):
             self._grips_cache = None
         if self.snap_engine is not None and self.snap_engine._dirty:
             self.snap_engine = engine
+        if model_engine is not None and self._model_snap_engine is None:
+            self._model_snap_engine = model_engine
 
     def mark_scene_merged(self) -> None:
         """A full regen just happened: overlay entities now live in the base."""
@@ -1192,6 +1208,9 @@ class ToolController(QObject):
         # asked BEFORE the command runs: an ERASE leaves its entities
         # unlinked and an is_alive test afterwards answers about a ghost
         touched_viewport = self._touches_viewport(command)
+        if isinstance(command, actions.AddDimensionCommand) \
+                and command.dimlfac is None and command.dimlfac_resolver is None:
+            command.dimlfac_resolver = self.trans_spatial_factor
         self.window.history.execute(command)
         skipped = getattr(command, "skipped", None)
         if skipped:
@@ -1376,6 +1395,7 @@ class ToolController(QObject):
             self.snap_engine.invalidate()
         if self.index is not None:
             self.index.invalidate()
+        self._model_snap_engine = None
 
     def after_history_change(self, command=None) -> None:
         """Called by U/REDO with the command that crossed the boundary.
@@ -1585,6 +1605,12 @@ class ToolController(QObject):
                 kinds=frozenset(self.osnap_modes),
                 from_point=self.tool.last_point if self.tool else None,
             )
+            through = self._snap_through_viewport((wx, wy), threshold_world)
+            if through is not None and (
+                    self.snap_hit is None
+                    or math.hypot(through.x - wx, through.y - wy)
+                    < math.hypot(self.snap_hit.x - wx, self.snap_hit.y - wy)):
+                self.snap_hit = through
         self._track_tolerance = threshold_world
         self._watch_for_acquisition()
         self._sync_ghost(wx, wy)
@@ -1895,6 +1921,93 @@ class ToolController(QObject):
         which means "the current space draws on its own canvas"."""
         return self.sheet() if self.space_vp is not None else None
 
+    # -- snapping from the sheet to what a viewport shows ----------------------
+    _model_snap_engine = None
+    #: Paper points (rounded) that were snapped to model geometry, and the
+    #: viewport they came through: what tells a paper-space dimension it is
+    #: measuring the model.
+    _through_vp: dict = {}
+
+    def _snap_through_viewport(self, paper, threshold):
+        """A paper-space cursor over a viewport snaps to the model geometry
+        that viewport shows (AutoCAD does: a dimension drawn on the sheet
+        engages the extremos of the plan through the window). The hit comes
+        back as a PAPER point, marked with the viewport it went through.
+
+        Only on the sheet itself: inside MSPACE the current space already is
+        the model, and on the Model tab there is no window to look through.
+        """
+        if self.space_vp is not None:
+            return None
+        layout = self.sheet()
+        if layout is None or self.window.document is None:
+            return None
+        wx, wy = paper
+        for vp in layout_ops.visible_viewports(layout):
+            x0, y0, x1, y1 = layout_ops.viewport_rect(vp)
+            if not (x0 <= wx <= x1 and y0 <= wy <= y1):
+                continue
+            model = layout_ops.paper_to_model(vp, wx, wy)
+            if model is None:
+                continue
+            scale = layout_ops.viewport_scale(vp) or 1.0
+            engine = self._model_snap_engine
+            if engine is None:
+                engine = SnapEngine(self.window.document,
+                                    space=self.window.document.doc.modelspace())
+                self._model_snap_engine = engine
+            anchor = self.tool.last_point if self.tool else None
+            if anchor is not None:
+                anchor = layout_ops.paper_to_model(vp, *anchor)
+            hit = engine.find(model, threshold / scale,
+                              kinds=frozenset(self.osnap_modes),
+                              from_point=anchor)
+            if hit is None:
+                continue
+            back = layout_ops.model_to_paper(vp, hit.x, hit.y)
+            if back is None:
+                continue
+            return SnapHit(back[0], back[1], hit.kind, via=vp.dxf.handle)
+        return None
+
+    @staticmethod
+    def _point_key(point) -> tuple[float, float]:
+        return (round(float(point[0]), 6), round(float(point[1]), 6))
+
+    def _remember_through(self, hit) -> None:
+        """A point about to be used came through a viewport: keep that."""
+        if hit is None or getattr(hit, "via", None) is None:
+            return
+        self._through_vp[self._point_key((hit.x, hit.y))] = hit.via
+        if len(self._through_vp) > 64:
+            for key in list(self._through_vp)[:-64]:
+                del self._through_vp[key]
+
+    def trans_spatial_factor(self, points) -> Optional[float]:
+        """DIMLFAC for a paper-space dimension whose definition points all
+        came through the SAME viewport: model units per paper unit, so the
+        dimension reads the model's length and not the sheet's millimetres.
+        None when any point is the sheet's own or they mix viewports."""
+        if self.space_vp is not None or self.sheet() is None:
+            return None
+        handles = set()
+        for point in points:
+            via = self._through_vp.get(self._point_key(point))
+            if via is None:
+                return None
+            handles.add(via)
+        if len(handles) != 1:
+            return None
+        handle = handles.pop()
+        try:
+            vp = self.window.document.doc.entitydb.get(handle)
+        except Exception:
+            return None
+        if vp is None or not vp.is_alive:
+            return None
+        scale = layout_ops.viewport_scale(vp)
+        return 1.0 / scale if scale else None
+
     def to_space(self, wx: float, wy: float) -> tuple[float, float]:
         """A canvas (paper) point -> the current space."""
         vp = self.space_vp
@@ -1991,6 +2104,12 @@ class ToolController(QObject):
         # space is part of _flatten's cache key); the ghost built at the old
         # one goes
         self._ghost_cache = None
+        # and the new space's caches warm in the background, as at open:
+        # on a sheet that includes the model engine the cursor snaps
+        # through the viewports with (306 ms in the GUI otherwise, on the
+        # first hover over a viewport of a 10 000-entity plan)
+        if self.window.document is not None:
+            self._start_warmer(self.window.document)
         self.changed.emit()
 
     def _selection_click(self, wx: float, wy: float, shift: bool) -> None:
@@ -2112,6 +2231,7 @@ class ToolController(QObject):
         if self.tool is not None and self.tool.entity_picker:
             return (wx, wy)  # object picking: raw cursor, no snap/ortho
         if self.snap_hit is not None:
+            self._remember_through(self.snap_hit)
             return (self.snap_hit.x, self.snap_hit.y)
         self.track_hint = None
         if self.snap_on:

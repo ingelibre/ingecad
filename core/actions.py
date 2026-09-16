@@ -1096,9 +1096,25 @@ class AddDimensionCommand(Command):
         self._factory = factory
         self.dim = None
         self._block_name = None
+        #: DIMLFAC to write on this dimension, or None. A paper-space
+        #: dimension whose points came through one viewport measures the
+        #: MODEL: 1/scale here makes it read the model's length instead of
+        #: the sheet's millimetres (what AutoCAD's DIMLFAC "Viewport" did
+        #: before trans-spatial associativity; any CAD honours it).
+        self.dimlfac: float | None = None
+        #: Asked once, on the first do(), with the dimension's definition
+        #: points: the controller answers from what was snapped through a
+        #: viewport. Redo keeps the answer.
+        self.dimlfac_resolver = None
 
     def do(self, document) -> None:
         override = self._factory(self.space(document), document)
+        if self.dimlfac is None and self.dimlfac_resolver is not None:
+            self.dimlfac = self.dimlfac_resolver(
+                definition_points(override.dimension))
+            self.dimlfac_resolver = None
+        if self.dimlfac:
+            override["dimlfac"] = float(self.dimlfac)
         override.render()
         self.dim = override.dimension
         self._block_name = self.dim.dxf.get("geometry", None)
@@ -1126,6 +1142,27 @@ class AddDimensionCommand(Command):
                 pass
         self.dim = None
         document.dirty = True
+
+
+def definition_points(dim) -> list[tuple[float, float]]:
+    """The measured points of a DIMENSION: the ones a snap put there.
+
+    Linear/aligned measure defpoint2-3, radial defpoint and defpoint4,
+    angular defpoint2-5 (and defpoint for the 3-point form); the text
+    midpoint and the dimension-line defpoint are placements, not measures.
+    """
+    kind = dim.dimtype & 7 if hasattr(dim, "dimtype") else 0
+    names = {0: ("defpoint2", "defpoint3"), 1: ("defpoint2", "defpoint3"),
+             2: ("defpoint2", "defpoint3", "defpoint4", "defpoint5"),
+             3: ("defpoint", "defpoint4"), 4: ("defpoint", "defpoint4"),
+             5: ("defpoint2", "defpoint3", "defpoint4"),
+             6: ("defpoint2", "defpoint3")}.get(kind, ("defpoint2", "defpoint3"))
+    points = []
+    for name in names:
+        if dim.dxf.hasattr(name):
+            v = dim.dxf.get(name)
+            points.append((float(v.x), float(v.y)))
+    return points
 
 
 def _current_dimstyle(document) -> str:

@@ -48,6 +48,43 @@ def test_the_projection_round_trips_both_ways():
     assert east[0] - 5000.0 == pytest.approx(5.0)
 
 
+def test_the_projection_honours_the_view_target_and_the_display_frame():
+    """Group 12/22 is the view centre in DISPLAY coordinates relative to the
+    view target (17/27), a WCS point. Read raw as a WCS point it was only
+    right with no twist and a zero target -- and eight of the thirty
+    viewports of a colleague's plan carry a UTM target and a view centre of
+    (-528 160, -8 572 730): the model "under the window" was half a
+    million units off, so nothing could be picked, snapped or edited
+    through them. The truth is ezdxf's own transformation matrix."""
+    from ezdxf.math import Vec3
+
+    doc = ezdxf.new("R2018")
+    psp = doc.layouts.get("Layout1")
+    for target, twist in (((529876.1, 8573039.2, 0.0), 0.0),
+                          ((1155.6, 304.2, 4.0), 60.0),
+                          ((0.0, 0.0, -1000.0), 0.0),
+                          ((10.0, -20.0, 0.0), 720.0)):
+        vp = psp.add_viewport(center=(150, 100), size=(200, 120),
+                              view_center_point=(-528160.0, -8572729.9),
+                              view_height=600)
+        vp.dxf.view_target_point = target
+        vp.dxf.view_twist_angle = twist
+        matrix = vp.get_transformation_matrix()
+        inverse = matrix.copy()
+        inverse.inverse()
+        for paper in ((150, 100), (250, 160), (37.5, 41.25)):
+            truth = inverse.transform(Vec3(paper[0], paper[1], 0))
+            ours = layout_ops.paper_to_model(vp, *paper)
+            assert ours == pytest.approx((truth.x, truth.y), abs=1e-6), (
+                f"target {target} twist {twist}: paper {paper}")
+            assert layout_ops.model_to_paper(vp, *ours) == pytest.approx(paper)
+        # the writers that hold a MODEL point convert it back to group 12/22
+        wanted = (1234.5, -67.8)
+        vp.dxf.view_center_point = layout_ops.dcs_view_center(vp, wanted)
+        assert layout_ops.view_centre_wcs(vp) == pytest.approx(wanted)
+        assert layout_ops.paper_to_model(vp, 150, 100) == pytest.approx(wanted)
+
+
 def test_a_twisted_viewport_turns_the_projection_and_still_round_trips():
     vp = _sheet_doc().layouts.get("Layout1").query("VIEWPORT")[0]
     vp.dxf.view_twist_angle = 30.0

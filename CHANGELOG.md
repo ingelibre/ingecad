@@ -22,7 +22,32 @@ it hurt.
   circle too small for the arrowheads gets them outside pointing in.
   Radius dimensions get the same rule (arrowhead inside when it fits).
 
+- **Panning inside a viewport blanked it.** The gesture's live picture was
+  dropped when it settled while the sheet's baked copy of the model was
+  still hidden, and nothing asked for the regen that brings it back; and
+  the live picture itself resolved ACI 7 against the model canvas — white
+  on white paper, so a plan drawn in "color 7" vanished the moment a pan
+  began. The picture now stays up until the fresh sheet lands, and the
+  model is tessellated with the sheet's colours. A sheet whose viewports
+  cannot go live (clipped or twisted) no longer pays a 5-second model
+  build on the first tick. A double-click on the bare paper leaves the
+  viewport instead of reaching a model text through the projection.
+- **Viewports with a view target were projected half a million units
+  off.** The view centre (group 12/22) is a display-frame offset from the
+  view target (17/27), not a WCS point; read raw, eight of the thirty
+  viewports of a colleague's plan — the ones with a UTM target — put the
+  model "under the window" nowhere near it, so nothing could be picked or
+  edited through them. The projection is now ezdxf's own matrix, verified
+  on all thirty.
+
 ### Added
+- **Object snap from the sheet through its viewports**, and dimensions
+  that read the model: on a layout the cursor over a viewport now snaps
+  to the model geometry it shows (endpoints, midpoints, centres…), and a
+  dimension whose points all came through the same viewport carries
+  DIMLFAC = 1/scale, so it reads 100 for a 100-unit wall drawn 20 mm wide
+  on the sheet — the way AutoCAD's paper-space dimensions of model
+  geometry read. Undo/redo keep it; any CAD honours it.
 - **CENTERMARK and CENTERLINE** (menu Dimension), the norm's centre marks:
   chain-line (`CENTER2`) axes running past the circle with a central
   cross and a gap, and the centreline between two lines, as AutoCAD 2017
