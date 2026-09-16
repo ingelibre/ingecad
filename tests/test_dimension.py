@@ -304,6 +304,154 @@ def test_radius_text_and_angle_options():
     assert dim.dxf.text_rotation == pytest.approx(15.0)
 
 
+# -- radial dimensions: where the text lands, and the norm's arrowheads ---------
+
+def _radial_parts(document, dim):
+    """(arrows, lines, text midpoint) of a dimension's *D block. Each arrow
+    is (tip, base): the INSERT point and where the line connects to it."""
+    from ezdxf.math import Vec2
+    from ezdxf.render.arrows import connection_point
+
+    block = document.doc.blocks.get(dim.dxf.geometry)
+    arrows, lines, text = [], [], None
+    for e in block:
+        if e.dxftype() == "INSERT":
+            tip = Vec2(e.dxf.insert)
+            base = connection_point(e.dxf.name, tip, e.dxf.xscale,
+                                    e.dxf.rotation)
+            arrows.append((tip, base))
+        elif e.dxftype() == "LINE":
+            lines.append((Vec2(e.dxf.start), Vec2(e.dxf.end)))
+        elif e.dxftype() in ("MTEXT", "TEXT"):
+            text = Vec2(e.dxf.insert)
+    return arrows, lines, text
+
+
+def _crosses_centre(lines, centre, tol=1e-6) -> bool:
+    for a, b in lines:
+        d = b - a
+        if d.magnitude < tol:
+            continue
+        t = (centre - a).dot(d) / (d.magnitude ** 2)
+        if 0.0 <= t <= 1.0 and (a + d * t).distance(centre) < tol:
+            return True
+    return False
+
+
+def test_diameter_text_lands_on_the_side_that_was_picked():
+    """The pick is where the text goes (AutoCAD). ezdxf's ``angle`` puts the
+    text past the SECOND definition point, i.e. across the circle from the
+    pick -- which is what the tool used to hand it."""
+    document = Document.new()
+    actions.dim_diameter((0, 0), 50.0, (100, 100)).do(document)
+    dim = document.modelspace().query("DIMENSION")[0]
+    _arrows, _lines, text = _radial_parts(document, dim)
+    assert text.x > 50 and text.y > 50, f"text landed at {text}"
+    actions.dim_radius((0, 0), 50.0, (-100, 100)).do(document)
+    dim = document.modelspace().query("DIMENSION")[1]
+    _arrows, _lines, text = _radial_parts(document, dim)
+    assert text.x < -50 and text.y > 50, f"text landed at {text}"
+
+
+def test_diameter_arrowheads_sit_inside_one_each_side_pointing_out():
+    """ISO 129-1 / UNE 1-039, and AutoCAD's ISO-25 (DIMTOFL on): with the
+    text outside, the dimension line runs across the circle and the two
+    arrowheads are INSIDE it, tips on the circle, one on each side, pointing
+    outward. ezdxf drew one inside pointing out and one outside pointing in
+    (both INSERTs with the same rotation), which a tester called out as
+    off-norm."""
+    from ezdxf.math import Vec2
+
+    document = Document.new()
+    actions.dim_diameter((0, 0), 50.0, (100, 100)).do(document)
+    dim = document.modelspace().query("DIMENSION")[0]
+    arrows, lines, text = _radial_parts(document, dim)
+    centre = Vec2(0, 0)
+    assert len(arrows) == 2
+    for tip, base in arrows:
+        assert tip.distance(centre) == pytest.approx(50.0), "tip on the circle"
+        assert base.distance(centre) < 50.0, "the arrowhead is inside"
+    (tip1, _), (tip2, _) = arrows
+    assert tip1.distance(tip2) == pytest.approx(100.0), "one on each side"
+    assert _crosses_centre(lines, centre), "the dimension line runs across"
+    # the extension from the circle reaches under the text
+    near = max(arrows, key=lambda a: a[0].distance(text))[0]
+    far_tip = min(arrows, key=lambda a: a[0].distance(text))[0]
+    assert any(a.distance(far_tip) < 1e-6 or b.distance(far_tip) < 1e-6
+               for a, b in lines), "the extension starts on the circle"
+    assert near is not far_tip
+
+
+def test_small_circle_puts_the_arrowheads_outside_pointing_in():
+    """No room for the arrowheads inside: outside, tips on the circle,
+    pointing in -- the norm's other layout -- and the line still across."""
+    from ezdxf.math import Vec2
+
+    document = Document.new()
+    actions.dim_diameter((0, 0), 2.0, (30, 30)).do(document)
+    dim = document.modelspace().query("DIMENSION")[0]
+    arrows, lines, _text = _radial_parts(document, dim)
+    centre = Vec2(0, 0)
+    assert len(arrows) == 2
+    for tip, base in arrows:
+        assert tip.distance(centre) == pytest.approx(2.0)
+        assert base.distance(centre) > 2.0, "the arrowhead is outside"
+    assert _crosses_centre(lines, centre)
+
+
+def test_radius_arrowhead_sits_inside_when_it_fits():
+    from ezdxf.math import Vec2
+
+    document = Document.new()
+    actions.dim_radius((0, 0), 50.0, (100, 100)).do(document)
+    dim = document.modelspace().query("DIMENSION")[0]
+    arrows, lines, _text = _radial_parts(document, dim)
+    centre = Vec2(0, 0)
+    assert len(arrows) == 1
+    tip, base = arrows[0]
+    assert tip.distance(centre) == pytest.approx(50.0)
+    assert base.distance(centre) < 50.0
+    assert any(a.distance(centre) < 1e-6 for a, _ in lines), (
+        "the dimension line starts at the centre")
+
+
+def test_re_rendering_keeps_the_norm_layout():
+    """MATCHPROP and the grips re-render through ``dim.render()``, which
+    forgets the user location: the default location has to draw the same
+    arrowheads."""
+    from ezdxf.math import Vec2
+
+    document = Document.new()
+    actions.dim_diameter((0, 0), 50.0, (100, 100)).do(document)
+    dim = document.modelspace().query("DIMENSION")[0]
+    dim.render()
+    arrows, lines, text = _radial_parts(document, dim)
+    centre = Vec2(0, 0)
+    assert len(arrows) == 2
+    assert all(base.distance(centre) < 50.0 for _tip, base in arrows)
+    assert _crosses_centre(lines, centre)
+    # at the default distance now, but still on the picked side
+    assert text.x > 0 and text.y > 0, f"text landed at {text}"
+
+
+def test_dimtofl_off_keeps_ezdxfs_layout():
+    """The imperial Standard style (DIMTOFL off) is not the norm's case:
+    no dimension line across the circle (a centre mark instead), ezdxf's
+    leader layout as before."""
+    from ezdxf.math import Vec2
+
+    document = Document.new()
+    document.doc.dimstyles.get("ISO-25").dxf.dimtofl = 0
+    actions.dim_diameter((0, 0), 50.0, (100, 100)).do(document)
+    dim = document.modelspace().query("DIMENSION")[0]
+    arrows, lines, _text = _radial_parts(document, dim)
+    centre = Vec2(0, 0)
+    assert not any(a.distance(centre) == pytest.approx(50.0)
+                   and b.distance(centre) == pytest.approx(50.0)
+                   for a, b in lines), "no line across the circle"
+    assert len(arrows) == 1, "ezdxf's single outside arrow with a leader"
+
+
 def test_preview_text_substitutes_placeholder():
     h = Harness()
     tool = DimLinearTool(h.ctx)

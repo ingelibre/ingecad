@@ -31,6 +31,13 @@ ISO25_DIM = {
     "dimtxt": 2.5, "dimasz": 2.5, "dimexe": 1.25, "dimexo": 0.625,
     "dimgap": 0.625, "dimdec": 2, "dimscale": 1.0, "dimtad": 1,
     "dimtxsty": "Standard", "dimlfac": 1.0,
+    # Fit, as acadiso.dwt's ISO-25 sets it: dimension line drawn even when
+    # the text is outside (for a circle: the line across it, arrowheads
+    # inside), text aligned with the line in and out, text moved with the
+    # line. ezdxf's own defaults agree, except that its renderer reads an
+    # unset DIMTMOVE as 2 -- writing them makes the file say it.
+    "dimtofl": 1, "dimtix": 0, "dimatfit": 3, "dimtmove": 0,
+    "dimtih": 0, "dimtoh": 0, "dimcen": 2.5,
 }
 
 

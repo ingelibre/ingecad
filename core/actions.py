@@ -1215,14 +1215,28 @@ def dim_aligned(p1, p2, location, *, text: str = "<>",
     return AddDimensionCommand(factory)
 
 
+def _radial_location(center, radius: float, location):
+    """The text location a radial dimension gets from the pick.
+
+    AutoCAD puts the text where the dimension line was placed. ezdxf takes
+    that as ``location`` -- and only that: with ``angle`` alone a diameter
+    dimension lands its text on the FAR side of the circle, because ezdxf
+    measures the angle to the first definition point and puts the text past
+    the second. A pick on the centre (no direction) falls back to 0°.
+    """
+    dx, dy = location[0] - center[0], location[1] - center[1]
+    if math.hypot(dx, dy) < 1e-9:
+        return (center[0] + radius, center[1])
+    return (location[0], location[1])
+
+
 def dim_radius(center, radius: float, location, *, text: str = "<>",
                text_rotation: float | None = None) -> AddDimensionCommand:
-    angle = math.degrees(math.atan2(location[1] - center[1],
-                                    location[0] - center[0]))
+    where = _radial_location(center, radius, location)
 
     def factory(msp, document):
         return msp.add_radius_dim(
-            center=(center[0], center[1]), radius=radius, angle=angle,
+            center=(center[0], center[1]), radius=radius, location=where,
             text=text, dimstyle=_current_dimstyle(document),
             dxfattribs=_text_rotation_attribs(text_rotation))
     return AddDimensionCommand(factory)
@@ -1230,12 +1244,11 @@ def dim_radius(center, radius: float, location, *, text: str = "<>",
 
 def dim_diameter(center, radius: float, location, *, text: str = "<>",
                  text_rotation: float | None = None) -> AddDimensionCommand:
-    angle = math.degrees(math.atan2(location[1] - center[1],
-                                    location[0] - center[0]))
+    where = _radial_location(center, radius, location)
 
     def factory(msp, document):
         return msp.add_diameter_dim(
-            center=(center[0], center[1]), radius=radius, angle=angle,
+            center=(center[0], center[1]), radius=radius, location=where,
             text=text, dimstyle=_current_dimstyle(document),
             dxfattribs=_text_rotation_attribs(text_rotation))
     return AddDimensionCommand(factory)

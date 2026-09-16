@@ -12,6 +12,7 @@ import math
 from ezdxf.entities.lwpolyline import (DEFAULT_FORMAT, FORMAT_CODES,
                                        LWPolyline, format_point)
 from ezdxf.entities.polygon import DXFPolygon
+from ezdxf.math import Vec2 as _Vec2
 from ezdxf.tools import pattern as _pattern_tools
 
 _APPLIED = False
@@ -26,6 +27,7 @@ def apply() -> None:
     _patch_mtext_mask_rendering()
     _patch_bold_italic_font_matching()
     _patch_lwpolyline_get_points()
+    _patch_radial_dimension_layout()
 
 
 def _patch_polygon_transform() -> None:
@@ -181,3 +183,146 @@ def _patch_lwpolyline_get_points() -> None:
     get_points.__doc__ = LWPolyline.get_points.__doc__
     get_points._ingecad_patch = True
     LWPolyline.get_points = get_points
+
+
+def _patch_radial_dimension_layout() -> None:
+    """DIMRADIUS / DIMDIAMETER with the text outside and DIMTOFL on.
+
+    The norm (ISO 129-1 / UNE 1-039) and AutoCAD's metric ISO-25 style, whose
+    DIMTOFL is on, draw the dimension line across the circle with the
+    arrowheads INSIDE it -- tips on the circle pointing outward, one on each
+    side of the diameter -- and the text outside on an extension of that
+    line. When the circle is too small for the arrowheads they go outside,
+    tips on the circle pointing in, and the line still runs across.
+
+    ezdxf 1.4 draws neither. With a default location the near arrow sits
+    outside pointing in while the far one sits inside pointing out (both
+    INSERTs carry the same rotation); with a user location and DIMTMOVE 0/1
+    the far arrow is missing and the line stops at the centre. A tester
+    flagged the diameter dimension as "fuera de norma" for exactly that.
+
+    Text inside, or DIMTOFL off (the imperial Standard style), keep ezdxf's
+    own paths. DIMTMOVE 2 (text moved freely, no leader) keeps ezdxf's
+    across-the-circle layout without the extension, as the variable says;
+    ezdxf reads an unset DIMTMOVE as 2 where AutoCAD's default is 0, so the
+    value is read here with AutoCAD's default.
+    """
+    from ezdxf.render.dim_diameter import DiameterDimension
+    from ezdxf.render.dim_radius import RadiusDimension
+
+    if getattr(RadiusDimension.render_user_location, "_ingecad_patch", False):
+        return
+
+    def iso_case(self) -> bool:
+        m = self.measurement
+        return (bool(m.text_is_outside) and bool(self.outside_text_force_dimline)
+                and self.dim_style.get("dimtmove", 0) != 2)
+
+    def arrows_fit_inside(self) -> bool:
+        """Room for the arrowheads inside the circle, with the text gap."""
+        need = self.arrows.arrow_size + self.measurement.text_gap
+        if self.dimension.dimtype == 4:      # radius: between centre and circle
+            return self.radius >= need
+        return 2.0 * self.radius >= 2.0 * need
+
+    def ext_line(self, start, user: bool) -> None:
+        """The extension from the circle (or the outside arrow) to the text."""
+        m = self.measurement
+        if m.text_outside_horizontal:
+            if user:
+                self.add_horiz_ext_line_user(start)
+            else:
+                self.add_horiz_ext_line_default(start)
+        elif user:
+            self.add_radial_ext_line_user(start)
+        else:
+            self.add_radial_ext_line_default(start)
+
+    # -- radius -----------------------------------------------------------------
+    radius_user = RadiusDimension.render_user_location
+    radius_default = RadiusDimension.render_default_location
+    radius_text = RadiusDimension.get_default_text_location
+
+    def radius_iso(self, user: bool) -> None:
+        inside = arrows_fit_inside(self)
+        if self.arrows.suppress1:
+            base = self.point_on_circle
+        else:
+            base = self.add_arrow(self.point_on_circle, rotate=not inside)
+        if inside:
+            self.add_radial_dim_line(base)          # centre to the arrow's base
+            ext_line(self, self.point_on_circle, user)
+        else:
+            self.add_radial_dim_line(self.point_on_circle)
+            ext_line(self, base, user)
+
+    def render_user_location_radius(self) -> None:
+        if iso_case(self):
+            radius_iso(self, user=True)
+        else:
+            radius_user(self)
+
+    def render_default_location_radius(self) -> None:
+        if iso_case(self):
+            radius_iso(self, user=False)
+        else:
+            radius_default(self)
+
+    def default_text_location(self, original):
+        """With the arrowhead inside there is no arrow between the circle
+        and the text: the default text sits a gap past the circle."""
+        m = self.measurement
+        if (iso_case(self) and not m.text_outside_horizontal
+                and arrows_fit_inside(self)):
+            text_direction = _Vec2.from_deg_angle(m.text_rotation)
+            vertical = text_direction.orthogonal(ccw=True)
+            hdist = self._total_text_width / 2.0 + m.text_gap
+            midpoint = self.point_on_circle + self.dim_line_vec * hdist
+            return midpoint + vertical * m.text_vertical_distance()
+        return original(self)
+
+    def get_default_text_location_radius(self):
+        return default_text_location(self, radius_text)
+
+    # -- diameter ---------------------------------------------------------------
+    diameter_user = DiameterDimension.render_user_location
+    diameter_default = DiameterDimension.render_default_location
+    diameter_text = DiameterDimension.get_default_text_location
+
+    def diameter_iso(self, user: bool) -> None:
+        inside = arrows_fit_inside(self)
+        # arrow 1 sits on the text side, arrow 2 across the circle
+        near = self._add_arrow_1(rotate=not inside)
+        far = self._add_arrow_2(rotate=inside)
+        if inside:
+            self.add_diameter_dim_line(near, far)   # base to base, through the centre
+            ext_line(self, self.point_on_circle, user)
+        else:
+            self.add_diameter_dim_line(self.point_on_circle, self.point_on_circle2)
+            ext_line(self, near, user)
+
+    def render_user_location_diameter(self) -> None:
+        if iso_case(self):
+            diameter_iso(self, user=True)
+        else:
+            diameter_user(self)
+
+    def render_default_location_diameter(self) -> None:
+        if iso_case(self):
+            diameter_iso(self, user=False)
+        else:
+            diameter_default(self)
+
+    def get_default_text_location_diameter(self):
+        return default_text_location(self, diameter_text)
+
+    for cls, user, default, text in (
+            (RadiusDimension, render_user_location_radius,
+             render_default_location_radius, get_default_text_location_radius),
+            (DiameterDimension, render_user_location_diameter,
+             render_default_location_diameter,
+             get_default_text_location_diameter)):
+        user._ingecad_patch = True
+        cls.render_user_location = user
+        cls.render_default_location = default
+        cls.get_default_text_location = text
