@@ -45,6 +45,26 @@
   <url type="vcs-browser">https://github.com/ingelibre/ingecad</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.2" date="2026-09-16">
+      <description>
+        <p>What a second tester found drawing to the norm: ISO linetypes
+        that loaded wrong, diameter dimensions off the norm, centre marks
+        as chain-line axes (CENTERMARK), panning inside a viewport that
+        blanked it, object snap from the sheet through its viewports with
+        dimensions reading the model, a Drafting Settings dialog with polar
+        tracking that locks near a path and a nested adaptive grid, the
+        origin as an object snap, and pan cursors that cannot flicker.</p>
+        <p xml:lang="es">Lo que un segundo probador encontró dibujando a
+        norma: tipos de línea ISO que cargaban mal, cotas de diámetro fuera
+        de norma, marcas de centro como ejes trazo-punto (CENTERMARK), el
+        paneo dentro de una ventana que la dejaba en blanco, referencia a
+        objetos desde la hoja a través de sus ventanas con cotas que leen
+        el modelo, un diálogo de Parámetros de dibujo con rastreo polar que
+        se engancha cerca de la ruta y una rejilla adaptativa anidada, el
+        origen como referencia a objetos, y cursores de paneo que no pueden
+        parpadear.</p>
+      </description>
+    </release>
     <release version="0.6.1" date="2026-09-09">
       <description>
         <p>Starts on machines whose graphics driver refuses the OpenGL

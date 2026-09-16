@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.6.2 — 2026-09-16
 
-What a second tester found drawing to the norm (ISO / UNE), in the order
-it hurt.
+What a second tester found drawing to the norm (ISO / UNE): ten findings,
+all ten addressed, and three bugs underneath them that nobody had reported
+(viewports with a view target projected half a million units off, polar
+tracking that rounded every point, the live viewport picture drawn white
+on white).
 
 ### Fixed
 - **Loading an ISO linetype loaded something else.** `ACAD_ISO02W100`

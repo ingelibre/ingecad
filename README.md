@@ -31,7 +31,7 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature AutoCAD clone.
 
-## Status — v0.6.1
+## Status — v0.6.2
 
 What works today:
 
@@ -81,7 +81,9 @@ What works today:
   text with all 14 justifications, hatches; construction lines (XLINE/RAY),
   DIVIDE/MEASURE with aligned blocks, REVCLOUD.
 - **Dimensions, complete**: linear, aligned, angular, arc length, ordinate,
-  radius, diameter, center marks, continue/baseline chains and DIMTEDIT —
+  radius and diameter to the norm (arrowheads inside the circle), center
+  marks and the chain-line axes of CENTERMARK / CENTERLINE,
+  continue/baseline chains and DIMTEDIT —
   every command with AutoCAD's own options (`Text` with `<>`, `Angle`,
   `Rotated`, `Quadrant`, `Partial`…) and the official prompts, plus the
   **Dimension Style Manager** with its five tabs and a live preview.
@@ -99,12 +101,16 @@ What works today:
   and the width arrow, line spacing, bullets and numbered lists, background
   mask and static columns — all stored as AutoCAD's own inline codes.
 - **The AutoCAD feel**: object snaps with AutoSnap markers (END, MID, CEN,
-  NOD, INT, PER, TAN, QUA, INS, GCE — on curves too) with the status-bar
-  running-snap list, ORTHO / POLAR, absolute / relative / polar coordinate
-  input, command prefix autocomplete (`OFF` runs OFFSET), inquiry commands
-  (DIST / ID / AREA / LIST), UNITS, blocks (`B` / `I`), a startup window
-  with template units and recent drawings with thumbnails, and undo/redo of
-  everything.
+  NOD, INT, PER, TAN, QUA, INS, GCE — on curves too, and through a layout's
+  viewports to the model they show, with paper-space dimensions reading the
+  model's length) with the status-bar running-snap list, ORTHO / POLAR
+  (tracking that locks near a path, the increment and additional angles in
+  Drafting Settings), the nested adaptive grid with GRIDUNIT / SNAPUNIT
+  saved in the drawing, absolute / relative / polar coordinate input and
+  LASTPOINT, command prefix autocomplete (`OFF` runs OFFSET), inquiry
+  commands (DIST / ID / AREA / LIST), UNITS, blocks (`B` / `I`), a startup
+  window with template units and recent drawings with thumbnails, and
+  undo/redo of everything.
 - **Output**: print / export PDF and PNG to exact scale, from model or
   layout.
 - **Raster images and PDF underlays**: attach PNG/JPEG/BMP/GIF/TIFF or a
