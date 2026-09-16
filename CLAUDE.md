@@ -485,6 +485,69 @@ prompt y las cotas junto al cursor). Son funciones, no teclas: cuando
 existan, la tecla se agrega a `_MODES` / `_build_acad_shortcuts` y al test
 de teclado. Van después del dogfooding de Terreno y antes de publicar.
 
+## 🗓 Sesión 2026-09-16 (bis) — tanda B: la lámina (panear no borra, snap a través de la ventana)
+
+**Marco: «sigue la tanda b».** Dos puntos de Rafael, y de reproducirlos
+salieron **cuatro bugs**, tres de ellos viejos y silenciosos:
+
+- **#7 «al panear dentro de una ventana desaparece el dibujo»
+  (6fcb7c6).** Reproducido primero en una lámina sintética midiendo la
+  escena que dibuja el lienzo (vértices con alfa > 0): 264 antes del
+  paneo, **8 tras el commit del gesto, 8 tres segundos después**. El
+  commit retiraba la matriz viva con la copia horneada aún oculta y **no
+  le pedía la regen a nadie** (el comentario la prometía). Ahora el commit
+  pide la lámina fresca y la matriz viva se queda hasta que `_on_regen_done`
+  la adopta (o re-oculta el horneado si empezó otro gesto). ⚠️ **Mirar los
+  píxeles bajo xcb destapó la segunda mitad:** la matriz viva tampoco
+  dibujaba nada visible — el modelo se teselaba para el lienzo del modelo
+  (ACI 7 **blanco**) y se pintaba sobre el papel blanco. En un plano
+  dibujado en «color 7», todo el dibujo desaparecía en cuanto empezaba el
+  paneo. `build_scene(canvas=lámina)` resuelve contra el papel como hace
+  el `draw_viewport` de ezdxf: **11 píxeles de diferencia en 1 151 880**
+  entre la imagen viva y el horneado. Y en el plano real (todas las
+  ventanas recortadas → el camino vivo nunca engancha) el primer tic
+  pagaba **5,1 s síncronos** construyendo el modelo para descubrirlo:
+  ahora se miran los placements antes (5149 → 0 ms). «Le costó salir»: el
+  doble clic en papel pelado picaba a través de la proyección y podía
+  abrir el editor de un texto del modelo; ahora sólo pica dentro de la
+  ventana activa, y el clic en papel pelado dice una vez cómo salir.
+- **#8 «sin snap al acotar en espacio papel» (e65257c).** Segundo
+  `SnapEngine` atado al modelspace real (`SnapEngine(space=…)`), consultado
+  en `paper_to_model(cursor)` con la apertura dividida por la escala; el
+  hit vuelve en papel con `SnapHit.via` = la ventana. **Y la medida:** una
+  cota cuyos puntos vinieron todos por la MISMA ventana lleva
+  `DIMLFAC = 1/escala` (resuelto una vez en `AddDimensionCommand`, sobrevive
+  a undo/redo, override de estilo que cualquier CAD honra): lee 100 por un
+  muro de 100 dibujado a 20 mm. El calentador construye también ese motor
+  y **ahora corre en cada cambio de espacio**, no sólo al abrir.
+- ⚠️ **El bug gordo, destapado midiendo el snap sobre el plano real:
+  `core/layouts.py` ignoraba el `view_target_point`.** El grupo 12/22 es
+  el centro de vista en coordenadas de *display* (el marco girado por el
+  twist) y relativo al target (17/27, un punto WCS). Leído en crudo como
+  WCS sólo acierta con twist 0 y target 0 — y **8 de las 30 ventanas** del
+  plano del colega llevan target UTM (529 876, 8 573 039) con centro
+  (−528 160, −8 572 730): el modelo «bajo la ventana» quedaba a medio
+  millón de unidades y nada se podía picar, enganchar ni editar a través
+  de ellas. La verificación del 2026-08-29 cayó en A-02, cuyas 13 ventanas
+  tienen target (0,0,−1000): casualidad. Ahora `view_centre_wcs` = `target
+  + R(−twist)·centro` (la matriz de ezdxf, invertida), fit y ZOOM Ventana
+  convierten al revés (`dcs_view_center`), y rueda/paneo se quedan en
+  coordenadas de display, donde ya estaban bien. **Verificado contra la
+  matriz de ezdxf en las 30 ventanas: peor diferencia 1e-9.** Después: 84
+  y 131 snaps a través de la ventana girada y de la de target UTM en 600
+  hovers de grilla, 0,4-0,9 ms por hover.
+
+⚠️ **Método:** el estado (`_live_vp`, alfa de vértices, regen en vuelo)
+bastó para el primer bug y para los tests; **sólo los píxeles** (xcb,
+`grabFramebuffer`, tríptico) mostraron el segundo. Y `pgrep -f` con el
+patrón en la propia línea de comandos del watcher: otra vez (matado a
+tiempo). 14 tests nuevos; suite completa **1308 passed, 1 skipped**. ⚠️ Y una
+regla de arnés nueva: la suite entera en UN proceso (21 min, 2,7 GB, 371
+hilos por las ventanas que los tests dejan abiertas) fue **matada por
+memoria** en esta máquina; en cuatro procesos por lotes de archivos
+(`split -n l/4` sobre `tests/test_*.py`) corre en 8 min y no pasa nada.
+Correrla así cuando el CI no esté a mano.
+
 ## 🗓 Sesión 2026-09-16 — el reporte de Rafael: tanda A (tipos ISO, cota Ø, ejes de centro)
 
 **Rafael (segundo probador, dibuja a norma ISO/UNE) mandó 10 puntos; el
