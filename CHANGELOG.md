@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+What a second tester found drawing to the norm (ISO / UNE), in the order
+it hurt.
+
+### Fixed
+- **Loading an ISO linetype loaded something else.** `ACAD_ISO02W100`
+  came in as an invisible line and `ACAD_ISO04W100` (long-dash dot) as a
+  dotted one: the loader handed ezdxf the bare dashes where it expects
+  the pattern length in front, so the first dash was swallowed. All 20
+  library linetypes a new drawing lacks were affected — the whole ISO
+  family, BORDER and HIDDEN; DASHED and CENTER survived only because the
+  template preloads them.
+- **Diameter dimensions off the norm.** The two arrowheads came out one
+  inside pointing out and one outside pointing in, and the text landed
+  across the circle from where you clicked. Now, as ISO 129-1 and
+  AutoCAD's ISO-25 have it: the dimension line runs across the circle
+  with both arrowheads inside, tips on the circle pointing outward, and
+  the text outside on an extension of the line where you put it; a
+  circle too small for the arrowheads gets them outside pointing in.
+  Radius dimensions get the same rule (arrowhead inside when it fits).
+
+### Added
+- **CENTERMARK and CENTERLINE** (menu Dimension), the norm's centre marks:
+  chain-line (`CENTER2`) axes running past the circle with a central
+  cross and a gap, and the centreline between two lines, as AutoCAD 2017
+  draws them — but as plain lines, so the plan opens anywhere. Ruled by
+  the typed variables CENTEREXE (millimetres of sheet past the circle,
+  3.5), CENTERLTYPE, CENTERCROSSSIZE (`0.1x` of the diameter),
+  CENTERCROSSGAP (`0.05x`), CENTERLAYER (`.` = current) and
+  CENTERMARKEXE. DIMCENTER keeps drawing what DIMCEN says.
+
 ## v0.6.1 — 2026-09-09
 
 The first report from outside: a machine with an NVIDIA card on Wayland

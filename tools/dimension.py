@@ -833,6 +833,61 @@ class DimCenterTool(Tool):
         self.ctx.finish()
 
 
+class CenterMarkTool(Tool):
+    """CENTERMARK: the norm's centre mark -- chain-line axes past the
+    circle -- on each circle or arc picked, until Enter."""
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "CENTERMARK"
+        self.prompt("Select circle or arc to add center mark:")
+
+    def on_point(self, point: Point) -> None:
+        from core import centerlines
+
+        e = self.ctx.services.pick_entity(point) if self.ctx.services else None
+        if e is None or e.dxftype() not in ("CIRCLE", "ARC"):
+            self.ctx.echo(tr("Select a circle or arc."))
+            return
+        cmd = centerlines.center_mark(e)
+        if cmd is not None:
+            self.ctx.execute(cmd)
+        self.prompt("Select circle or arc to add center mark:")
+
+
+class CenterLineTool(Tool):
+    """CENTERLINE: the chain-line centreline between two lines."""
+
+    entity_picker = True
+
+    def start(self) -> None:
+        self.name = "CENTERLINE"
+        self._first = None
+        self.prompt("Select first line:")
+
+    def on_point(self, point: Point) -> None:
+        from core import centerlines
+
+        e = self.ctx.services.pick_entity(point) if self.ctx.services else None
+        if e is None or e.dxftype() != "LINE":
+            self.ctx.echo(tr("Select a line."))
+            return
+        if self._first is None:
+            self._first = e
+            self.prompt("Select second line:")
+            return
+        if e is self._first:
+            self.ctx.echo(tr("Select a different line."))
+            return
+        cmd = centerlines.centerline(self._first, e)
+        if cmd is None:
+            self.ctx.echo(tr("The two lines give no centerline."))
+        else:
+            self.ctx.execute(cmd)
+        self.ctx.finish()
+
+
 class _ChainDim(Tool):
     """DIMCONTINUE/DIMBASELINE: chain new dimensions from a base linear or
     aligned dimension. The session's last one is picked up automatically;
@@ -1053,6 +1108,8 @@ DIM_TOOL_CLASSES = {
     "DIMARC": DimArcTool,
     "DIMORDINATE": DimOrdinateTool,
     "DIMCENTER": DimCenterTool,
+    "CENTERMARK": CenterMarkTool,
+    "CENTERLINE": CenterLineTool,
     "DIMCONTINUE": DimContinueTool,
     "DIMBASELINE": DimBaselineTool,
     "DIMTEDIT": DimTextEditTool,

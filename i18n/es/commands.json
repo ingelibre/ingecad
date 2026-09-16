@@ -61,6 +61,8 @@
   "DIMANGULAR":  {"name": "ACOANGULO"},
   "DIMCONTINUE": {"name": "ACOCONTINUA"},
   "DIMBASELINE": {"name": "ACOLINEABASE"},
+  "CENTERMARK": {"name": "MARCACENTRO"},
+  "CENTERLINE": {"name": "LINEACENTRO"},
   "DIMSTYLE":    {"name": "ACOESTILO"},
 
   "OPEN":      {"name": "ABRE"},

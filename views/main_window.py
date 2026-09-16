@@ -637,6 +637,60 @@ class MainWindow(QMainWindow):
         self.viewport.refresh_cursor_prefs()
         self.command_line.echo(tr("{name} = {value}", name=name, value=value))
 
+    def _cmd_center_var(self, name: str, *args) -> None:
+        """The CENTERMARK / CENTERLINE variables (AutoCAD 2017+): bare name
+        shows the value, a value sets it. CENTEREXE is a length in drawing
+        units, CENTERCROSSSIZE / CENTERCROSSGAP a length or a multiple of
+        the diameter (``0.1x``), CENTERLTYPE a linetype name, CENTERLAYER a
+        layer name or ``.`` for the current one, CENTERMARKEXE 0 or 1."""
+        from core import centerlines
+
+        prefs = centerlines.settings()
+        key = {"CENTEREXE": centerlines.SETTING_EXE,
+               "CENTERLTYPE": centerlines.SETTING_LTYPE,
+               "CENTERCROSSSIZE": centerlines.SETTING_CROSSSIZE,
+               "CENTERCROSSGAP": centerlines.SETTING_CROSSGAP,
+               "CENTERLAYER": centerlines.SETTING_LAYER,
+               "CENTERMARKEXE": centerlines.SETTING_MARKEXE}[name]
+        current = {"CENTEREXE": prefs.exe, "CENTERLTYPE": prefs.ltype,
+                   "CENTERCROSSSIZE": prefs.crosssize,
+                   "CENTERCROSSGAP": prefs.crossgap,
+                   "CENTERLAYER": prefs.layer,
+                   "CENTERMARKEXE": int(prefs.markexe)}[name]
+        text = str(args[0]).strip() if args and str(args[0]).strip() else ""
+        if not text:
+            self.command_line.echo(
+                tr("{name} = {value}", name=name, value=current) + "  "
+                + tr("Enter new value:"))
+            return
+        if name == "CENTEREXE":
+            try:
+                value = float(text.replace(",", "."))
+            except ValueError:
+                self.command_line.echo(tr("Requires a numeric value."))
+                return
+            if value < 0:
+                self.command_line.echo(tr("Value must not be negative."))
+                return
+        elif name in ("CENTERCROSSSIZE", "CENTERCROSSGAP"):
+            if not centerlines.valid_size(text):
+                self.command_line.echo(
+                    tr("Requires a length or a multiple of the diameter, "
+                       "like 0.1x."))
+                return
+            value = text
+        elif name == "CENTERMARKEXE":
+            if text not in ("0", "1"):
+                self.command_line.echo(tr("Requires 0 or 1."))
+                return
+            value = text == "1"
+        else:
+            value = text
+        QSettings().setValue(key, value)
+        self.command_line.echo(tr("{name} = {value}", name=name,
+                                  value=int(value) if name == "CENTERMARKEXE"
+                                  else value))
+
     def _cmd_pickstyle(self, *args) -> None:
         """PICKSTYLE (p. 2452): 0 turns group selection off, 1 on.
 
@@ -1007,6 +1061,8 @@ class MainWindow(QMainWindow):
         cmd_item(dim_menu, tr("Continue"), "DIMCONTINUE")
         dim_menu.addSeparator()
         cmd_item(dim_menu, tr("Center Mark"), "DIMCENTER")
+        cmd_item(dim_menu, tr("Center Mark with Centerlines"), "CENTERMARK")
+        cmd_item(dim_menu, tr("Centerline"), "CENTERLINE")
         cmd_item(dim_menu, tr("Align Text"), "DIMTEDIT")
         dim_menu.addSeparator()
         style_act = QAction(tr("Dimension Style..."), self)
@@ -2511,6 +2567,9 @@ class MainWindow(QMainWindow):
         d.register("VIEWRES", self._cmd_viewres)
         d.register("CURSORSIZE", self._cmd_cursorsize)
         d.register("PICKBOX", self._cmd_pickbox)
+        for var in ("CENTEREXE", "CENTERLTYPE", "CENTERCROSSSIZE",
+                    "CENTERCROSSGAP", "CENTERLAYER", "CENTERMARKEXE"):
+            d.register(var, lambda *a, v=var: self._cmd_center_var(v, *a))
         d.register("PLUGINS", self._cmd_plugins)
         d.register("HELP", self._cmd_help)
         d.register("BEDIT", self._cmd_bedit)
@@ -2551,6 +2610,7 @@ class MainWindow(QMainWindow):
                      "BLOCK", "INSERT", "EXPLODE", "HATCH", "-HATCH",
                      "DIMLINEAR", "DIMALIGNED", "DIMRADIUS", "DIMDIAMETER",
                      "DIMANGULAR", "DIMARC", "DIMORDINATE", "DIMCENTER",
+                     "CENTERMARK", "CENTERLINE",
                      "DIMCONTINUE", "DIMBASELINE", "DIMTEDIT",
                      "MVIEW", "XLINE", "RAY", "DIVIDE", "MEASURE",
                      "REVCLOUD",
