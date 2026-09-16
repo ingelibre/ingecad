@@ -485,6 +485,46 @@ prompt y las cotas junto al cursor). Son funciones, no teclas: cuando
 existan, la tecla se agrega a `_MODES` / `_build_acad_shortcuts` y al test
 de teclado. Van después del dogfooding de Terreno y antes de publicar.
 
+## 🗓 Sesión 2026-09-16 (ter) — tanda C: Parámetros de dibujo (polar y rejilla)
+
+**Marco: «sigue la tanda c» (ac36d79).** Dos puntos de Rafael, y debajo
+del primero un bug propio:
+
+- **#5 Polar.** El incremento era un `math.radians(45.0)` clavado en
+  `tool_controller.py`, y **con POLAR encendido todo punto se redondeaba
+  al múltiplo de 45°**: no se podía dibujar una línea a 30°. Ahora es el
+  rastreo polar de AutoCAD (`core/drafting.polar_lock`): el cursor queda
+  libre y una ruta de alineación desde el último punto lo atrapa sólo
+  dentro de la apertura de rastreo, con la ruta punteada y «Polar: <30°».
+  POLARANG (90 por defecto, el de AutoCAD; era 45), POLARADDANG y POLARMODE
+  (relativo al último segmento —el controlador recuerda los dos últimos
+  puntos que tomó una herramienta—, rastreo de referencia con todos los
+  ángulos polares) en QSettings, como el registro de AutoCAD. ORTO sigue
+  ganando.
+- **#1 Rejilla.** La escalera 1-2-5 reacomodaba la retícula en cada
+  escalón. `core/drafting.grid_level`: **anidada** —GRIDUNIT × GRIDMAJOR^k,
+  celdas en [25, 125) px— con banda de histéresis en cada umbral. GRIDUNIT,
+  SNAPUNIT y GRIDMAJOR **se leen y escriben en el VPORT `*Active` del
+  dibujo** (grupos 15/14/61, donde AutoCAD los guarda; `SetGridCommand`,
+  deshacible) con el default métrico/imperial por `$INSUNITS` cuando el
+  archivo no trae nada. SNAPUNIT 0 conserva el FORZC-sigue-la-rejilla-visible
+  de BricsCAD que ya teníamos; un dibujo que fija uno recibe el de AutoCAD.
+- **El diálogo** (`views/drafting_dialog.py`): tres pestañas como AutoCAD
+  (Forzcursor y rejilla / Rastreo polar / Referencia a objetos, esta última
+  el panel que ya existía), desde Herramientas ▸ Parámetros de dibujo…,
+  DSETTINGS (DS, SE), OSNAP (OS) y el clic derecho de los toggles de la
+  barra de estado, cada uno en su pestaña. Las seis variables tecleables
+  como SAVETIME (valor en la línea o prompt).
+
+⚠️ **Tres trampas de arnés:** (1) `monkeypatch` sobre `QMenu.exec` **no
+toma** (Shiboken): el test colgó en el `exec` real; la lógica «qué pestaña
+abre cada toggle» se sacó a `_mode_settings_tab` y se prueba pura. (2) Un
+fixture que apaga `osnap_on` y luego abre el diálogo **lo guarda apagado
+en QSettings** para toda ventana posterior: `test_f3_is_remembered…` cayó
+por eso, no por el código. (3) `grabFramebuffer` **no muestra la rejilla en
+el primer cuadro** tras encenderla; capturar dos veces. Y el pkill con el
+patrón en la propia línea de comandos, por tercera vez en el día.
+
 ## 🗓 Sesión 2026-09-16 (bis) — tanda B: la lámina (panear no borra, snap a través de la ventana)
 
 **Marco: «sigue la tanda b».** Dos puntos de Rafael, y de reproducirlos
