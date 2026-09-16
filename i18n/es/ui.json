@@ -748,6 +748,7 @@
   "Paper space": "Espacio papel",
   "Paper space (PSPACE)": "Espacio papel (PSPACE)",
   "Paper space.": "Espacio papel.",
+  "Outside the active viewport. Double-click the paper or type PSPACE to return to paper space.": "Fuera de la ventana gráfica activa. Doble clic en el papel o teclee PSPACE para volver al espacio papel.",
   "Parallel": "Paralelo",
   "Parallel tracking is not implemented yet.": "El rastreo de paralelas todavía no está implementado.",
   "Paste": "Pegar",

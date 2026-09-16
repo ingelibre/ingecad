@@ -194,6 +194,28 @@ def test_a_click_on_the_bare_paper_selects_nothing_inside_mspace(qapp):
         win.close()
 
 
+def test_a_double_click_on_the_bare_paper_leaves_the_viewport(qapp):
+    """Even where the projection would land on a model text: outside the
+    active viewport's frame the double-click is the paper's, and the
+    paper's double-click is PSPACE. The text's editor opened instead, and
+    the tester could not find the way out."""
+    win, t, vp = _window(qapp)
+    try:
+        # a model MTEXT whose projection falls on the bare paper at (400, 100)
+        mx, my = layout_ops.paper_to_model(vp, 400.0, 100.0)
+        win.document.doc.modelspace().add_mtext(
+            "FUERA", dxfattribs={"char_height": 50, "insert": (mx, my)})
+        _enter(qapp, win, vp)
+        t._invalidate_geometry()
+        opened = []
+        win.tools.open_text_editor_for = lambda e: opened.append(e) or True
+        win.on_canvas_double_click(400.0, 100.0)
+        assert not opened, "the model text's editor opened through the paper"
+        assert win._active_vp is None, "PSPACE"
+    finally:
+        win.close()
+
+
 def test_a_click_in_another_viewport_makes_that_one_current(qapp):
     win, t, vp = _window(qapp)
     try:

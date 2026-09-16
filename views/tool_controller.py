@@ -1868,6 +1868,17 @@ class ToolController(QObject):
             other = layout_ops.viewport_hit(layout, wx, wy)
             if other is not None and other is not vp:
                 self.window._activate_viewport(other)
+                return False
+        # Bare paper: say once per viewport how to get back out. AutoCAD
+        # stays silent here, and a tester who could not find the way out
+        # ended up double-clicking around until it happened.
+        if not getattr(self, "_mspace_exit_hinted", False):
+            self._mspace_exit_hinted = True
+            echo = getattr(getattr(self.window, "command_line", None),
+                           "echo", None)
+            if echo is not None:
+                echo(tr("Outside the active viewport. Double-click the "
+                        "paper or type PSPACE to return to paper space."))
         return False
 
     def in_active_viewport(self, wx: float, wy: float) -> bool:

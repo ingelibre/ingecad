@@ -3,6 +3,8 @@
 """Layout tabs, active-layout switching, paper frame math, LAYOUT command."""
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from core import layouts as layout_ops
@@ -1088,6 +1090,14 @@ def test_a_pan_tick_places_the_model_by_matrix(qapp):
     assert win.viewport._scene is before           # the sheet is untouched
     assert win._regen_worker is None               # nothing left in flight
     win._vp_gesture_commit()
+    # The commit asks for the exact sheet and keeps the live picture up
+    # until it lands -- dropping it here left the viewport blank for the
+    # whole regen (tests/test_vp_gesture_display.py has the full story).
+    assert win._regen_worker is not None
+    assert win.viewport._live_vp is not None
+    t0 = time.monotonic()
+    while win._regen_worker is not None and time.monotonic() - t0 < 30:
+        qapp.processEvents()
     assert win.viewport._live_vp is None           # the exact sheet is back
     win.close()
 

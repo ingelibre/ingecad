@@ -887,13 +887,22 @@ def _draw_viewport_borders(layout, context, backend) -> None:
             continue    # one broken viewport must not blank the sheet
 
 
-def build_scene(document: Document, layout_name: str | None = None) -> Scene:
+def build_scene(document: Document, layout_name: str | None = None, *,
+                canvas=None) -> Scene:
     """Run the ezdxf frontend over the drawing and pack the result ("regen").
 
     ``layout_name`` selects a tab explicitly: "Model" renders modelspace with
     no fallback (the user clicked that tab — an empty canvas is the truth),
     any other name renders that paperspace layout, and None lets
     :func:`pick_layout` choose (file open: saved tab / empty-model fallback).
+
+    ``canvas`` is a paperspace layout when the MODEL is being tessellated to
+    be shown through that sheet's viewports (live navigation): colours then
+    resolve against the paper, as they do in the sheet's own bake. Without
+    it the model resolves against the dark model canvas and every ACI 7
+    entity comes out white -- invisible on the white sheet, which on a
+    plan drawn all in "color 7" is the whole drawing vanishing the moment
+    a pan starts inside a viewport.
     """
     if getattr(document, "edit_block", None) and layout_name in (None, "Model"):
         return _build_block_scene(document)
@@ -912,7 +921,14 @@ def build_scene(document: Document, layout_name: str | None = None) -> Scene:
     context = TolerantRenderContext(document.doc)
     frontend = TolerantFrontend(context, backend, frontend_config(flatten))
     frontend.hidden_handles = frozenset(hidden_handles(document))
-    frontend.draw_layout(layout)
+    if canvas is not None and layout_name is None:
+        from ezdxf.addons.drawing.properties import LayoutProperties
+
+        # what ezdxf's own draw_viewport does for the model inside a sheet
+        frontend.draw_layout(
+            layout, layout_properties=LayoutProperties.from_layout(canvas))
+    else:
+        frontend.draw_layout(layout)
     if layout_name is not None:
         _draw_viewport_borders(layout, context, backend)
     scene = pack(backend.buckets, _declared_extents(document),

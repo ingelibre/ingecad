@@ -2549,6 +2549,17 @@ class MainWindow(QMainWindow):
         self.viewport.set_scene(scene)
         self.tools.mark_scene_merged()
         self._layout_scenes[layout] = (revision, scene)
+        if self.viewport._live_vp is not None:
+            # A viewport gesture was live over the old sheet. If it is still
+            # going (a new burst began while this regen ran), the fresh
+            # sheet's copy of the model has to hide too or it shows under
+            # the live one; if it has settled, this sheet IS the view and
+            # the live matrix retires.
+            if self._vp_gesture is not None:
+                self._vp_content_hidden = False
+                self._vp_hide_baked_content()
+            else:
+                self._vp_live_stop()
         if self._regen_zoom:
             self._regen_zoom = False
             self.viewport.zoom_extents()
@@ -2686,6 +2697,7 @@ class MainWindow(QMainWindow):
             else tr("Viewport display unlocked."))
 
     def _activate_viewport(self, vp) -> None:
+        self.tools._mspace_exit_hinted = False
         from core import layouts as layout_ops
 
         placement = layout_ops.viewport_placement(vp)
@@ -2926,17 +2938,22 @@ class MainWindow(QMainWindow):
         self._vp_model_cache = None
 
     def _vp_model_scene(self):
-        """The model, tessellated once for live viewport navigation."""
+        """The model, tessellated once for live viewport navigation --
+        with its colours resolved against the SHEET it will be drawn on,
+        like the bake it stands in for (ACI 7 black on paper, not the
+        model canvas's white)."""
         cached = getattr(self, "_vp_model_cache", None)
-        if cached is not None and cached[0] is self.document:
+        key = (self.document, self._active_layout)
+        if cached is not None and cached[0] == key:
             return cached[1]
         from render.backend import build_scene
 
         try:
-            scene = build_scene(self.document, "Model")
+            sheet = self.document.doc.layouts.get(self._active_layout)
+            scene = build_scene(self.document, "Model", canvas=sheet)
         except Exception:
             return None
-        self._vp_model_cache = (self.document, scene)
+        self._vp_model_cache = (key, scene)
         return scene
 
     def _vp_placement(self, vp):
@@ -2973,19 +2990,24 @@ class MainWindow(QMainWindow):
         vp = self._active_vp
         if vp is None or not vp.is_alive or self.document is None:
             return False
-        scene = self._vp_model_scene()
-        if scene is None:
-            return False
+        # The placements first, the tessellation second: a sheet with one
+        # clipped or twisted viewport cannot go live at all, and paying the
+        # model build (5.3 s on a real plan, synchronous) to find that out
+        # froze the first pan tick of every gesture on such a sheet.
         layout = self.document.doc.layouts.get(self._active_layout)
         placements = []
         for other in visible_viewports(layout):
             placement = self._vp_placement(other)
             if placement is None:
                 return False        # one of them needs the bake: all do
-            placement["scene"] = scene
             placements.append(placement)
         if not placements:
             return False
+        scene = self._vp_model_scene()
+        if scene is None:
+            return False
+        for placement in placements:
+            placement["scene"] = scene
         self._vp_hide_baked_content()
         self.viewport.set_live_viewport(placements)
         return True
@@ -3003,13 +3025,25 @@ class MainWindow(QMainWindow):
         if scene is None:
             return
         model = {e.dxf.handle for e in self.document.doc.modelspace()}
-        self.viewport.hide_handles([h for h in scene.handle_ranges
-                                    if h in model])
+        hidden = [h for h in scene.handle_ranges if h in model]
+        self.viewport.hide_handles(hidden)
         self._vp_content_hidden = True
+        self._vp_hidden_handles = hidden
 
     def _vp_live_stop(self) -> None:
-        """Leave live mode: the next real scene carries the true content."""
+        """Leave live mode: the sheet scene on screen carries the content.
+
+        Only right when it does. The baked copy of the model was hidden for
+        the gesture, so this runs when the fresh sheet has landed
+        (_on_regen_done) or when the view did not change and the copy has
+        been un-hidden -- never in between, or the viewport goes blank
+        until something else happens to regenerate. That blank is what a
+        tester reported as "al panear dentro de una ventana desaparece el
+        dibujo": the commit dropped the live matrix and asked nobody for
+        the regen its comment promised.
+        """
         self._vp_content_hidden = False
+        self._vp_hidden_handles = []
         self.viewport.set_live_viewport(None)
 
     def _vp_gesture_begin(self, vp) -> None:
@@ -3032,19 +3066,28 @@ class MainWindow(QMainWindow):
             return
         now_center = (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y)
         now_height = float(vp.dxf.view_height)
-        # The live matrix stops here either way: from now on the sheet scene
-        # is the truth again.
-        live = getattr(self, "_vp_content_hidden", False)
-        self._vp_live_stop()
+        live = self.viewport._live_vp is not None
         if now_center == old_center and now_height == old_height:
+            # Nothing moved: the sheet on screen is still exact, its hidden
+            # copy of the model just has to come back -- surgically, no
+            # regen, and no gap.
             if live:
-                self.regen_in_memory()
+                hidden = getattr(self, "_vp_hidden_handles", [])
+                restored = self.viewport.unhide_handles(hidden)
+                self._vp_live_stop()
+                if restored < len(hidden):
+                    self.regen_in_memory()   # scene rebuilt meanwhile
             return
         # do() re-applies the values already live — recording, not changing.
         self.history.execute(layout_ops.SetViewportViewCommand(
             vp, view_center=now_center, view_height=now_height,
             name=tr("Viewport view"),
             old_center=old_center, old_height=old_height))
+        # The sheet has to be re-baked at the new view. The live matrix stays
+        # up until that scene lands (_on_regen_done stops it): dropping it
+        # now would leave the viewport empty for as long as the regen takes,
+        # seconds on a real plan.
+        self.regen_in_memory()
 
     def _deactivate_viewport(self, echo: bool = False) -> None:
         self._vp_gesture_commit()       # leaving MSPACE settles the gesture
@@ -3055,7 +3098,6 @@ class MainWindow(QMainWindow):
             self.tools.space_changed()    # back to the sheet's own entities
         if getattr(self.viewport, "active_vp_rect", None) is not None:
             self.viewport.active_vp_rect = None
-            self._vp_live_stop()
             self.viewport.update()
         if echo:
             self.command_line.echo(
@@ -3076,7 +3118,15 @@ class MainWindow(QMainWindow):
         # how MTEDIT is reached, and a title block's text is a paper-space
         # object like any other. Only when the double-click lands on no
         # object does the layout's enter/leave rule apply.
-        entity = self.tools.pick_entity((wx, wy))
+        #
+        # Inside MSPACE that pick goes through the projection, so it is only
+        # asked for a point the active viewport shows: on the bare paper it
+        # would reach a model object the viewport does not display -- a
+        # text out there opened its editor instead of leaving the viewport,
+        # which is what a tester met as "me costó salir de la ventana".
+        entity = None
+        if self.tools.in_active_viewport(wx, wy):
+            entity = self.tools.pick_entity((wx, wy))
         if entity is not None and entity.dxftype() != "VIEWPORT":
             if self.tools.open_text_editor_for(entity):
                 return
