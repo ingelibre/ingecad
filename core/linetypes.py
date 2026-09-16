@@ -183,6 +183,20 @@ def pattern_of(document, name: str) -> list[float]:
         return []
 
 
+def ezdxf_pattern(dashes: Iterable[float]) -> list[float]:
+    """The library's dash list in the shape ``ezdxf.linetypes.add`` expects.
+
+    A LIN file lists only the dashes; ezdxf wants ``[total_length, dash,
+    dash, ...]`` with the pattern length (group 40) in front. Handing it the
+    bare dashes swallows the first one as that length -- ACAD_ISO02W100
+    ``[12, -3]`` became a lone gap (an invisible line) and ISO04
+    ``[24, -3, 0, -3]`` a dotted one -- which is the bug a tester saw as
+    "picks an ISO linetype and it loads as something else".
+    """
+    dashes = [float(d) for d in dashes]
+    return [sum(abs(d) for d in dashes)] + dashes
+
+
 def loaded_names(document) -> list[str]:
     """Linetypes the drawing carries, CONTINUOUS first then alphabetical."""
     names = [lt.dxf.name for lt in document.doc.linetypes
@@ -219,7 +233,7 @@ class LoadLinetypesCommand(Command):
                 continue
             description, pattern = found
             try:
-                table.add(name=name, pattern=list(pattern),
+                table.add(name=name, pattern=ezdxf_pattern(pattern),
                           description=description)
             except Exception:
                 continue

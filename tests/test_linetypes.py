@@ -74,6 +74,43 @@ def test_the_pattern_comes_from_the_drawing_not_from_the_library():
     assert lt_ops.pattern_of(document, "Continuous") == []
 
 
+def test_every_library_linetype_loads_with_exactly_its_dashes():
+    """What the Load dialog offers is what the drawing gets.
+
+    ezdxf wants ``[total_length, dash, ...]`` and the command used to hand it
+    the bare dashes: the first dash was swallowed as the length, so
+    ACAD_ISO02W100 [12, -3] loaded as a lone gap and ISO04 as a dotted line.
+    A tester saw it as "I pick an ISO linetype and it loads as another one".
+    Every entry, not a sample: the classic ones a template preloads would
+    hide the bug for the ISO family, which is where it was seen.
+    """
+    document = _document()
+    names = [n for n in lt_ops.library_names() if n != "CONTINUOUS"]
+    lt_ops.LoadLinetypesCommand(names).do(document)
+    for name in names:
+        expected = lt_ops.library()[name][1]
+        assert lt_ops.pattern_of(document, name) == pytest.approx(expected), name
+        entry = document.doc.linetypes.get(name)
+        length = [t.value for t in entry.pattern_tags.tags if t.code == 40]
+        assert length == pytest.approx([sum(abs(d) for d in expected)]), (
+            f"{name}: group 40 is not the pattern length")
+
+
+def test_a_loaded_iso_linetype_draws_dashes_on_the_canvas():
+    """End to end: the bug looked like nothing had loaded, because ezdxf's
+    frontend draws a gap-only pattern as a solid line."""
+    from render.backend import build_scene
+
+    document = Document.new()
+    lt_ops.LoadLinetypesCommand(["ACAD_ISO02W100"]).do(document)
+    document.doc.modelspace().add_line(
+        (0, 0), (1000, 0), dxfattribs={"linetype": "ACAD_ISO02W100"})
+    scene = build_scene(document, "Model")
+    # 12 on, 3 off -> 1000 / 15 = 66.7 dashes, two vertices each
+    assert len(scene.lines.data) == 134, (
+        f"{len(scene.lines.data)} vertices: not the dashes of ISO02")
+
+
 # -- the drawn sample ----------------------------------------------------------
 
 def _ink(pixmap) -> int:
