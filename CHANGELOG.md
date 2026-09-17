@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Czech interface**, a community translation by Michal Josef Špaček
+  (PR #2): 817 of the interface's strings, under Tools ▸ Language. The
+  prompt options keep their English keys (`Uzavřít(C)`), so what you type
+  is what AutoCAD types; the strings that arrived after the translation
+  show in English until someone fills them in.
+- **Store page and desktop integration**: the Flatpak's page in GNOME
+  Software shows seven screenshots (it showed none), the running window is
+  tied to its launcher inside the sandbox (dock icon, the store's Open
+  button), and an AppImage offers on first run to add itself — icon,
+  launcher, .dwg/.dxf association — to the applications menu.
+
 ## v0.6.2 — 2026-09-16
 
 What a second tester found drawing to the norm (ISO / UNE): ten findings,

@@ -139,6 +139,7 @@ What works today:
   layout), and commands the way a Spanish AutoCAD spells them (`LINEA`,
   `BORRA`, `RECORTA`…) with English never stopping to work underneath.
   **A language is a folder** under `i18n/` — adding one needs no Python.
+  Czech (community, by Michal Josef Špaček, 64 % of the strings) ships too.
 - **Fast on real drawings**: dimensions appear the instant you place them
   (was seconds on big plans), regeneration ~2× on the heaviest surveys,
   layout tabs up to 2.5× with per-viewport culling, and the editing stalls
