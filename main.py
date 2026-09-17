@@ -8,6 +8,7 @@ Licensed under GPL-3.0-or-later. See LICENSE.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -231,8 +232,13 @@ def main() -> int:
     if gl_fallback == "failed":
         print("IngeCAD: no OpenGL 3.3 context on this machine — the canvas "
               "will not draw.", file=sys.stderr)
-    # Wayland matches the running window to its .desktop entry by this name.
-    app.setDesktopFileName("ingecad")
+    # Wayland matches the running window to its .desktop entry by this name
+    # -- and so does the dock icon. Inside the Flatpak the entry is the app
+    # id: a window claiming "ingecad" there matched nothing, so the shell
+    # showed it with a generic icon and GNOME Software's Open button, which
+    # waits for the launched app to appear, never saw it (Rafael's review,
+    # 2026-09-10: "el flatpak no tenía icono").
+    app.setDesktopFileName(os.environ.get("FLATPAK_ID") or "ingecad")
     from PySide6.QtGui import QIcon
 
     from core.paths import app_root
@@ -278,7 +284,45 @@ def main() -> int:
         opened = _startup_choice(window)
     if not opened:
         window.new_document()
+    _offer_appimage_integration(window)
     return app.exec()
+
+
+def _offer_appimage_integration(window) -> None:
+    """Running as an AppImage that is not in the applications menu yet:
+    offer to add it, once (Help > Add to the applications menu stays
+    available). The answer "not now" is remembered per AppImage path."""
+    from core.appimage import appimage_path, is_integrated
+
+    img = appimage_path()
+    if img is None or is_integrated(img):
+        return
+    from PySide6.QtCore import QSettings, QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    settings = QSettings()
+    if str(settings.value("appimage/declined", "")) == str(img):
+        return
+
+    def ask() -> None:
+        from core.i18n import tr
+
+        box = QMessageBox(window)
+        box.setWindowTitle(tr("Add IngeCAD to the applications menu?"))
+        box.setText(tr(
+            "You are running IngeCAD as an AppImage. Add a launcher with its "
+            "icon to your applications menu, and associate .dwg and .dxf "
+            "files with it? Nothing is copied: the launcher points at this "
+            "file, so keep it where it is."))
+        yes = box.addButton(tr("Add to menu"), QMessageBox.AcceptRole)
+        box.addButton(tr("Not now"), QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is yes:
+            window.add_appimage_to_menu()
+        else:
+            settings.setValue("appimage/declined", str(img))
+
+    QTimer.singleShot(600, ask)
 
 
 def _startup_choice(window) -> bool:

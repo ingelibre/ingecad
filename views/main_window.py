@@ -1230,6 +1230,15 @@ class MainWindow(QMainWindow):
         item(help_menu, tr("Help (ingecad.org)"), self._cmd_help, QKeySequence("F1"))
         item(help_menu, tr("Report a Problem..."), self._report_problem)
         help_menu.addSeparator()
+        # Only as an AppImage: put a launcher in the menu, or take it away.
+        from core.appimage import appimage_path
+
+        if appimage_path() is not None:
+            item(help_menu, tr("Add to the applications menu"),
+                 self.add_appimage_to_menu)
+            item(help_menu, tr("Remove from the applications menu"),
+                 self.remove_appimage_from_menu)
+            help_menu.addSeparator()
         item(help_menu, tr("About IngeCAD"), self._show_about)
 
         # PySide6 gotcha: QMenus returned by addMenu(title) are Python-owned
@@ -1675,6 +1684,28 @@ class MainWindow(QMainWindow):
         count = self.tools.select_all()
         self.command_line.echo(tr("{n} object(s) selected.", n=count))
         self.viewport.update()
+
+    def add_appimage_to_menu(self) -> None:
+        """Write the launcher + icon for the running AppImage."""
+        from core.appimage import appimage_path, integrate
+
+        img = appimage_path()
+        if img is None:
+            return
+        try:
+            f = integrate(img)
+        except OSError as exc:
+            QMessageBox.warning(self, tr("Add to the applications menu"),
+                                str(exc))
+            return
+        self.command_line.echo(tr("Launcher added: {path}", path=str(f)))
+
+    def remove_appimage_from_menu(self) -> None:
+        from core.appimage import remove
+
+        remove()
+        self.command_line.echo(
+            tr("Launcher removed from the applications menu."))
 
     def _cmd_help(self, *args) -> None:
         """HELP / F1: the product's site, where the documentation lives."""

@@ -44,6 +44,43 @@
   <url type="bugtracker">https://github.com/ingelibre/ingecad/issues</url>
   <url type="vcs-browser">https://github.com/ingelibre/ingecad</url>
   <content_rating type="oars-1.1"/>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://ingecad.org/images/screenshots/principal.jpeg</image>
+      <caption>A truss detail: layers manager, classic toolbars, properties bar and the Model/layout tabs</caption>
+      <caption xml:lang="es">El detalle de un tijeral: administrador de capas, barras clásicas, barra de propiedades y pestañas Modelo/presentación</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/dwg-colega.jpeg</image>
+      <caption>A colleague's DWG opened as sent: a house plan with furniture, dimensions and room names</caption>
+      <caption xml:lang="es">El DWG de un colega abierto tal cual: la planta de una vivienda con mobiliario, cotas y los nombres de cada ambiente</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/planos-grandes.jpeg</image>
+      <caption>A 10 847-entity survey plan with its contour and profile sheets</caption>
+      <caption xml:lang="es">Un plano topográfico de 10 847 entidades con sus láminas de curvas de nivel y perfiles</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/comandos.jpeg</image>
+      <caption>A 200-layer structural plan: the command window at the bottom, dockable toolbars and the status bar</caption>
+      <caption xml:lang="es">Un plano de estructuras de 200 capas: la ventana de comandos abajo, las barras acoplables y la barra de estado</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/presentacion.jpeg</image>
+      <caption>A layout: the A3 sheet with the plan inside a viewport at scale, Model and layout tabs below</caption>
+      <caption xml:lang="es">Una presentación: la hoja A3 con la planta dentro de una ventana gráfica a escala, y las pestañas Modelo y presentación abajo</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/topografia.jpeg</image>
+      <caption>Topography: a lot with bearings and distances, its construction chart and contours</caption>
+      <caption xml:lang="es">Topografía: un lote con rumbos y distancias, su cuadro de construcción y curvas de nivel</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://ingecad.org/images/screenshots/terreno.jpeg</image>
+      <caption>Terrain: the satellite image under a survey, with the source's attribution on the plan</caption>
+      <caption xml:lang="es">Terreno: la imagen satelital bajo un levantamiento, con la atribución de la fuente en el plano</caption>
+    </screenshot>
+  </screenshots>
   <releases>
     <release version="0.6.2" date="2026-09-16">
       <description>

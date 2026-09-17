@@ -76,6 +76,7 @@ modules:
       - install -Dm755 packaging/flatpak/flatpak-launcher.sh ${FLATPAK_DEST}/bin/ingecad
       - install -Dm644 packaging/flatpak/${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
       - install -Dm644 resources/icons/ingecad_256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
+      - install -Dm644 resources/ingecad.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
       - install -Dm644 packaging/flatpak/${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
       # 4. MIME types (.dwg / .dxf) so double-click opens IngeCAD, with the
       #    branded document icons. Flatpak only exports icons whose file
