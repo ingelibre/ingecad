@@ -33,6 +33,12 @@ and IngePresupuestos (construction budgeting).
 
 ## Status — v0.6.5
 
+## Installation for Windows
+If you are looking for the compiled Windows version of IngeCAD:
+1. Go to the **[Releases](../../releases/latest)** tab of the repository.
+2. Download the automatic installer `IngeCAD-1.0-Windows-Installer.exe`.
+3. Run the installer (it will be installed by default in `C:Program FilesIngeCAD`).
+
 What works today:
 
 - **Topography plugin** (menu *Topography*): survey points from the total
