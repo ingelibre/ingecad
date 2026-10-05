@@ -1,0 +1,27 @@
+{
+  "_": "Nomes de comandos portugueses do plugin Terreno. Os nomes ingleses continuam sempre a funcionar.",
+  "GEOREF": {
+    "name": "GEORREFERENCIAR"
+  },
+  "LATLON": {
+    "name": "GEOGRAFICAS"
+  },
+  "DEMPOINTS": {
+    "name": "PONTOSDEM"
+  },
+  "DEMPROFILE": {
+    "name": "PERFILDEM"
+  },
+  "SATIMAGE": {
+    "name": "IMAGEMSATELITE"
+  },
+  "KMLIN": {
+    "name": "IMPORTARKML"
+  },
+  "KMLOUT": {
+    "name": "EXPORTARKML"
+  },
+  "KMLOVERLAY": {
+    "name": "SOBREPORDESENHO"
+  }
+}
