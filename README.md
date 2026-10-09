@@ -1,5 +1,32 @@
 # IngeCAD
 
+## Windows AI + MCP bundle (community fork)
+
+This fork adds a Windows x64 offline installer with IngeCAD 0.6.5, an application-local
+Python runtime, patched LibreDWG converters, and IngeCAD AI + MCP 0.3.2.
+It creates per-user Desktop/Start Menu shortcuts and machine-specific MCP setup examples.
+
+**[Download the full Windows 0.3.2 installer](https://github.com/buildsmart888/ingecad/releases/tag/v0.6.5-ai-mcp-0.3.2)** ·
+[Thai installation guide](windows-bundle/README-TH.txt) · [AI/MCP documentation](ingecad-mcp/README.md) ·
+[Build instructions](windows-bundle/BUILD.txt)
+
+New installations can use the full 0.3.2 setup directly. Existing 0.3.1 installations
+can use the small 0.3.2 hotfix from the same release after closing IngeCAD and its MCP client.
+This version fixes array-shaped provider errors hiding the original HTTP status/message
+and normalizes Gemini model IDs by removing the `models/` prefix.
+
+The native AI sidebar includes seven provider presets, protected key storage, model discovery,
+connection testing, chat/photo/viewport inputs, CAD tool calls and a copyable MCP setup guide.
+The external MCP server exposes 19 tools through stdio; provider credentials are configured
+in the AI client separately. The installer does not contain API keys or overwrite client configs.
+
+Verified with a separate installation directory on the development Windows machine:
+runtime imports, shortcuts, generated paths, native Qt/CAD, real stdio MCP calls,
+Thai-path DWG roundtrip, A3/PDF export and uninstall preserving a user-owned drawing fixture.
+The installer is unsigned; a clean second Windows machine has not yet been tested.
+This is a community Windows build, separate from upstream's official Linux packaging.
+The upstream documentation follows below.
+
 **[ingecad.org](https://ingecad.org)** · CAD 2D libre para Linux, con DWG de fábrica.
 
 **Free 2D CAD for Linux, in the spirit of classic AutoCAD.**
@@ -321,6 +348,16 @@ association on Linux:
 ```bash
 ./scripts/install-desktop.sh   # then log out/in once
 ```
+
+## GO Structural Analysis for IngeTrazo
+
+The [GO Structural Analysis v0.1.3 extension](extensions/go-structural-analysis/README.md)
+provides 2D beam, frame and truss analysis through an isolated PyNiteFEA worker.
+It targets **IngeTrazo Plugin API v2** and has its own installer; it is distributed
+here as a companion extension. Includes 21 editable examples, viewport diagrams,
+result inspection, separate reaction arrows and moment symbols, and verification
+evidence. See the [example gallery](extensions/go-structural-analysis/EXAMPLES.md)
+and [test results](extensions/go-structural-analysis/TEST_RESULTS_v0.1.3.md).
 
 ## License
 

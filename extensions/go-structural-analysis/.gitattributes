@@ -1,0 +1,1 @@
+artifacts/installer/**/*.log -text -diff
