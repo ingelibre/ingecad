@@ -20,7 +20,7 @@
   "A group name is up to 31 characters of letters, digits, $, - and _, with no spaces.": "Um nome de grupo tem até 31 caracteres entre letras, dígitos, $, - e _, sem espaços.",
   "A style named {name} already exists.": "Já existe um estilo chamado {name}.",
   "ACI color {n}": "Cor ACI {n}",
-  "ATTSYNC block {name}? [Yes/No] <Yes>:": "ATTSYNC do bloco {name}? [Sim(S)/Não(N)] <Sim>:",
+  "ATTSYNC block {name}? [Yes/No] <Yes>:": "ATTSYNC do bloco {name}? [Sim(Y)/Não(N)] <Sim>:",
   "ATTSYNC complete: {n} reference(s) of \"{name}\" updated.": "ATTSYNC concluído: {n} referência(s) de \"{name}\" atualizada(s).",
   "About IngeCAD": "Acerca do IngeCAD",
   "Add IngeCAD to the applications menu?": "Adicionar o IngeCAD ao menu de aplicações?",
