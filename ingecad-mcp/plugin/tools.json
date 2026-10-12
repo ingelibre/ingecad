@@ -1,0 +1,730 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "get_status",
+      "description": "Read document revision, units, active space, history and layouts.",
+      "parameters": {
+        "properties": {},
+        "title": "get_statusArguments",
+        "type": "object",
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_drawing_tables",
+      "description": "Read drawing layers, text styles, dimension styles and current style names before creating or editing entities.",
+      "parameters": {
+        "properties": {},
+        "title": "get_drawing_tablesArguments",
+        "type": "object",
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "query_entities",
+      "description": "Read entity handles and DXF attributes, with pagination and optional filters.",
+      "parameters": {
+        "properties": {
+          "space": {
+            "default": "Model",
+            "title": "Space",
+            "type": "string"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Type"
+          },
+          "layer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Layer"
+          },
+          "limit": {
+            "default": 100,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "title": "query_entitiesArguments",
+        "type": "object",
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_layer",
+      "description": "Create an undoable drawing layer. color is AutoCAD ACI 1..255.",
+      "parameters": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "color": {
+            "default": 7,
+            "title": "Color",
+            "type": "integer"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "create_layerArguments",
+        "type": "object"
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_text_style",
+      "description": "Create an undoable text style referencing an installed TTF filename. Tahoma supports Thai on this Windows installation.",
+      "parameters": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "font": {
+            "default": "tahoma.ttf",
+            "title": "Font",
+            "type": "string"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "create_text_styleArguments",
+        "type": "object"
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_dimension_style",
+      "description": "Create an undoable dimension style. Heights use model units. measurement_factor=0.001 displays mm geometry as metres; it does not scale geometry.",
+      "parameters": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "text_style": {
+            "title": "Text Style",
+            "type": "string"
+          },
+          "text_height": {
+            "title": "Text Height",
+            "type": "number"
+          },
+          "arrow_size": {
+            "title": "Arrow Size",
+            "type": "number"
+          },
+          "measurement_factor": {
+            "default": 1,
+            "title": "Measurement Factor",
+            "type": "number"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "name",
+          "text_style",
+          "text_height",
+          "arrow_size"
+        ],
+        "title": "create_dimension_styleArguments",
+        "type": "object"
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_entities",
+      "description": "Create a single undoable batch (1..1000). Specs: LINE(start,end), CIRCLE(center,radius), LWPOLYLINE(points,closed), TEXT(position,text,height,rotation,style), DIMENSION(start,end,location,angle,text,dimstyle). Each accepts an existing layer (default 0). Points are [x,y] or [x,y,z]; sizes use drawing units.",
+      "parameters": {
+        "properties": {
+          "entities": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "LINE",
+                    "CIRCLE",
+                    "LWPOLYLINE",
+                    "TEXT",
+                    "DIMENSION"
+                  ]
+                },
+                "layer": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "height": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "rotation": {
+                  "type": "number"
+                },
+                "radius": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "start": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 2,
+                  "maxItems": 3
+                },
+                "end": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 2,
+                  "maxItems": 3
+                },
+                "center": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 2,
+                  "maxItems": 3
+                },
+                "points": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "minItems": 2,
+                    "maxItems": 3
+                  },
+                  "minItems": 2
+                },
+                "closed": {
+                  "type": "boolean"
+                },
+                "position": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 2,
+                  "maxItems": 3
+                },
+                "location": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 2,
+                  "maxItems": 3
+                },
+                "angle": {
+                  "type": "number"
+                },
+                "style": {
+                  "type": "string"
+                },
+                "dimstyle": {
+                  "type": "string"
+                }
+              }
+            },
+            "minItems": 1,
+            "maxItems": 1000
+          },
+          "space": {
+            "default": "Model",
+            "title": "Space",
+            "type": "string"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "entities"
+        ],
+        "title": "create_entitiesArguments",
+        "type": "object"
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "update_entities",
+      "description": "Undoable update of existing handles in one space. Supported attributes: layer,color,linetype,lineweight,text,height,rotation,radius,start,end,center,insert; must be valid for every target.",
+      "parameters": {
+        "properties": {
+          "handles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Handles",
+            "type": "array"
+          },
+          "attributes": {
+            "type": "object",
+            "properties": {
+              "layer": {
+                "type": "string"
+              },
+              "color": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 256
+              },
+              "linetype": {
+                "type": "string"
+              },
+              "lineweight": {
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              },
+              "height": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "rotation": {
+                "type": "number"
+              },
+              "radius": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "start": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 2,
+                "maxItems": 3
+              },
+              "end": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 2,
+                "maxItems": 3
+              },
+              "center": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 2,
+                "maxItems": 3
+              },
+              "insert": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 2,
+                "maxItems": 3
+              }
+            },
+            "additionalProperties": false,
+            "minProperties": 1
+          },
+          "space": {
+            "default": "Model",
+            "title": "Space",
+            "type": "string"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "handles",
+          "attributes"
+        ],
+        "title": "update_entitiesArguments",
+        "type": "object"
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "delete_entities",
+      "description": "Delete explicit handles as one undoable operation. Rejects wrong-space handles.",
+      "parameters": {
+        "properties": {
+          "handles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Handles",
+            "type": "array"
+          },
+          "space": {
+            "default": "Model",
+            "title": "Space",
+            "type": "string"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "handles"
+        ],
+        "title": "delete_entitiesArguments",
+        "type": "object"
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_layout",
+      "description": "Create paper layout with border, title block and locked viewport. Default A3 landscape, 1:75. center is in model units. model_unit_mm is required for unitless/unsupported drawings; mm/cm/m drawing units are detected.",
+      "parameters": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project": {
+            "default": "",
+            "title": "Project",
+            "type": "string"
+          },
+          "title": {
+            "default": "Plan",
+            "title": "Title",
+            "type": "string"
+          },
+          "sheet": {
+            "default": "S-01",
+            "title": "Sheet",
+            "type": "string"
+          },
+          "width_mm": {
+            "default": 420,
+            "title": "Width Mm",
+            "type": "number"
+          },
+          "height_mm": {
+            "default": 297,
+            "title": "Height Mm",
+            "type": "number"
+          },
+          "scale": {
+            "default": 75,
+            "title": "Scale",
+            "type": "number"
+          },
+          "center": {
+            "default": [
+              0,
+              0
+            ],
+            "items": {
+              "type": "number"
+            },
+            "title": "Center",
+            "type": "array"
+          },
+          "model_unit_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model Unit Mm"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "create_layoutArguments",
+        "type": "object"
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "switch_layout",
+      "description": "Switch to Model or an existing paper layout.",
+      "parameters": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "switch_layoutArguments",
+        "type": "object"
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "undo",
+      "description": "Undo the latest operation, including edits made manually by the user.",
+      "parameters": {
+        "properties": {
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "title": "undoArguments",
+        "type": "object",
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "redo",
+      "description": "Redo the latest undone operation.",
+      "parameters": {
+        "properties": {
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "title": "redoArguments",
+        "type": "object",
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "zoom_extents",
+      "description": "Fit the current space into the IngeCAD viewport.",
+      "parameters": {
+        "properties": {},
+        "title": "zoom_extentsArguments",
+        "type": "object",
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "save_drawing",
+      "description": "Save to an absolute .dxf/.dwg path. Existing output requires overwrite=true. Returns converter warnings; DWG fidelity must be checked. This updates the document save path.",
+      "parameters": {
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "overwrite": {
+            "default": false,
+            "title": "Overwrite",
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "save_drawingArguments",
+        "type": "object"
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "export_pdf",
+      "description": "Export an existing paper layout as vector PDF at its exact sheet size. Requires an absolute path.",
+      "parameters": {
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "layout": {
+            "title": "Layout",
+            "type": "string"
+          },
+          "overwrite": {
+            "default": false,
+            "title": "Overwrite",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "layout"
+        ],
+        "title": "export_pdfArguments",
+        "type": "object"
+      }
+    }
+  }
+]

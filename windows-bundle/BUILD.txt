@@ -1,0 +1,33 @@
+Build project for IngeCAD AI Bundle (GPL-3.0-or-later)
+
+This builder uses the verified local IngeCAD 0.6.5 source installation and the
+ingecad-mcp 0.3.2 workspace as its inputs. It never copies a venv wholesale.
+Dependencies are selected from distribution metadata, including requested extras,
+and copied from RECORD allowlists into an application-local embeddable runtime.
+
+Inputs expected:
+ - %LOCALAPPDATA%\Programs\IngeCAD source tree, .venv and build/windows toolchain
+ - IngeCAD build/windows/libredwg-0.14.8597 retained patched source and original tar
+ - Adjacent ingecad-mcp directory with .venv, server source and plugin source
+ - downloads/python-3.12.10-embed-amd64.zip from Python.org; SHA256 checked by builder
+
+Commands (from the parent workspace; no admin required):
+  ingecad-mcp\.venv\Scripts\python.exe windows-bundle\build.py
+  ingecad-mcp\.venv\Scripts\python.exe windows-bundle\compile.py
+
+build.py stages allowlisted app directories, 40 dependency distributions, patched
+DWG binaries and corresponding source. It builds the relocatable native launcher.
+compile.py reads bundle-manifest.json, generates explicit file installation and
+uninstall lists, and compiles setup.nsi with the existing w64devkit NSIS compiler.
+The installer creates only per-user shortcuts and its own uninstall registration.
+It does not change global PATH, file defaults or existing AI client configuration.
+
+QA:
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File windows-bundle\verify_install.ps1 -Installer windows-bundle\dist\IngeCAD-AI-Setup-0.6.5-0.3.2-x64.exe -Target "<absolute path inside windows-bundle\test-installed\new-folder>"
+Each QA run requires a new target folder. It uses a separate Test shortcut name,
+uninstall registry key, Qt INI settings and MCP IPC root. It exercises real Qt,
+19 stdio MCP tools, Thai-path DWG roundtrip, A3/PDF and safe uninstall.
+No cloud API key or network call is required for installation or these tests.
+
+Before releasing a later build, retest the final EXE and regenerate SHA256SUMS.txt.
+Clean physical/VM Windows installations should be tested before a broad release.

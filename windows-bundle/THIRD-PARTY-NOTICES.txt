@@ -1,0 +1,35 @@
+IngeCAD AI Bundle — community Windows source build, 2026-10-06
+
+IngeCAD v0.6.5 — Marco Sumari Tellez and contributors — GPL-3.0-or-later.
+Source: https://github.com/ingelibre/ingecad/tree/v0.6.5
+Commit: b58499c6ca1ce9c106b69bb29e8d6ffcb1e9676c
+Full application Python source is installed alongside the runtime. LICENSE is included.
+Local additions: relocatable launcher/entry scripts and IngeCAD AI/MCP plugin.
+
+IngeCAD AI + MCP 0.3.1 — GPL-3.0-or-later. Full source is in plugins/ingecad_mcp and mcp.
+Launcher/configure/build scripts supplied with distribution project — GPL-3.0-or-later.
+
+Python 3.12.10 — Python Software Foundation license. Runtime LICENSE.txt included.
+Runtime: https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip
+Source: https://www.python.org/ftp/python/3.12.10/Python-3.12.10.tar.xz
+
+LibreDWG 0.14.8597 — GNU project/LibreDWG contributors — GPL-3.0-or-later.
+Bundled binaries are statically linked builds with IngeCAD patches and Windows UTF-8 manifest.
+Corresponding patched source is supplied in sources/libredwg-0.14.8597-patched.tar.xz.
+Build instructions and UTF-8 resource files are in sources. LIBREDWG-LICENSE.txt included.
+Upstream: https://github.com/LibreDWG/libredwg
+Toolchain used: w64devkit 2.10.0 / GCC 16.2.0 https://github.com/skeeto/w64devkit
+
+PySide6/Shiboken6 and Qt 6.11.2 — The Qt Company and contributors.
+These are separate, replaceable shared libraries; licenses shipped in their wheel directories.
+Upstream source: https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.11.2-src/
+Qt source: https://download.qt.io/archive/qt/6.11/6.11.2/single/
+Use the license files supplied for the specific Qt modules you redistribute or modify.
+
+Other Python dependencies: see dependency-versions.txt and each *.dist-info directory
+under runtime/site-packages for copyright/license metadata and license text.
+Dependencies were copied from installed distribution RECORD allowlists; no user data or keys.
+
+NSIS installer engine — zlib/libpng license, with bundled compressor licenses.
+https://nsis.sourceforge.io/License
+Compiler supplied by the existing w64devkit toolchain; compiler itself is not installed on clients.

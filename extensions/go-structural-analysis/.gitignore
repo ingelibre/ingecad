@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+.pytest_cache/
+dist/
+go_structural_analysis/worker_config.json
+backups/
+artifacts/installer/test-*/plugins/
+artifacts/installer/test-*/user-model.igz
+artifacts/installer/test-*/installed app*/
+artifacts/installer/test-*/blocked-install/
