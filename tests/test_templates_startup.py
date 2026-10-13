@@ -17,6 +17,9 @@ def _isolated_config(tmp_path, monkeypatch):
     """Never touch the developer's real recent list or thumbnail cache."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    # and their Windows counterparts, which core.paths reads instead
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
     yield
 
 
@@ -193,6 +196,9 @@ def test_double_clicking_a_template_returns_it_and_is_remembered(qapp):
         assert str(QSettings().value(SETTING_TEMPLATE)) == "mm"
     finally:
         dialog.close()
+        # left at "mm", every later new_document() in the same process starts
+        # in millimetres (test_text_sizes_in_metres failed after this one)
+        QSettings().remove(SETTING_TEMPLATE)
 
 
 def test_a_recent_drawing_shows_up_in_the_startup_window(qapp, tmp_path):

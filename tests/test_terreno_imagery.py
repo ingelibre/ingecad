@@ -19,6 +19,7 @@ from PIL import Image
 from core.commands import History
 from core.document import Document
 from core.georef import Georef, SetGeorefCommand
+from core.paths import user_cache_dir
 from plugins.terreno import actions, datum, imagery, tiles
 from tools.base import ToolContext
 
@@ -211,9 +212,11 @@ def test_insert_satellite_is_one_undo_step_with_clip_caption_and_draw_order(tmp_
 
 def test_an_untitled_drawing_keeps_the_image_under_the_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))   # Windows
     document = Document.new()
     path = actions.image_path(document, "esri_imagery", ".jpg")
-    assert path == tmp_path / "IngeCAD" / "satimage" / "untitled-esri_imagery.jpg"
+    assert path == user_cache_dir() / "satimage" / "untitled-esri_imagery.jpg"
+    assert user_cache_dir().is_relative_to(tmp_path)
 
 
 # -- the tool ---------------------------------------------------------------------------------------
@@ -254,6 +257,7 @@ def test_satimage_tool_asks_zoom_source_and_clip_then_inserts(tmp_path, monkeypa
     from plugins.terreno.tools import SatImageTool
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))   # Windows
     h = _Harness(tmp_path)
     lot = h.msp.add_lwpolyline(TRIANGLE, close=True)
     tool = SatImageTool(h.ctx)
@@ -275,7 +279,7 @@ def test_satimage_tool_asks_zoom_source_and_clip_then_inserts(tmp_path, monkeypa
     assert image.dxf.layer == "TERRENO-SAT" and image.dxf.flags & 4
     assert [v for _c, v in image.get_xdata("INGECAD")][1] == "osm"
     path = Path(image.image_def.dxf.filename)
-    assert path.is_file() and path.parent == tmp_path / "IngeCAD" / "satimage" and path.suffix == ".png"
+    assert path.is_file() and path.parent == user_cache_dir() / "satimage" and path.suffix == ".png"
     assert any(line.startswith("Satellite image ") and "px at " in line for line in h.echoed)
     assert h.echoed[-1].endswith("© OpenStreetMap contributors")
     assert h.msp.query("TEXT")[0].dxf.text == "Imagery: © OpenStreetMap contributors"
@@ -287,6 +291,7 @@ def test_satimage_tool_refuses_too_many_tiles_and_needs_a_georef(tmp_path, monke
     from plugins.terreno.tools import SatImageTool
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))   # Windows
     h = _Harness(tmp_path)
     tool = SatImageTool(h.ctx)
     tool.start()
@@ -307,6 +312,7 @@ def test_the_window_runs_satimage_and_the_layers_tab_follows(qapp, tmp_path, mon
     from views.main_window import MainWindow
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))   # Windows
     win = MainWindow()
     try:
         assert "SATIMAGE" in win.dispatcher._commands
