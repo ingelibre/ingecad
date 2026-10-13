@@ -124,6 +124,7 @@ class OptionsDialog(QDialog):
 
     # -- tabs -----------------------------------------------------------------
     def _files_tab(self) -> QWidget:
+        from core import templates as templates_mod
         from views.startup_dialog import SETTING_TEMPLATE
 
         page = QWidget(self)
@@ -132,7 +133,10 @@ class OptionsDialog(QDialog):
         for label, code in ((tr("Millimeters"), "mm"), (tr("Centimeters"), "cm"),
                             (tr("Meters"), "m")):
             self.template.addItem(label, code)
-        current = str(QSettings().value(SETTING_TEMPLATE, "mm"))
+        # unset, it is the template new drawings really start from (metres):
+        # showing "mm" here made a plain OK switch them to millimetres
+        current = str(QSettings().value(SETTING_TEMPLATE,
+                                        templates_mod.DEFAULT_TEMPLATE))
         index = self.template.findData(current)
         self.template.setCurrentIndex(index if index >= 0 else 0)
         form.addRow(tr("New drawings start in:"), self.template)
