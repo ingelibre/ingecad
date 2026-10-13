@@ -11,6 +11,7 @@ which the portal that actually draws the dialog cannot see.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -44,8 +45,9 @@ def test_the_document_portal_mount_is_not_a_folder_to_return_to():
     assert file_dialogs._usable("/run/user/1000/doc") is None
     # ...while the runtime directory around it is an ordinary folder. Without
     # this half the test would pass on a guard that rejected all of /run.
-    runtime = Path("/run/user") / str(__import__("os").getuid())
-    if runtime.is_dir():
+    os = __import__("os")
+    runtime = Path("/run/user") / str(os.getuid()) if hasattr(os, "getuid") else None
+    if runtime is not None and runtime.is_dir():
         assert file_dialogs._usable(runtime) == runtime.resolve()
 
 
@@ -117,6 +119,8 @@ def test_open_dialog_is_given_a_real_directory(tmp_path, monkeypatch):
 
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="the document portal and its xattrs are Linux-only")
 def test_a_document_portal_file_comes_back_as_its_host_path(tmp_path, monkeypatch):
     # #66: in the Flatpak the chooser handed XATTACH /run/flatpak/doc/<id>/...,
     # that path went into the drawing, and after a restart it pointed nowhere.
@@ -174,7 +178,7 @@ def test_only_the_helper_calls_qfiledialog_directly():
     guarantees an absolute starting directory the host can actually show.
     """
     offenders = [str(p) for p in _sources()
-                 if p.name != "file_dialogs.py" and _DIALOG_CALL.search(p.read_text())]
+                 if p.name != "file_dialogs.py" and _DIALOG_CALL.search(p.read_text(encoding="utf-8"))]
     assert offenders == [], (
         "call views.file_dialogs.get_open_file / get_save_file instead: "
         + ", ".join(offenders))

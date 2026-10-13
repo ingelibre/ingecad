@@ -14,6 +14,7 @@ from core.document import Document
 @pytest.fixture
 def styles_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path))   # Windows
     return plotstyles.folder()
 
 
