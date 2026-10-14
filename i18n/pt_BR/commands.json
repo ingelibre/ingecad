@@ -1,10 +1,10 @@
 {
   "_comment": [
     "Nomes de comandos localizados, como um AutoCAD português os escreve --",
-    "verificados em 2026-10-05 contra a ajuda em português da Autodesk (cada",
-    "página de comando tem como título o nome localizado, p. ex. POL (comando))",
-    "e contra um acad.pgp português. Um comando que o AutoCAD PT mantém em",
-    "inglês (RECTANG, DIST, LIST) não tem entrada aqui: o nome inglês já",
+    "verificados em 2026-10-14 contra a ajuda em português da Autodesk disponível",
+    "em https://www.autodesk.com/br/shortcuts/autocad (cada página de comando tem",
+    "como título o nome localizado, p. ex. POL (comando)). Um comando que o AutoCAD BR",
+    "mantém em inglês (RECTANG, DIST, LIST) não tem entrada aqui: o nome inglês já",
     "funciona. Tampouco o PLINE: o nome português é POL, que o acad.pgp",
     "inglês já atribui ao POLYGON -- o inglês ganha; um utilizador",
     "português acrescenta 'POL, *PLINE' ao seu acad.pgp (Ferramentas >",
@@ -26,7 +26,7 @@
   "POINT":     {"name": "PONTO"},
   "TEXT":      {"name": "TEXTO"},
   "MTEXT":     {"name": "TEXTOM"},
-  "HATCH":     {"name": "SOMBREADO"},
+  "HATCH":     {"name": "HACHURA"},
   "TABLE":     {"name": "TABELA"},
   "REVCLOUD":  {"name": "NUVEMREV"},
 
@@ -80,7 +80,7 @@
   "SAVE":      {"name": "SALVAR"},
   "QSAVE":     {"name": "SALVARR"},
   "SAVEAS":    {"name": "SALVARCOMO"},
-  "PLOT":      {"name": "TRACAR"},
+  "PLOT":      {"name": "PLOTAR"},
   "PRINT":     {"name": "IMPRIMIR"},
   "QUIT":      {"name": "SAIR"},
   "OPTIONS":   {"name": "OPCOES"},
