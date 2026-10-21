@@ -93,13 +93,16 @@ def test_the_rasterized_page_has_a_white_background(qapp, tmp_path):
     pdf.load(str(pdf_path))
     px = QSize(200, 283)
     rendered = pdf.render(0, px)
+    # sampled in the corner away from the text: at (5, 5) Windows' default
+    # font already puts the "I" of INFORME there
+    blank = (px.width() - 5, px.height() - 5)
     # the raw render IS transparent where there is no ink (the trap)
-    assert rendered.pixelColor(5, 5).alpha() == 0
+    assert rendered.pixelColor(*blank).alpha() == 0
     # the composite (same code as PdfAttachTool) is opaque white there
     image = QImage(px, QImage.Format_RGB32)
     image.fill(0xFFFFFFFF)
     p2 = QPainter(image)
     p2.drawImage(0, 0, rendered)
     p2.end()
-    color = image.pixelColor(5, 5)
+    color = image.pixelColor(*blank)
     assert (color.red(), color.green(), color.blue()) == (255, 255, 255)
