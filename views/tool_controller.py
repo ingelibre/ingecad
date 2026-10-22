@@ -2490,31 +2490,40 @@ class ToolController(QObject):
 
     def _preview_scene_for(self, command):
         """Create the command's entity, picture it, remove it: no revision
-        bump, no dirty flag, no history -- the document is as it was."""
+        bump, no dirty flag, no history -- the document is as it was.
+
+        The entity is built in a scratch anonymous block, never in the
+        drawing's space: the cache warmer and the background regen walk that
+        space from their own threads, and a preview dimension caught there
+        for a moment stayed behind -- pickable but invisible in the pick
+        index, or visible but unpickable in the regen scene. The revision
+        does not change, so both results were adopted as current."""
         from render.backend import build_scene_for_entities
 
         document = self.window.document
         factory = getattr(command, "_factory", None)
         if factory is None:
             return None
-        space = command.space(document)
-        override = factory(space, document)
-        override.render()
-        entity = override.dimension
-        block = entity.dxf.get("geometry", None)
+        blocks = document.doc.blocks
+        scratch = blocks.new_anonymous_block("U")
+        block = None
         try:
+            override = factory(scratch, document)
+            override.render()
+            entity = override.dimension
+            block = entity.dxf.get("geometry", None)
             current = document.doc.header.get("$CLAYER", "0")
             if current in document.doc.layers:
                 entity.dxf.layer = current
             return build_scene_for_entities(document, [entity], self._flatten,
                                             self.canvas_space())
         finally:
-            space.delete_entity(entity)
-            if block and block in document.doc.blocks:
-                try:
-                    document.doc.blocks.delete_block(block, safe=False)
-                except Exception:
-                    pass
+            for name in (block, scratch.name):
+                if name and name in blocks:
+                    try:
+                        blocks.delete_block(name, safe=False)
+                    except Exception:
+                        pass
 
     def _preview_now(self) -> None:
         """Rebuild the rendered preview for the current cursor (a tool step
