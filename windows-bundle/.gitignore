@@ -1,0 +1,12 @@
+stage/
+dist/
+downloads/
+test-stage/
+test-installed/
+test-installed-proof/
+compile.log
+payload-files.nsh
+payload-uninstall.nsh
+test-installer-verification.json
+__pycache__/
+*.pyc
