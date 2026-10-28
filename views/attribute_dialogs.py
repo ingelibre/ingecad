@@ -8,6 +8,8 @@
   undoable Command.
 * :class:`InsertAttributesDialog` -- the Edit Attributes dialog INSERT shows
   when ATTDIA is 1: one line per prompted definition with its default.
+* :class:`EditAttDefDialog` -- DDEDIT on a loose attribute DEFINITION (p.
+  523): its tag, prompt and default.
 """
 from __future__ import annotations
 
@@ -232,3 +234,39 @@ class InsertAttributesDialog(QDialog):
 
     def values(self) -> dict:
         return {str(a.dxf.tag): e.text() for a, e in zip(self.attdefs, self.edits)}
+
+
+class EditAttDefDialog(QDialog):
+    """Edit Attribute Definition (DDEDIT, p. 523): the double-click on an
+    attribute definition edits its tag, prompt and default value."""
+
+    def __init__(self, window, attdef) -> None:
+        super().__init__(window)
+        self.setWindowTitle(tr("Edit Attribute Definition"))
+        self.attdef = attdef
+        root = QVBoxLayout(self)
+        form = QFormLayout()
+        self.tag = QLineEdit(str(attdef.dxf.get("tag", "")), self)
+        self.prompt = QLineEdit(str(attdef.dxf.get("prompt", "") or ""), self)
+        self.default = QLineEdit(att.default_of(attdef), self)
+        form.addRow(tr("Tag:"), self.tag)
+        form.addRow(tr("Prompt:"), self.prompt)
+        form.addRow(tr("Default:"), self.default)
+        root.addLayout(form)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+        self.tag.selectAll()
+
+    def _accept(self) -> None:
+        if att.normal_tag(self.tag.text()):
+            self.accept()
+        else:
+            self.tag.setFocus()       # a definition needs its tag
+
+    def command(self):
+        """The edit as one undoable Command, or None when nothing changed."""
+        return att.edit_definition(self.attdef, self.tag.text(),
+                                   self.prompt.text(), self.default.text())

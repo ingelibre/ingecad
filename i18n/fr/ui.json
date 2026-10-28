@@ -662,7 +662,7 @@
   "Enter an option [?/Make/Set/New/Rename/ON/OFF/Color/Ltype/LWeight/Plot/Freeze/Thaw/LOck/Unlock/Description]:": "Entrez une option [?/Créer(M)/Définir(S)/Nouveau(N)/Renommer(R)/Activer(ON)/Désactiver(OFF)/Couleur(C)/Type de ligne(L)/Épaisseur de ligne(LW)/Tracer(P)/Geler(F)/Dégeler(T)/Verrouiller(LO)/Déverrouiller(U)/Description(D)] :",
   "Enter an option [Inscribed in circle/Circumscribed about circle] <{m}>:": "Entrez une option [Inscrit dans le cercle(I)/Circonscrit au cercle(C)] <{m}> :",
   "Enter an option [Left/Center/Right/Align/Middle/Fit/TL/TC/TR/ML/MC/MR/BL/BC/BR]:": "Entrez une option [Gauche(L)/Centre(C)/Droite(R)/Aligné(A)/Milieu(M)/Ajusté(F)/TL/TC/TR/ML/MC/MR/BL/BC/BR] :",
-  "Enter an option [{first}/Width/Reverse/Undo/eXit] <eXit>:": "Entrez une option [{first}/Largeur(W)/Inverser(R)/Annuler(U)/Quitter(X)] <Quitter> :",
+  "Enter an option [{first}/Join/Width/Reverse/Undo/eXit] <eXit>:": "Entrez une option [{first}/Joindre(J)/Largeur(W)/Inverser(R)/Annuler(U)/Quitter(X)] <Quitter> :",
   "Enter angle of xline (0) or [Reference]:": "Entrez l'angle de la ligne de construction (0) ou [Référence(R)] :",
   "Enter angle of xline <0>:": "Entrez l'angle de la ligne de construction <0> :",
   "Enter area of rectangle in current units <{v:g}>:": "Entrez l'aire du rectangle dans les unités courantes <{v:g}> :",

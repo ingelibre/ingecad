@@ -1155,6 +1155,12 @@ class CreateBlockCommand(Command):
             msp.unlink_entity(e)
         self.insert = msp.add_blockref(
             self.block_name, (self.base[0], self.base[1]))
+        # Its attributes, at their defaults: a reference carries its own
+        # ATTRIBs, and without them the definitions just packed vanished
+        # from the drawing -- Rafael's "Rafa" was nowhere to be seen (#88)
+        from core.attributes import attach_attribs
+
+        attach_attribs(self.insert)
         document.dirty = True
 
     def undo(self, document) -> None:
@@ -1664,7 +1670,7 @@ def _current_dimstyle(document) -> str:
     return name if name in document.doc.dimstyles else "Standard"
 
 
-def linear_dim_angle(p1, p2, location) -> float:
+def linear_dim_angle(p1, p2, location, frame=None) -> float:
     """DIMLINEAR's automatic horizontal/vertical choice.
 
     AutoCAD never auto-picks a zero measurement: origins sharing an X give
@@ -1674,7 +1680,14 @@ def linear_dim_angle(p1, p2, location) -> float:
     cursor leaves the points' box on; inside the box, the closer axis.
     ONE source of truth: the tool's preview and the created entity must
     never disagree (they used to hold separate copies of the rule).
+
+    ``frame`` is the UCS: horizontal and vertical are its X and Y, and the
+    answer is a world angle (#91).
     """
+    if frame is not None and not frame.is_world:
+        local = linear_dim_angle(frame.to_ucs(*p1), frame.to_ucs(*p2),
+                                 frame.to_ucs(*location))
+        return local + frame.degrees
     x1, x2 = sorted((p1[0], p2[0]))
     y1, y2 = sorted((p1[1], p2[1]))
     span = max(x2 - x1, y2 - y1, 1e-12)
@@ -1695,14 +1708,14 @@ def linear_dim_angle(p1, p2, location) -> float:
 
 def dim_linear(p1, p2, location, *, angle: float | None = None,
                text: str = "<>", text_rotation: float | None = None,
-               dimstyle: str | None = None) -> AddDimensionCommand:
+               dimstyle: str | None = None, frame=None) -> AddDimensionCommand:
     """DIMLINEAR: horizontal/vertical chosen by the dimension-line pick, or a
     forced angle (Horizontal=0 / Vertical=90 / Rotated=any). ``text`` follows
     AutoCAD's Text option: "<>" is the measurement, " " suppresses it, any
     other string replaces it (an embedded "<>" is substituted by ezdxf).
     ``text_rotation`` is the Angle option (absolute text angle)."""
     if angle is None:
-        angle = linear_dim_angle(p1, p2, location)
+        angle = linear_dim_angle(p1, p2, location, frame)
 
     def factory(msp, document):
         return msp.add_linear_dim(
@@ -2468,17 +2481,42 @@ def clamp_angle_to_arc(pick, center, start_angle: float,
 
 def dim_ordinate(feature, leader_end, *, dtype: str | None = None,
                  text: str = "<>",
-                 text_rotation: float | None = None) -> AddDimensionCommand:
+                 text_rotation: float | None = None,
+                 frame=None) -> AddDimensionCommand:
     """DIMORDINATE: X or Y datum from the UCS origin. Auto choice (official
     convention): a mostly-vertical leader writes the X datum, a mostly-
-    horizontal one the Y datum. ``dtype`` = "X"/"Y" forces it."""
-    dx, dy = leader_end[0] - feature[0], leader_end[1] - feature[1]
+    horizontal one the Y datum. ``dtype`` = "X"/"Y" forces it.
+
+    ``frame`` is that UCS (core/ucs.py, #91): the datum is measured from
+    its origin along its axes, and "vertical" is its Y."""
+    from ezdxf.math import Vec3
+
+    if frame is None or frame.is_world:
+        dx, dy = leader_end[0] - feature[0], leader_end[1] - feature[1]
+        if dtype is None:
+            dtype = "X" if abs(dy) >= abs(dx) else "Y"
+
+        def factory(msp, document):
+            fn = msp.add_ordinate_x_dim if dtype == "X" else msp.add_ordinate_y_dim
+            return fn(feature_location=(feature[0], feature[1]), offset=(dx, dy),
+                      text=text, dimstyle=_current_dimstyle(document),
+                      dxfattribs=_text_rotation_attribs(text_rotation))
+        return AddDimensionCommand(factory)
+
+    fu, lu = frame.to_ucs(*feature), frame.to_ucs(*leader_end)
     if dtype is None:
-        dtype = "X" if abs(dy) >= abs(dx) else "Y"
+        dtype = "X" if abs(lu[1] - fu[1]) >= abs(lu[0] - fu[0]) else "Y"
+    # ezdxf takes the feature in the UCS (from the origin) and turns the
+    # leader end about the WORLD origin: hand it what lands both points
+    # where they are -- checked, 10/13/14 come out as the world points
+    origin = Vec3(frame.ox, frame.oy)
+    feature_arg = origin + Vec3(fu[0], fu[1])
+    end_arg = Vec3(leader_end[0], leader_end[1]).rotate_deg(-frame.degrees)
 
     def factory(msp, document):
         fn = msp.add_ordinate_x_dim if dtype == "X" else msp.add_ordinate_y_dim
-        return fn(feature_location=(feature[0], feature[1]), offset=(dx, dy),
+        return fn(feature_location=feature_arg, offset=end_arg - feature_arg,
+                  origin=origin, rotation=frame.degrees,
                   text=text, dimstyle=_current_dimstyle(document),
                   dxfattribs=_text_rotation_attribs(text_rotation))
     return AddDimensionCommand(factory)
@@ -2867,9 +2905,10 @@ def apply_in_place(history, entities, mutate) -> None:
     the change joins the normal undo stack.
     """
     snap = SnapshotCommand(entities)
+    state = history.dimassoc_state()
     mutate()
     snap.commit(history.document)
-    history.record(snap)
+    history.record(snap, state)
 
 
 class SetPropertyCommand(Command):
@@ -3188,13 +3227,17 @@ def add_mtext(p1, p2, text: str, char_height: float,
               style: str | None = None,
               attachment: int = 1,
               line_spacing: float | None = None,
-              bg=None, columns=None) -> AddEntityCommand:
+              bg=None, columns=None, frame=None) -> AddEntityCommand:
     """MTEXT in the box the two corners define.
 
     ``attachment`` is the MText Justification (1..9, TL..BR): the insert
     point is the matching point OF THE BOX, which is how AutoCAD keeps the
     text inside the rectangle the user dragged whatever the justification.
+    ``frame`` is the UCS (core/ucs.py) the box is square to: the text runs
+    along its X, as AutoCAD's does (#91).
     """
+    if frame is not None and not frame.is_world:
+        p1, p2 = frame.to_ucs(*p1), frame.to_ucs(*p2)
     width = abs(p2[0] - p1[0])
     x0, x1 = min(p1[0], p2[0]), max(p1[0], p2[0])
     y0, y1 = min(p1[1], p2[1]), max(p1[1], p2[1])
@@ -3202,6 +3245,10 @@ def add_mtext(p1, p2, text: str, char_height: float,
     row = (attachment - 1) // 3            # 0 top, 1 middle, 2 bottom
     insert = ((x0, (x0 + x1) / 2.0, x1)[column],
               (y1, (y0 + y1) / 2.0, y0)[row])
+    rotation = 0.0
+    if frame is not None and not frame.is_world:
+        insert = frame.to_world(*insert)
+        rotation = frame.degrees
 
     def make(msp):
         attribs = {"char_height": char_height,
@@ -3213,6 +3260,8 @@ def add_mtext(p1, p2, text: str, char_height: float,
             attribs["line_spacing_style"] = 1
         m = msp.add_mtext(text, dxfattribs=attribs)
         m.set_location(insert, attachment_point=attachment)
+        if rotation:
+            m.dxf.rotation = rotation
         apply_mtext_bg(m, bg)
         apply_mtext_columns(m, columns)
         return m

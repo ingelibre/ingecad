@@ -74,7 +74,7 @@ def _desktop_entry(appimage: Path) -> str:
         "GenericName[es]=CAD 2D\n"
         "Comment=View and edit DWG/DXF drawings\n"
         "Comment[es]=Ver y editar planos DWG/DXF\n"
-        f'Exec="{exe}" %f\n'
+        f'Exec="{exe}" %F\n'
         f'TryExec={exe}\n'
         "Icon=ingecad\n"
         "Terminal=false\n"

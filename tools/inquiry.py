@@ -176,6 +176,8 @@ class DistTool(Tool):
 
     def _report(self, a: Point, b: Point) -> None:
         units = _units(self)
+        frame = self.ucs()             # deltas and angle read in the UCS
+        a, b = frame.to_ucs(*a), frame.to_ucs(*b)
         dx, dy = b[0] - a[0], b[1] - a[1]
         distance = math.hypot(dx, dy)
         angle = math.degrees(math.atan2(dy, dx)) % 360.0
@@ -204,9 +206,10 @@ class IdTool(Tool):
 
     def on_point(self, point: Point) -> None:
         units = _units(self)
+        x, y = self.ucs().to_ucs(*point)          # in the current UCS (#91)
         self.ctx.echo(
             tr("X = {x}   Y = {y}   Z = {z}",
-               x=units.length(point[0]), y=units.length(point[1]),
+               x=units.length(x), y=units.length(y),
                z=units.length(0.0)))
         self.last_point = point
         self.ctx.finish()

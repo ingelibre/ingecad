@@ -18,8 +18,8 @@ from core.document import Document
 
 def _first_dash(scene, handle, x_min, x_max) -> float:
     """Length on the sheet of the first whole dash inside [x_min, x_max]."""
-    parts = [getattr(scene, batch).data["pos"][lo:hi].astype(float)
-             for batch, lo, hi in scene.handle_ranges.get(handle, [])]
+    parts = [getattr(scene, batch).data["pos"][first:first + count].astype(float)
+             for batch, first, count in scene.handle_ranges.get(handle, [])]
     pos = np.concatenate(parts) + np.array(scene.origin)
     segments = pos.reshape(-1, 2, 2)
     xs = [(min(a[0], b[0]), max(a[0], b[0])) for a, b in segments]

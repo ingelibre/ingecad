@@ -1017,7 +1017,8 @@ class TextTool(Tool):
                 if math.hypot(dx, dy) > 1e-9:
                     self._take_height(math.hypot(dx, dy))
             else:
-                self._take_rotation(math.degrees(math.atan2(dy, dx)))
+                self._take_rotation(math.degrees(math.atan2(dy, dx))
+                                    - self.ucs().degrees)
 
     def on_option(self, text: str) -> bool:
         # The resolver first: it turns the localized keyword, or
@@ -1101,7 +1102,9 @@ class TextTool(Tool):
             self._rotation_prompt()
 
     def _take_rotation(self, value: float) -> None:
-        self._rotation = value
+        """``value`` is measured from the UCS's X, as AutoCAD's prompt
+        means it (#91); the text keeps the world angle."""
+        self._rotation = value + self.ucs().degrees
         type(self).last_rotation = value
         self._begin_typing()
 
@@ -1162,7 +1165,7 @@ class TextTool(Tool):
 
     def _begin_typing(self) -> None:
         if self._rotation is None:
-            self._rotation = type(self).last_rotation
+            self._rotation = type(self).last_rotation + self.ucs().degrees
         self.typing = True
         self._buffer = ""
         self.prompt("Enter text (Enter for new line, Esc to finish):")
@@ -1240,14 +1243,17 @@ class MTextTool(Tool):
             content = self.ctx.ask_text(tr("Enter text:"), "")
             if content:
                 self.ctx.execute(actions.add_mtext(
-                    self._first, point, content, self._height()))
+                    self._first, point, content, self._height(),
+                    frame=self.ucs()))
             self.ctx.finish()
 
     def preview_segments(self, cursor: Point):
         if self._first is None:
             return []
-        p1, p2 = self._first, cursor
-        c = [(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1]), (p1[0], p2[1])]
+        frame = self.ucs()                 # the box is square to the UCS
+        p1, p2 = frame.to_ucs(*self._first), frame.to_ucs(*cursor)
+        c = [frame.to_world(*q) for q in
+             ((p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1]), (p1[0], p2[1]))]
         return list(zip(c, c[1:] + c[:1]))
 
 
@@ -1856,8 +1862,13 @@ class RectangTool(Tool):
         return not (self._first is not None and self._await is None)
 
     # -- geometry --------------------------------------------------------------
+    def _rotation(self) -> float:
+        """The rectangle's turn in the world: its Rotation option, which
+        AutoCAD measures from the UCS's X axis (#91)."""
+        return type(self).rotation + self.ucs().degrees
+
     def _to_local(self, point: Point) -> tuple[float, float]:
-        rot = math.radians(type(self).rotation)
+        rot = math.radians(self._rotation())
         dx, dy = point[0] - self._first[0], point[1] - self._first[1]
         return (dx * math.cos(rot) + dy * math.sin(rot),
                 -dx * math.sin(rot) + dy * math.cos(rot))
@@ -1866,7 +1877,7 @@ class RectangTool(Tool):
         cls = type(self)
         try:
             points = actions.rect_vertices(
-                self._first, length, width, rotation_deg=cls.rotation,
+                self._first, length, width, rotation_deg=self._rotation(),
                 chamfer=cls.chamfer, fillet=cls.fillet,
                 pl_width=cls.pl_width)
         except ValueError:
@@ -1900,7 +1911,8 @@ class RectangTool(Tool):
             else:
                 p1 = self._pending["rp1"]
                 type(self).rotation = math.degrees(
-                    math.atan2(point[1] - p1[1], point[0] - p1[0]))
+                    math.atan2(point[1] - p1[1], point[0] - p1[0])) \
+                    - self.ucs().degrees
                 self._await = None
                 self._first_prompt() if self._first is None \
                     else self._corner_prompt()
@@ -2116,11 +2128,11 @@ class RectangTool(Tool):
                 width = self._dims[1] if ly >= 0 else -self._dims[1]
                 points = actions.rect_vertices(
                     self._first, length, width,
-                    rotation_deg=type(self).rotation)
+                    rotation_deg=self._rotation())
             else:
                 lx, ly = self._to_local(cursor)
                 points = actions.rect_vertices(
-                    self._first, lx, ly, rotation_deg=type(self).rotation)
+                    self._first, lx, ly, rotation_deg=self._rotation())
         except ValueError:
             return []
         ring = [(p[0], p[1]) for p in points]
@@ -2157,8 +2169,8 @@ class PolygonTool(Tool):
         self.ctx.finish()
 
     def _typed_radius(self, radius: float) -> None:
-        # bottom edge horizontal (snap angle 0): vertices straddle -90
-        first = -90.0 + 180.0 / self._sides
+        # bottom edge along the UCS's X: vertices straddle -90 from it
+        first = self.ucs().degrees - 90.0 + 180.0 / self._sides
         r = radius if self._mode == "I" \
             else radius / math.cos(math.pi / self._sides)
         self._build_ring(actions.polygon_ring(

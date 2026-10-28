@@ -122,7 +122,8 @@ def test_undo_of_an_image_grip_is_surgical_and_exact(qapp, tmp_path):
         win.tools.finish_grip_drag(g[0] + 1.0, g[1] + 1.0)
         win._cmd_undo()
         assert win._regen_worker is None, "undo forced a regen"
-        assert _quad(win, h) == pytest.approx(before), (
+        assert [c for p in _quad(win, h) for c in p] == pytest.approx(
+            [c for p in before for c in p]), (
             "undo did not put the quad back")
     finally:
         win.close()

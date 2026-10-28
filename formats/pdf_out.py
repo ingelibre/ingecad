@@ -96,7 +96,6 @@ def build_graphics_scene(document, layout_name: str | None = None,
     ``ctb`` names the plot style table (see core.plotstyles); None takes the
     layout's own, "" plots with none.
     """
-    from ezdxf.addons.drawing.pyqt import PyQtBackend
     from PySide6.QtWidgets import QGraphicsScene
 
     from render.backend import TolerantFrontend, pick_layout
@@ -107,7 +106,7 @@ def build_graphics_scene(document, layout_name: str | None = None,
     else:
         layout, _name = pick_layout(document)
     scene = QGraphicsScene()
-    backend = PyQtBackend(scene)
+    backend = _plot_backend_class()(scene)
     # export_mode: render as plotted — layers with Plot off are skipped
     # (they still display on screen, exactly AutoCAD's Plot column).
     context = _plot_context(document.doc,
@@ -131,8 +130,11 @@ def build_graphics_scene(document, layout_name: str | None = None,
 
     size = point_size(document)
     # the paper shows what the screen cannot: a tenth of its tolerance
+    from render.backend import construction_length
+
     config = Configuration(min_dash_length=min_dash_length(
-        _flatten_distance(layout) * 0.1, document))
+        _flatten_distance(layout) * 0.1, document),
+        infinite_line_length=construction_length(_flatten_distance(layout)))
     if size is not None:
         config = config.with_changes(pdsize=size)
     TolerantFrontend(context, backend, config).draw_layout(
@@ -153,9 +155,133 @@ def build_graphics_scene(document, layout_name: str | None = None,
     return scene
 
 
+_PLOT_BACKEND = None
+
+
+def _plot_backend_class():
+    """ezdxf's PyQtBackend, plotting a linetype's dot as a dot (#87).
+
+    The dot of DASHDOT, CENTER or PHANTOM arrives as a zero-length line
+    (core.ezdxf_patches), which ezdxf turns into a "point" one DEVICE pixel
+    wide: a 0.02 mm speck at 1200 dpi, gone on paper. AutoCAD plots it as
+    round as the pen is wide, and so does :class:`_PenDot`.
+    """
+    global _PLOT_BACKEND
+    if _PLOT_BACKEND is not None:
+        return _PLOT_BACKEND
+    from ezdxf.addons.drawing.pyqt import PyQtBackend
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QBrush
+    from PySide6.QtWidgets import QAbstractGraphicsShapeItem
+
+    class _PenDot(QAbstractGraphicsShapeItem):
+        """A filled circle as wide as its pen: in device pixels while the
+        pen is cosmetic, in scene units once it is physical."""
+
+        def __init__(self, x: float, y: float, pen) -> None:
+            super().__init__()
+            self.location = QPointF(x, y)
+            self.setPen(pen)
+
+        def _radius(self, view_scale: float = 1.0) -> float:
+            pen = self.pen()
+            if pen.isCosmetic():
+                return max(pen.widthF(), 1.0) / 2.0 / view_scale
+            return pen.widthF() / 2.0
+
+        def boundingRect(self) -> QRectF:
+            r = 0.5 if self.pen().isCosmetic() else self._radius()
+            return QRectF(self.location.x() - r, self.location.y() - r,
+                          2 * r, 2 * r)
+
+        def paint(self, painter, option, widget=None) -> None:
+            from ezdxf.addons.drawing.pyqt import _get_x_scale
+            from PySide6.QtCore import Qt
+
+            r = self._radius(_get_x_scale(painter.transform()) or 1.0)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(self.pen().color()))
+            painter.drawEllipse(self.location, r, r)
+
+    class _PlotBackend(PyQtBackend):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            #: entity types being drawn, innermost last
+            self._entering: list = []
+
+        def enter_entity(self, entity, properties) -> None:
+            super().enter_entity(entity, properties)
+            self._entering.append(entity.dxftype())
+
+        def exit_entity(self, entity) -> None:
+            super().exit_entity(entity)
+            if self._entering:
+                self._entering.pop()
+
+        def _add_item(self, item, entity_handle) -> None:
+            super()._add_item(item, entity_handle)
+            if self._entering and self._entering[-1] in ("XLINE", "RAY"):
+                # far past the drawing (render.backend.construction_length):
+                # not part of what "Extents" plots
+                item.setData(_CONSTRUCTION_ROLE, True)
+                self._scene._ingecad_construction = True
+
+        def draw_line(self, start, end, properties) -> None:
+            if start.x == end.x and start.y == end.y:
+                self._dot(start, properties)
+            else:
+                super().draw_line(start, end, properties)
+
+        def draw_solid_lines(self, lines, properties) -> None:
+            rest = []
+            for s, e in lines:
+                if s.x == e.x and s.y == e.y:
+                    self._dot(s, properties)
+                else:
+                    rest.append((s, e))
+            if rest:
+                super().draw_solid_lines(rest, properties)
+
+        def draw_filled_paths(self, paths, properties) -> None:
+            # ezdxf outlines a filled path with the entity's pen: on paper
+            # every TrueType letter and solid hatch grew by its layer's
+            # lineweight and small text plotted as blots. AutoCAD gives
+            # TrueType text and solid fills no lineweight, like ezdxf's
+            # own filled polygons (a SOLID).
+            from ezdxf.addons.drawing.pyqt import _CosmeticPath
+            from ezdxf.npshapes import to_qpainter_path
+
+            paths = list(paths)
+            if not paths:
+                return
+            item = _CosmeticPath(to_qpainter_path(paths))
+            item.setPen(self._no_line)
+            item.setBrush(self._get_fill_brush(properties.color))
+            self._add_item(item, properties.handle)
+
+        def _dot(self, at, properties) -> None:
+            item = _PenDot(at.x, at.y, self._get_pen(properties))
+            self._add_item(item, properties.handle)
+
+    _PLOT_BACKEND = _PlotBackend
+    return _PLOT_BACKEND
+
+
+#: QGraphicsItem data role marking an XLINE's or a RAY's strokes
+_CONSTRUCTION_ROLE = 0x0100 + 7
+
+
 def scene_extents(scene) -> QRectF:
-    """World-coordinate bounding rect of everything in the graphics scene."""
-    return scene.itemsBoundingRect()
+    """World-coordinate bounding rect of everything in the graphics scene
+    but construction lines, which reach far past the drawing and which
+    AutoCAD's Extents leaves out too (#98)."""
+    if not getattr(scene, "_ingecad_construction", False):
+        return scene.itemsBoundingRect()
+    rect = QRectF()
+    for item in scene.items():
+        if not item.data(_CONSTRUCTION_ROLE):
+            rect = rect.united(item.sceneBoundingRect())
+    return rect if not rect.isNull() else scene.itemsBoundingRect()
 
 
 _PT_TO_MM = 25.4 / 72.0

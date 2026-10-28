@@ -85,7 +85,7 @@ cp -a "$WORK/pyi/ingecad/." "$APPDIR/usr/bin/"
 cp resources/icons/ingecad_256.png \
    "$APPDIR/usr/share/icons/hicolor/256x256/apps/ingecad.png"
 cp resources/icons/ingecad_256.png "$APPDIR/ingecad.png"
-sed 's|^Exec=.*|Exec=ingecad %f|; s|^Icon=.*|Icon=ingecad|' \
+sed 's|^Exec=.*|Exec=ingecad %F|; s|^Icon=.*|Icon=ingecad|' \
     resources/ingecad.desktop > "$APPDIR/usr/share/applications/ingecad.desktop"
 cp "$APPDIR/usr/share/applications/ingecad.desktop" "$APPDIR/ingecad.desktop"
 

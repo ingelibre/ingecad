@@ -31,7 +31,7 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature clone of any other CAD.
 
-## Status — v0.6.7
+## Status — v0.6.8.2
 
 What works today:
 
@@ -99,7 +99,8 @@ What works today:
   `-LAYER` command line with wildcards for the keyboard-only flow.
 - **Editing**: ERASE / MOVE / COPY / ROTATE / SCALE / MIRROR / OFFSET
   (polylines and arcs included, distance by mouse) / TRIM / EXTEND / FILLET /
-  CHAMFER / STRETCH / BREAK / JOIN / ARRAY / MATCHPROP / PEDIT / EXPLODE,
+  CHAMFER / STRETCH / BREAK / JOIN / ARRAY / MATCHPROP / PEDIT (Join turns
+  lines and arcs into one polyline) / EXPLODE,
   grips, window/crossing selection, clipboard copy/paste, and ROTATE/SCALE
   show the result turning live under the cursor — with the standard options
   (MOVE/COPY Displacement, ROTATE/SCALE Copy, TRIM Fence, UNDO with a count,
@@ -115,7 +116,9 @@ What works today:
   viewports to the model they show, with paper-space dimensions reading the
   model's length) with the status-bar running-snap list, ORTHO / POLAR
   (tracking that locks near a path, the increment and additional angles in
-  Drafting Settings), the nested adaptive grid with GRIDUNIT / SNAPUNIT
+  Drafting Settings), a user coordinate system (UCS: moved and turned
+  origin, named, Previous, Object) that typed points, the grid and the
+  commands follow, the nested adaptive grid with GRIDUNIT / SNAPUNIT
   saved in the drawing, absolute / relative / polar coordinate input and
   LASTPOINT, command prefix autocomplete (`OFF` runs OFFSET), inquiry
   commands (DIST / ID / AREA / LIST), UNITS, blocks (`B` / `I`), a startup

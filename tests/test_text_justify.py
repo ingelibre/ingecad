@@ -82,7 +82,8 @@ def test_one_style_and_one_justification_for_several_texts(qapp):
         justify = _row_combo(panel, "Justify")
         justify.activated.emit(justify.findData("MIDDLE_CENTER"))
         assert {text_justify.justification(t) for t in texts} == {"MIDDLE_CENTER"}
-        assert [_box_of(win.document, t) for t in texts] == pytest.approx(boxes, abs=0.01)
+        assert [c for t in texts for c in _box_of(win.document, t)] == pytest.approx(
+            [c for box in boxes for c in box], abs=0.01)
         win._cmd_undo()
         assert {text_justify.justification(t) for t in texts} == {"LEFT"}
     finally:

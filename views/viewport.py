@@ -203,11 +203,12 @@ def thick_half_world(lineweight_mm: float, lwt_on: bool,
     return (px / 2.0) / px_per_unit
 
 
-def _axes_vertices() -> np.ndarray:
-    """X and Y world axes through the origin in the standard vertex format."""
+def _axes_vertices(angle: float = 0.0) -> np.ndarray:
+    """X and Y axes through the origin in the standard vertex format: the
+    world's, or a UCS's turned by ``angle`` (stored relative to its origin)."""
+    c, s = math.cos(angle) * AXIS_LEN, math.sin(angle) * AXIS_LEN
     data = np.zeros(4, dtype=VERTEX_DTYPE)
-    data["pos"] = [(-AXIS_LEN, 0.0), (AXIS_LEN, 0.0),
-                   (0.0, -AXIS_LEN), (0.0, AXIS_LEN)]
+    data["pos"] = [(-c, -s), (c, s), (s, -c), (-s, c)]
     data["rgba"][0] = data["rgba"][1] = (122, 46, 46, 255)   # muted red X
     data["rgba"][2] = data["rgba"][3] = (41, 107, 46, 255)   # muted green Y
     return data
@@ -562,13 +563,16 @@ class Viewport(QOpenGLWidget):
         navigable.
         """
         boxes = []
-        if self._scene is not None:
-            if not self._scene.is_empty:
-                min_x, min_y, max_x, max_y = self._scene.extents
+        # What was drawn since the last regen lives in the overlay scene
+        # until the next bake; left out, Zoom Extents on a new drawing found
+        # nothing and framed the origin (#96, Rafael: "centra el 0,0").
+        for scene in (self._scene, self._overlay_scene):
+            if scene is not None and not scene.is_empty:
+                min_x, min_y, max_x, max_y = scene.extents
                 if max_x > min_x or max_y > min_y:
                     boxes.append((min_x, min_y, max_x, max_y))
-            if self._scene.paper is not None:
-                boxes.append(self._scene.paper["sheet"])
+        if self._scene is not None and self._scene.paper is not None:
+            boxes.append(self._scene.paper["sheet"])
         if boxes:
             return (min(b[0] for b in boxes), min(b[1] for b in boxes),
                     max(b[2] for b in boxes), max(b[3] for b in boxes))
@@ -595,6 +599,7 @@ class Viewport(QOpenGLWidget):
 
         data = _axes_vertices()
         self._axes_vao, self._axes_vbo, self._axes_count = self._make_vao(data)
+        self._axes_angle = 0.0
         # GL objects live in Python attributes, so without this their C++
         # destructors run whenever the GC gets to them -- typically at window
         # destruction or interpreter exit, with no current context. That was
@@ -1028,7 +1033,17 @@ class Viewport(QOpenGLWidget):
         if not on_paper:
             # World axes are a model-space reference; on a layout tab they
             # would just streak across the sheet.
-            self._program.setUniformValue(self._loc_mvp, self._mvp())
+            # the UCS's axes (#91), as the grid and the icon follow it
+            frame = self._ucs()
+            if getattr(self, "_axes_angle", 0.0) != frame.angle:
+                self._axes_vbo.destroy()
+                self._axes_vao.destroy()
+                self._axes_vao, self._axes_vbo, self._axes_count = \
+                    self._make_vao(_axes_vertices(frame.angle))
+                self._axes_angle = frame.angle
+                self._program.bind()            # _make_vao releases it
+            self._program.setUniformValue(self._loc_mvp,
+                                          self._mvp(frame.ox, frame.oy))
             self._axes_vao.bind()
             gl.glDrawArrays(GL_LINES, 0, self._axes_count)
             self._axes_vao.release()
@@ -1379,35 +1394,46 @@ class Viewport(QOpenGLWidget):
         s = self._grid_spacing()
         if not s:
             return                  # too dense to display, and may not adapt
+        # The grid is the UCS's (#91): its lines run along the UCS axes
+        # through the UCS origin. Cells are counted in the UCS over the
+        # view rect's bounding box there.
+        frame = self._ucs()
+        if not frame.is_world:
+            corners = [frame.to_ucs(x, y)
+                       for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+            x0, x1 = min(c[0] for c in corners), max(c[0] for c in corners)
+            y0, y1 = min(c[1] for c in corners), max(c[1] for c in corners)
         i0, i1 = int(np.floor(x0 / s)), int(np.ceil(x1 / s))
         j0, j1 = int(np.floor(y0 / s)), int(np.ceil(y1 / s))
         light = self._light_background()
-        key = (s, i0, i1, j0, j1, light, self._grid_major)
+        key = (s, i0, i1, j0, j1, light, self._grid_major, frame)
         if self._grid_buf is None or self._grid_buf[3] != key:
             if self._grid_buf is not None:
                 self._grid_buf[0].destroy()
                 self._grid_buf[1].destroy()
             # origin at the rect centre keeps float32 coordinates small (UTM)
-            ox, oy = (i0 + i1) / 2.0 * s, (j0 + j1) / 2.0 * s
+            cx, cy = (i0 + i1) / 2.0 * s, (j0 + j1) / 2.0 * s
+            ox, oy = frame.to_world(cx, cy)
             # endpoints snapped to the cell range too, so the buffer is fully
             # determined by `key` (stable while panning within the same cells)
-            gy0, gy1 = j0 * s - oy, j1 * s - oy
-            gx0, gx1 = i0 * s - ox, i1 * s - ox
+            gy0, gy1 = j0 * s - cy, j1 * s - cy
+            gx0, gx1 = i0 * s - cx, i1 * s - cx
             major = self.GRID_MAJOR_LIGHT if light else self.GRID_MAJOR
             minor = self.GRID_MINOR_LIGHT if light else self.GRID_MINOR
             verts = []
             every = self._grid_major
             for i in range(i0, i1 + 1):
                 color = major if i % every == 0 else minor
-                verts.append((i * s - ox, gy0, color))
-                verts.append((i * s - ox, gy1, color))
+                verts.append((i * s - cx, gy0, color))
+                verts.append((i * s - cx, gy1, color))
             for j in range(j0, j1 + 1):
                 color = major if j % every == 0 else minor
-                verts.append((gx0, j * s - oy, color))
-                verts.append((gx1, j * s - oy, color))
+                verts.append((gx0, j * s - cy, color))
+                verts.append((gx1, j * s - cy, color))
+            c, sn = math.cos(frame.angle), math.sin(frame.angle)
             data = np.zeros(len(verts), dtype=VERTEX_DTYPE)
             for k, (px, py, color) in enumerate(verts):
-                data["pos"][k] = (px, py)
+                data["pos"][k] = (px * c - py * sn, px * sn + py * c)
                 data["rgba"][k] = color
             vao, vbo, count = self._make_vao(data)
             self._grid_origin = (ox, oy)
@@ -1943,29 +1969,54 @@ class Viewport(QOpenGLWidget):
             p.drawPolygon([QPointF(x - s, y - s), QPointF(x + s, y + s),
                            QPointF(x + s, y - s), QPointF(x - s, y + s)])
 
+    def _ucs(self):
+        """The UCS the grid and the icon follow (the tool controller's)."""
+        from core import ucs
+
+        fn = getattr(self.tool_delegate, "current_ucs", None)
+        try:
+            return fn() if fn is not None else ucs.WORLD
+        except Exception:
+            return ucs.WORLD
+
     def _draw_ucs_icon(self, p: QPainter) -> None:
-        """Classic UCS icon: red X / green Y arrows at the world origin.
+        """Classic UCS icon: red X / green Y arrows at the UCS origin, along
+        its axes, with AutoCAD's "+" at the base when it sits on the origin.
 
         When the origin is outside the view, the icon anchors to the lower-left
         corner (AutoCAD's off-origin behavior).
         """
-        ox, oy = self.view.world_to_screen(0.0, 0.0)
+        frame = self._ucs()
+        ox, oy = self.view.world_to_screen(frame.ox, frame.oy)
         margin = 40
-        if not (-margin < ox < self.width() + margin and -margin < oy < self.height() + margin):
+        at_origin = (-margin < ox < self.width() + margin
+                     and -margin < oy < self.height() + margin)
+        if not at_origin:
             ox, oy = 60.0, self.height() - 60.0
         size = 48
+        # screen Y grows downwards: a UCS turned +a turns the icon -a
+        c, s = math.cos(frame.angle), math.sin(frame.angle)
+
+        def at(u, v):
+            return QPointF(ox + u * c - v * s, oy - (u * s + v * c))
+
         x_pen = QPen(QColor(205, 82, 82), 2)
         y_pen = QPen(QColor(96, 190, 96), 2)
         p.setPen(x_pen)
-        p.drawLine(QPointF(ox, oy), QPointF(ox + size, oy))
-        p.drawLine(QPointF(ox + size, oy), QPointF(ox + size - 8, oy - 4))
-        p.drawLine(QPointF(ox + size, oy), QPointF(ox + size - 8, oy + 4))
-        p.drawText(QPointF(ox + size + 6, oy + 4), "X")
+        p.drawLine(at(0, 0), at(size, 0))
+        p.drawLine(at(size, 0), at(size - 8, 4))
+        p.drawLine(at(size, 0), at(size - 8, -4))
+        label = at(size + 10, 0)
+        p.drawText(QPointF(label.x() - 4, label.y() + 4), "X")
         p.setPen(y_pen)
-        p.drawLine(QPointF(ox, oy), QPointF(ox, oy - size))
-        p.drawLine(QPointF(ox, oy - size), QPointF(ox - 4, oy - size + 8))
-        p.drawLine(QPointF(ox, oy - size), QPointF(ox + 4, oy - size + 8))
-        p.drawText(QPointF(ox - 4, oy - size - 6), "Y")
+        p.drawLine(at(0, 0), at(0, size))
+        p.drawLine(at(0, size), at(-4, size - 8))
+        p.drawLine(at(0, size), at(4, size - 8))
+        label = at(0, size + 10)
+        p.drawText(QPointF(label.x() - 4, label.y() + 4), "Y")
+        if at_origin and not frame.is_world:
+            p.drawLine(at(-5, 0), at(5, 0))
+            p.drawLine(at(0, -5), at(0, 5))
 
     def _light_background(self) -> bool:
         if self._scene is None:
@@ -2064,13 +2115,23 @@ class Viewport(QOpenGLWidget):
             # (p.2202). The percentage is of the SHORTER side, so 100 reaches
             # every edge and a square cursor stays square.
             pct = self._cursorsize
-            if pct >= 100:
-                p.drawLine(QPointF(0, y), QPointF(self.width(), y))
-                p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+            frame = self._ucs()
+            if frame.angle == 0.0:
+                if pct >= 100:
+                    p.drawLine(QPointF(0, y), QPointF(self.width(), y))
+                    p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+                else:
+                    arm = min(self.width(), self.height()) * pct / 200.0
+                    p.drawLine(QPointF(x - arm, y), QPointF(x + arm, y))
+                    p.drawLine(QPointF(x, y - arm), QPointF(x, y + arm))
             else:
-                arm = min(self.width(), self.height()) * pct / 200.0
-                p.drawLine(QPointF(x - arm, y), QPointF(x + arm, y))
-                p.drawLine(QPointF(x, y - arm), QPointF(x, y + arm))
+                # the crosshair runs along the UCS's axes, as AutoCAD's
+                # does (#91); screen Y grows downwards
+                arm = (math.hypot(self.width(), self.height()) if pct >= 100
+                       else min(self.width(), self.height()) * pct / 200.0)
+                c, sn = math.cos(frame.angle) * arm, math.sin(frame.angle) * arm
+                p.drawLine(QPointF(x - c, y + sn), QPointF(x + c, y - sn))
+                p.drawLine(QPointF(x - sn, y - c), QPointF(x + sn, y + c))
         if mode != "point":
             p.drawRect(x - half, y - half, box, box)
         if clipped:

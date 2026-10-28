@@ -30,7 +30,7 @@ from ezdxf.math.triangulation import mapbox_earcut_2d
 import logging
 
 from core.document import Document
-from render.batches import Bucket, Scene, pack
+from render.batches import THIN_MAX_MM, Bucket, Scene, pack
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,28 @@ HATCHING_TIMEOUT = 5.0
 # (a cadastre: 43 M of 49 M vertices) and the viewport hides them when they
 # would be smaller than a few pixels.
 _TEXT_TYPES = frozenset(("TEXT", "MTEXT", "ATTRIB", "ATTDEF"))
+#: Infinite by definition: drawn far past the drawing (frontend_config) and
+#: left out of its extents (bucket kind "X", batches._world_extents)
+_CONSTRUCTION_TYPES = frozenset(("XLINE", "RAY"))
+#: How far a construction line reaches, in drawing diagonals (both halves of
+#: an XLINE together; a RAY all of it)
+CONSTRUCTION_SPAN = 10.0
+
+
+def _text_size_step(entity) -> int:
+    """A text's height as a power of two, for its bucket key.
+
+    Text under 2 px is culled per batch range by the range's AVERAGE glyph
+    height, and a layer's texts shared one batch whatever their size: a
+    title among a thousand small labels took their average and vanished
+    with them (GeoCad's review). Batched by step, the texts of a range are
+    within a factor of two of each other."""
+    try:
+        height = float(entity.dxf.char_height if entity.dxftype() == "MTEXT"
+                       else entity.dxf.height)
+    except Exception:            # noqa: BLE001 - no height: one step for all
+        return 0
+    return math.floor(math.log2(height)) if height > 0 else 0
 
 
 def _image_quad_corners(image_data) -> Optional[list]:
@@ -93,17 +115,20 @@ class VertexBackend(Backend):
         self._kind = ""
         self._handle = None
         self._group = 0
+        self._size = 0
         # Raster IMAGEs: [{"pixels", "corners" (4 wcs xy), "handle", "group"}]
         self.images: list[dict] = []
-        # (kind, owner, group) per open entity. The frontend NESTS these: an
-        # INSERT is entered, then each of its sub-entities, up to three deep in
-        # real drawings.
-        self._open: list[tuple[str, str | None]] = []
+        # (kind, owner, group, size step) per open entity. The frontend NESTS
+        # these: an INSERT is entered, then each of its sub-entities, up to
+        # three deep in real drawings.
+        self._open: list[tuple] = []
         self.background: str | None = None
 
     def enter_entity(self, entity, properties) -> None:
         super().enter_entity(entity, properties)
-        kind = "T" if entity.dxftype() in _TEXT_TYPES else ""
+        dxftype = entity.dxftype()
+        kind = ("T" if dxftype in _TEXT_TYPES
+                else "X" if dxftype in _CONSTRUCTION_TYPES else "")
         handle = getattr(entity.dxf, "handle", None)
         # Attribute the primitives to the OUTERMOST entity that has a handle.
         # Block content is drawn from virtual copies whose handle is None, and
@@ -117,8 +142,10 @@ class VertexBackend(Backend):
         # The DRAWORDER group follows the same outermost-owner attribution.
         group = (self._open[-1][2] if self._open
                  else self._order_groups.get(handle, 0))
-        self._open.append((kind, handle, group))
-        self._kind, self._handle, self._group = kind, handle, group
+        size = _text_size_step(entity) if kind == "T" else 0
+        self._open.append((kind, handle, group, size))
+        self._kind, self._handle, self._group, self._size = (
+            kind, handle, group, size)
 
     def exit_entity(self, entity) -> None:
         super().exit_entity(entity)
@@ -127,12 +154,12 @@ class VertexBackend(Backend):
         # Restore the enclosing entity's context rather than clearing it: a
         # parent keeps emitting primitives after a child exits, and those used
         # to come out unowned (and untyped, which also mis-keyed their bucket).
-        self._kind, self._handle, self._group = (
-            self._open[-1] if self._open else ("", None, 0))
+        self._kind, self._handle, self._group, self._size = (
+            self._open[-1] if self._open else ("", None, 0, 0))
 
     def _bucket(self, properties: BackendProperties) -> Bucket:
         key = (self._group, properties.layer, properties.color,
-               properties.lineweight, self._kind)
+               properties.lineweight, self._size, self._kind)
         bucket = self.buckets.get(key)
         if bucket is None:
             bucket = self.buckets[key] = Bucket(
@@ -149,6 +176,9 @@ class VertexBackend(Backend):
 
     def draw_line(self, start: Vec2, end: Vec2, properties: BackendProperties) -> None:
         b = self._bucket(properties)
+        if start.x == end.x and start.y == end.y and b.lineweight <= THIN_MAX_MM:
+            self._dot(b, start)
+            return
         b.lines.extend((start.x, start.y, end.x, end.y))
         b.lines_owner.append(self._handle)
 
@@ -156,9 +186,22 @@ class VertexBackend(Backend):
         self, lines: Iterable[tuple[Vec2, Vec2]], properties: BackendProperties
     ) -> None:
         b = self._bucket(properties)
+        thin = b.lineweight <= THIN_MAX_MM
         for start, end in lines:
+            if thin and start.x == end.x and start.y == end.y:
+                self._dot(b, start)
+                continue
             b.lines.extend((start.x, start.y, end.x, end.y))
             b.lines_owner.append(self._handle)
+
+    def _dot(self, b: Bucket, at: Vec2) -> None:
+        """The 0.0 dash of a linetype -- DASHDOT's, CENTER's, PHANTOM's dot
+        -- arrives as a zero-length line, which GL rasterizes as nothing:
+        the dots were missing (#87, Rafael). A thin one is a one-pixel
+        point, as AutoCAD shows it; a thick one stays a segment and the
+        packer squares it to the pen's width (batches._pack_thick)."""
+        b.points.extend((at.x, at.y))
+        b.points_owner.append(self._handle)
 
     def draw_path(self, path: BkPath2d, properties: BackendProperties) -> None:
         b = self._bucket(properties)
@@ -1207,12 +1250,22 @@ def min_dash_length(tolerance: float, document=None) -> float:
     return min(max(tolerance, 1e-9) / abs(ltscale), 0.1)
 
 
+def construction_length(flatten: float) -> float:
+    """What ezdxf draws an XLINE (and a RAY) as: CONSTRUCTION_SPAN drawing
+    diagonals, read back from the flattening tolerance the regen derived
+    from that diagonal. ezdxf's own 20 units made them look like short
+    lines (#98: "se ven de tamaño finito"); far longer would cost float32
+    precision near the drawing and dashes by the million on a dashed axis."""
+    return max(flatten / FLATTEN_REL * CONSTRUCTION_SPAN, 20.0)
+
+
 def frontend_config(flatten: float, document=None) -> Configuration:
     config = Configuration(
         max_flattening_distance=flatten,
         min_hatch_line_distance=flatten * HATCH_DENSITY_REL,
         hatching_timeout=HATCHING_TIMEOUT,
         min_dash_length=min_dash_length(flatten, document),
+        infinite_line_length=construction_length(flatten),
     )
     size = point_size(document)
     return config if size is None else config.with_changes(pdsize=size)

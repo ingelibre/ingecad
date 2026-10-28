@@ -531,11 +531,31 @@ def _hatch_rows(panel, e):
         Row(tr("Solid fill"), "ro",
             lambda e: tr("Yes") if e.dxf.solid_fill else tr("No")),
         Row(tr("Pattern angle"), "num", lambda e: e.dxf.get("pattern_angle", 0.0),
-            lambda v: panel._set_prop("pattern_angle", v)),
+            lambda v: _set_hatch_pattern(panel, "angle", v)),
         Row(tr("Pattern scale"), "num", lambda e: e.dxf.get("pattern_scale", 1.0),
-            lambda v: panel._set_prop("pattern_scale", v)),
+            lambda v: _set_hatch_pattern(panel, "scale", v)),
     ]
     return (tr("Pattern"), rows)
+
+
+def _set_hatch_pattern(panel, what: str, value: float) -> None:
+    """A hatch's pattern lines carry its scale and angle: setting the DXF
+    value alone redrew the pattern as it was (#86, Rafael). ezdxf scales or
+    turns the hatch's own lines, so a colleague's custom pattern stays
+    itself; the snapshot of _in_place restores them on undo."""
+    if what == "scale" and value <= 0:
+        panel.window.command_line.echo(tr("Requires a positive number."))
+        return
+
+    def mutate():
+        for e in panel._active():
+            if e.dxftype() != "HATCH":
+                continue
+            if what == "scale":
+                e.set_pattern_scale(value)
+            else:
+                e.set_pattern_angle(value)
+    panel._in_place(mutate)
 
 
 def _polyline_length(e) -> float:
@@ -622,11 +642,42 @@ def _dimension_rows(panel, e):
     return (tr("Dimension"), rows)
 
 
+def _set_attribute(panel, prop: str, value: str) -> None:
+    """Tag, prompt or value of the selected attributes, one undo step
+    (#88: a definition's tag, prompt and default could not be edited)."""
+    from core import attributes as att
+
+    if prop == "tag":
+        value = att.normal_tag(value)
+        if not value:
+            return
+    changes = [(e, prop, value) for e in panel._active()
+               if e.dxftype() in ("ATTRIB", "ATTDEF")
+               and (prop != "prompt" or e.dxftype() == "ATTDEF")]
+    if changes:
+        panel.window.tools._execute(att.EditAttribsCommand(changes))
+
+
 def _attrib_rows(panel, e):
-    """ATTRIB and ATTDEF carry a text style like any other text."""
-    rows = [
-        Row(tr("Tag"), "ro", lambda e: e.dxf.get("tag", "")),
-        Row(tr("Contents"), "ro", lambda e: e.dxf.get("text", "")),
+    """ATTRIB and ATTDEF carry a text style like any other text. A
+    definition edits its tag, prompt and default here, as AutoCAD's
+    Properties does; a reference's attribute its value."""
+    if e.dxftype() == "ATTDEF":
+        rows = [
+            Row(tr("Tag"), "str", lambda e: e.dxf.get("tag", ""),
+                lambda v: _set_attribute(panel, "tag", v)),
+            Row(tr("Prompt"), "str", lambda e: e.dxf.get("prompt", ""),
+                lambda v: _set_attribute(panel, "prompt", v)),
+            Row(tr("Value"), "str", lambda e: e.dxf.get("text", ""),
+                lambda v: _set_attribute(panel, "text", v)),
+        ]
+    else:
+        rows = [
+            Row(tr("Tag"), "ro", lambda e: e.dxf.get("tag", "")),
+            Row(tr("Value"), "str", lambda e: e.dxf.get("text", ""),
+                lambda v: _set_attribute(panel, "text", v)),
+        ]
+    rows += [
         Row(tr("Style"), "combo", lambda e: e.dxf.get("style", "Standard"),
             lambda v: panel._set_prop("style", v), _style_items(panel)),
         Row(tr("Height"), "num", lambda e: e.dxf.get("height", 1.0),
