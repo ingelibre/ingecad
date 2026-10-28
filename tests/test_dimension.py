@@ -353,13 +353,12 @@ def test_diameter_text_lands_on_the_side_that_was_picked():
     assert text.x < -50 and text.y > 50, f"text landed at {text}"
 
 
-def test_diameter_arrowheads_sit_inside_one_each_side_pointing_out():
-    """ISO 129-1 / UNE 1-039, and AutoCAD's ISO-25 (DIMTOFL on): with the
-    text outside, the dimension line runs across the circle and the two
-    arrowheads are INSIDE it, tips on the circle, one on each side, pointing
-    outward. ezdxf drew one inside pointing out and one outside pointing in
-    (both INSERTs with the same rotation), which a tester called out as
-    off-norm."""
+def test_diameter_text_outside_puts_both_arrowheads_outside_pointing_in():
+    """The drafting norm Rafael teaches (#67), chosen by Marco over
+    AutoCAD's ISO-25 rendering: with the text outside, both arrowheads go
+    OUTSIDE, tips on the circle, pointing to the centre; the line runs
+    across the circle, carries the text on the near side and runs on a
+    short way past the far arrowhead (not cut "as with a knife")."""
     from ezdxf.math import Vec2
 
     document = Document.new()
@@ -370,16 +369,15 @@ def test_diameter_arrowheads_sit_inside_one_each_side_pointing_out():
     assert len(arrows) == 2
     for tip, base in arrows:
         assert tip.distance(centre) == pytest.approx(50.0), "tip on the circle"
-        assert base.distance(centre) < 50.0, "the arrowhead is inside"
+        assert base.distance(centre) > 50.0, "the arrowhead is outside"
     (tip1, _), (tip2, _) = arrows
     assert tip1.distance(tip2) == pytest.approx(100.0), "one on each side"
     assert _crosses_centre(lines, centre), "the dimension line runs across"
-    # the extension from the circle reaches under the text
-    near = max(arrows, key=lambda a: a[0].distance(text))[0]
-    far_tip = min(arrows, key=lambda a: a[0].distance(text))[0]
-    assert any(a.distance(far_tip) < 1e-6 or b.distance(far_tip) < 1e-6
-               for a, b in lines), "the extension starts on the circle"
-    assert near is not far_tip
+    far_tip, far_base = max(arrows, key=lambda a: a[0].distance(text))
+    reach = max(max(a.distance(centre), b.distance(centre)) for a, b in lines
+                if (a - centre).dot(far_tip - centre) > 0
+                and (b - centre).dot(far_tip - centre) > 0)
+    assert reach > far_base.distance(centre) + 1.0, "the far side runs on past its arrow"
 
 
 def test_small_circle_puts_the_arrowheads_outside_pointing_in():
@@ -399,7 +397,7 @@ def test_small_circle_puts_the_arrowheads_outside_pointing_in():
     assert _crosses_centre(lines, centre)
 
 
-def test_radius_arrowhead_sits_inside_when_it_fits():
+def test_radius_text_outside_puts_the_arrowhead_outside_pointing_in():
     from ezdxf.math import Vec2
 
     document = Document.new()
@@ -410,7 +408,7 @@ def test_radius_arrowhead_sits_inside_when_it_fits():
     assert len(arrows) == 1
     tip, base = arrows[0]
     assert tip.distance(centre) == pytest.approx(50.0)
-    assert base.distance(centre) < 50.0
+    assert base.distance(centre) > 50.0, "outside, pointing to the centre"
     assert any(a.distance(centre) < 1e-6 for a, _ in lines), (
         "the dimension line starts at the centre")
 
@@ -428,7 +426,7 @@ def test_re_rendering_keeps_the_norm_layout():
     arrows, lines, text = _radial_parts(document, dim)
     centre = Vec2(0, 0)
     assert len(arrows) == 2
-    assert all(base.distance(centre) < 50.0 for _tip, base in arrows)
+    assert all(base.distance(centre) > 50.0 for _tip, base in arrows)
     assert _crosses_centre(lines, centre)
     # at the default distance now, but still on the picked side
     assert text.x > 0 and text.y > 0, f"text landed at {text}"
@@ -937,3 +935,19 @@ def test_vertical_chains_align_on_x():
     tool.on_point((0.0, 8.0)); tool.on_point((0.0, 20.0))
     tool.on_point((-6.3, 14.0))
     assert h.msp.query("DIMENSION")[-1].dxf.defpoint.x == pytest.approx(-6.0)
+
+
+def test_a_diameter_with_its_text_inside_spans_the_circle():
+    # #67 (Rafael): with the text placed inside the circle the dimension
+    # drew ONE arrowhead and a line from the text to the circle -- half a
+    # diameter. It must cross the circle, both arrowheads, text on it.
+    doc = Document.new()
+    History(doc).execute(actions.dim_diameter((60, 0), 19, (64, -6)))
+    dim = next(e for e in doc.modelspace() if e.dxftype() == "DIMENSION")
+    block = doc.doc.blocks.get(dim.dxf.geometry)
+    arrows = [e for e in block if e.dxftype() == "INSERT"]
+    lines = [e for e in block if e.dxftype() == "LINE"]
+    assert len(arrows) == 2
+    assert len(lines) == 1
+    span = (lines[0].dxf.end - lines[0].dxf.start).magnitude
+    assert span == pytest.approx(38 - 2 * 2.5)        # base to base of the arrowheads

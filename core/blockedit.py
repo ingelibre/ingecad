@@ -161,3 +161,6 @@ class BlockEditSession:
                 except Exception:
                     pass
         self.document.edit_block = None
+        # grips in the editor bypass History: the definition may differ
+        self.document.blocks_revision = getattr(
+            self.document, "blocks_revision", 0) + 1

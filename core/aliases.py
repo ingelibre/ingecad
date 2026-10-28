@@ -115,12 +115,29 @@ DEFAULT_ALIASES: dict[str, str] = {
     "-UN": "-UNITS",
     "DDUNITS": "UNITS",
     "LTS": "LTSCALE",
+    "LT": "LINETYPE",
+    "LTYPE": "LINETYPE",
+    "-LT": "-LINETYPE",
+    "-LTYPE": "-LINETYPE",
     "S": "STRETCH",
     "BR": "BREAK",
     "J": "JOIN",
     "CHA": "CHAMFER",
     "AR": "ARRAY",
     "-AR": "ARRAY",
+    "-ARRAY": "ARRAY",       # the command-line ARRAY is what ours is
+    # AutoCAD's own aliases: unknown, these fell to prefix completion and
+    # ran something else -- R ran RAY, CH ran CHAMFER, PR a survey command
+    "DDEDIT": "TEXTEDIT",
+    "ED": "TEXTEDIT",
+    "PR": "PROPERTIES",
+    "CH": "PROPERTIES",
+    "PROPS": "PROPERTIES",
+    "MO": "PROPERTIES",
+    "R": "REDRAW",
+    "RA": "REDRAWALL",
+    "LW": "LWEIGHT",
+    "DTEXT": "TEXT",
     "PE": "PEDIT",
     "LEN": "LENGTHEN",
     "AL": "ALIGN",
@@ -153,7 +170,9 @@ def parse_pgp(text: str) -> dict[str, str]:
 
 
 def user_pgp_path() -> Path:
-    return Path.home() / ".config" / "IngeCAD" / "acad.pgp"
+    from core.paths import user_config_dir
+
+    return user_config_dir() / "acad.pgp"
 
 
 def starter_pgp() -> str:

@@ -77,6 +77,20 @@ def test_snap_nea_and_per():
     assert hit.x == pytest.approx(30.0) and hit.y == pytest.approx(0.0)
 
 
+def test_per_lights_with_the_cursor_over_the_object_not_its_foot():
+    """AutoCAD: the aperture over the OBJECT gives PER, its marker at the
+    foot wherever that falls. Asking the cursor to be near the foot missed
+    it whenever the foot was a few pixels off (a grip drag on the CI's
+    larger screen)."""
+    engine = SnapEngine(make_snap_doc())
+    hit = engine.find((70.0, 0.5), threshold=1.0,
+                      kinds=frozenset({"PER"}), from_point=(30.0, 40.0))
+    assert hit is not None and hit.kind == "PER"
+    assert (hit.x, hit.y) == (pytest.approx(30.0), pytest.approx(0.0))
+    assert engine.find((70.0, 3.0), threshold=1.0, kinds=frozenset({"PER"}),
+                       from_point=(30.0, 40.0)) is None, "off the object"
+
+
 def test_snap_invalidate_sees_new_entities():
     document = make_snap_doc()
     engine = SnapEngine(document)

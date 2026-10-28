@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from core import paths
 from core.paths import app_root
 
 _VENDOR_BIN = app_root() / "vendor" / "libredwg" / "bin"
@@ -31,11 +32,23 @@ class DwgBridgeError(Exception):
 
 
 def _find_tool(name: str) -> Optional[Path]:
-    bundled = _VENDOR_BIN / name
+    # Windows: the converters are dwg2dxf.exe and so on (#28)
+    exe = name + ".exe" if paths.on_windows() else name
+    bundled = _VENDOR_BIN / exe
     if bundled.is_file():
         return bundled
     system = shutil.which(name)
     return Path(system) if system else None
+
+
+def quiet_process() -> dict:
+    """subprocess keywords for a console program run from the GUI: on
+    Windows, without CREATE_NO_WINDOW every conversion flashes a black
+    terminal window (#28). Nothing elsewhere."""
+    if paths.on_windows():
+        # the constant only exists in Windows' subprocess; its documented value
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+    return {}
 
 
 def find_dwg2dxf() -> Optional[Path]:
@@ -83,6 +96,7 @@ def _run(cmd: list[str], out_path: Path) -> str:
             errors="replace",
             timeout=_TIMEOUT,
             check=False,
+            **quiet_process(),
         )
     except subprocess.TimeoutExpired as exc:
         raise DwgBridgeError(f"converter timed out: {' '.join(cmd)}") from exc
@@ -275,8 +289,9 @@ def load_dwg(dwg_path: Path, progress=None):
     """
     from core.document import Document
 
-    from core.encoding import decode_escapes_in_document, repair_invalid_defaults
-    from core.layouts import repair_viewport_status
+    from core.encoding import (decode_escapes_in_document, repair_dimstyle_defaults,
+                               repair_invalid_defaults)
+    from core.layouts import repair_missing_main_viewports, repair_viewport_status
 
     dwg_path = Path(dwg_path)
     dxf_path = dwg_to_dxf(dwg_path)
@@ -294,10 +309,14 @@ def load_dwg(dwg_path: Path, progress=None):
     # missing-group-becomes-zero bug this same module now writes around):
     # normalize them so those files render right again.
     repair_invalid_defaults(document.doc)
+    # LibreDWG leaves a DIMSTYLE's zeros implicit; ezdxf would read some of
+    # them as its own non-zero defaults (DIMZIN 8 dropped trailing zeros).
+    repair_dimstyle_defaults(document.doc)
     # A DWG does not store the DXF viewport status; LibreDWG derives it from
     # entmode and gets it wrong for every layout but the one that was current
     # on save, which left those sheets blank.
     repair_viewport_status(document.doc)
+    repair_missing_main_viewports(document.doc)
     document.path = dwg_path
     if len(document.doc.modelspace()) > 0:
         return document
@@ -389,10 +408,14 @@ def verify_dwg(source_dxf: Path, dwg_path: Path, stderr: str = "") -> list[str]:
     reads the same wrong way (a "mirror" bug a strict parser would still
     reject) can slip through. The developer bench (ODA/BricsCAD) covers those.
     """
+    from core.i18n import tr
+
     warnings: list[str] = []
-    if _converter_errors(stderr):
+    errors = _converter_errors(stderr)
+    if errors:
         warnings.append(
-            "the DWG writer reported internal errors while packing the file")
+            tr("the DWG writer reported internal errors while packing the "
+               "file: {detail}", detail=_error_detail(errors)))
     try:
         n_src = _modelspace_count(source_dxf)
         back_dxf = _convert_dwg(dwg_path)     # counted raw: no ezdxf fix-ups
@@ -403,11 +426,27 @@ def verify_dwg(source_dxf: Path, dwg_path: Path, stderr: str = "") -> list[str]:
         # A drop means geometry was lost. Allow tiny bookkeeping deltas.
         if n_src and n_back < n_src:
             warnings.append(
-                f"some drawing objects did not survive the save "
-                f"({n_src} → {n_back})")
+                tr("some drawing objects did not survive the save "
+                   "({before} → {after})", before=n_src, after=n_back))
     except Exception:
-        warnings.append("could not re-open the saved DWG to verify it")
+        warnings.append(tr("could not re-open the saved DWG to verify it"))
     return warnings
+
+
+def _error_detail(errors: list[str], most: int = 3) -> str:
+    """The writer's errors as the user reads them: the most frequent few,
+    each once with its count, and how many other kinds there were."""
+    from collections import Counter
+
+    from core.i18n import tr
+
+    counts = Counter(e.removeprefix("ERROR:").strip() for e in errors)
+    shown = [f"«{text}» (×{n})" if n > 1 else f"«{text}»"
+             for text, n in counts.most_common(most)]
+    detail = "; ".join(shown)
+    if len(counts) > most:
+        detail += tr(" and {count} more", count=len(counts) - most)
+    return detail
 
 
 def write_dwg(dxf_path: Path, dwg_path: Path, version: str = "r2000") -> list[str]:

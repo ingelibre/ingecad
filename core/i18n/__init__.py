@@ -141,6 +141,12 @@ def current_language() -> str:
     return _lang
 
 
+def catalog() -> dict[str, str]:
+    """The active language's ``{English: translation}`` (a copy): what a live
+    language switch reads to find the English behind a text on screen."""
+    return dict(_catalog)
+
+
 def command_names() -> dict[str, str]:
     """``{typed token: English command}`` for the active language.
 
@@ -174,6 +180,14 @@ def every_command_name() -> dict[str, str]:
 
 #: every_command_name()'s answer, until the language or the packs change.
 _every_command_name: dict[str, str] = {}
+
+
+def tr_context(key: str) -> str:
+    """Translate ``"context|text"``: one English word that two languages
+    split, like "Dimension" -- the menu is "Acotar", the object "Cota".
+    Untranslated, it reads as the text after the bar."""
+    found = _catalog.get(key)
+    return found if found is not None else key.split("|", 1)[-1]
 
 
 def tr(text: str, /, **kwargs) -> str:

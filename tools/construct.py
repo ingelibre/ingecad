@@ -54,7 +54,7 @@ class XlineTool(Tool):
                 return True
             if value is None:
                 return False
-            self._angle = value
+            self._angle = value + self.ucs().degrees   # from the UCS's X
             self._await = None
             self._mode = "angled"
             self.prompt("Specify through point:")
@@ -170,12 +170,12 @@ class XlineTool(Tool):
                     self._emit(self._root, _dir_deg(self._root, point))
                 self.prompt("Specify through point:")
             return
-        if self._mode == "hor":
-            self._emit(point, 0.0)
+        if self._mode == "hor":            # along the UCS's X and Y (#91)
+            self._emit(point, self.ucs().degrees)
             self.prompt("Specify through point:")
             return
         if self._mode == "ver":
-            self._emit(point, 90.0)
+            self._emit(point, self.ucs().degrees + 90.0)
             self.prompt("Specify through point:")
             return
         if self._mode == "angled":
@@ -208,9 +208,9 @@ class XlineTool(Tool):
                 return []
             return seg(self._root, _dir_deg(self._root, cursor))
         if self._mode == "hor":
-            return seg(cursor, 0.0)
+            return seg(cursor, self.ucs().degrees)
         if self._mode == "ver":
-            return seg(cursor, 90.0)
+            return seg(cursor, self.ucs().degrees + 90.0)
         if self._mode == "angled":
             return seg(cursor, self._angle)
         return []

@@ -529,3 +529,35 @@ def test_the_coordinate_readout_switches_to_model_units(qapp):
         assert "170" in win._coords_label.text()
     finally:
         win.close()
+
+
+
+def test_zoom_window_on_the_sheet_snaps_to_paper_geometry(qapp):
+    """#80 on a layout: ZOOM Window on the sheet takes its corners with
+    object snaps, here the ends of a paper line."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    win, t, vp = _window(qapp)
+    try:
+        psp = win.document.doc.layouts.get("Layout1")
+        psp.add_line((300, 20), (380, 60))
+        win.switch_layout("Layout1")
+        _wait_regen(qapp, win)
+        edit = win.command_line.input
+        for text in ("ZOOM", "W"):
+            edit.setFocus()
+            QTest.keyClicks(edit, text)
+            QTest.keyClick(edit, Qt.Key_Return)
+        assert t.tool is not None and t.tool.name == "ZOOMWINDOW"
+        t.osnap_on = True
+        t.osnap_modes = {"END"}
+        for x, y in ((300.6, 20.4), (379.5, 59.6)):
+            t.on_hover(x, y, threshold_world=2.0)
+            assert t.snap_hit is not None and t.snap_hit.kind == "END"
+            t.on_click(x, y)
+        x0, y0, x1, y1 = win.viewport._view_world_rect()
+        assert ((x0 + x1) / 2, (y0 + y1) / 2) == pytest.approx((340, 40))
+    finally:
+        win.document.dirty = False
+        win.close()

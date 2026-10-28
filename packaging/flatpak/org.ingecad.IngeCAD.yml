@@ -23,6 +23,14 @@ finish-args:
   # The user's drawings live anywhere; a CAD that cannot open the plan a
   # colleague sent to ~/Descargas is not a CAD.
   - --filesystem=home
+  # ... and on external disks and USB sticks: without these the file
+  # chooser portal hands over /run/flatpak/doc/<id>/... instead of the real
+  # path, and an xref attached from a disk was saved with that path, which
+  # no other program (nor IngeCAD after a reboot) can follow (Rafael's
+  # reviews 6 and 7). Ubuntu/Debian mount there under /media, Fedora and
+  # Arch under /run/media.
+  - --filesystem=/media
+  - --filesystem=/run/media
   # Network, since the Terrain plugin (0.6): DEMPOINTS / DEMPROFILE fetch
   # elevation tiles on request, and the coming satellite imagery and KML
   # need it too. Nothing else in IngeCAD touches the network, and the

@@ -10,6 +10,7 @@
 # on a tmpfs desktop means a quarter gigabyte of RAM and a visible delay each
 # time. The AppImage already gives the single-file experience.
 import os
+import sys
 from pathlib import Path
 
 ROOT = Path(os.environ.get("INGECAD_ROOT", os.getcwd())).resolve()
@@ -28,9 +29,13 @@ datas = [
 # They are statically linked against libredwg (ldd shows only libc and libm),
 # so nothing else has to come along. The other ten programs in vendor/bin are
 # never invoked by IngeCAD and would add ~118 MB.
+# Windows (#28): the same two, cross-built with mingw and linked statically
+# (libiconv included), so they too come alone -- see .github/workflows/
+# build-windows.yml.
+WINDOWS = sys.platform == "win32"
 binaries = []
 for tool in ("dwg2dxf", "dxf2dwg"):
-    path = ROOT / "vendor" / "libredwg" / "bin" / tool
+    path = ROOT / "vendor" / "libredwg" / "bin" / (tool + (".exe" if WINDOWS else ""))
     if not path.is_file():
         raise SystemExit(
             f"missing {path}\n"
@@ -56,6 +61,15 @@ hiddenimports = [
 from PyInstaller.utils.hooks import collect_submodules
 
 hiddenimports += collect_submodules("core")
+# ...and by the files themselves: collect_submodules IMPORTS each module to
+# find it, and on the Windows runner core.georef did not make the list
+# (the Windows build's --check: "plugin terreno: No module named
+# core.georef"). The file list cannot miss one.
+for module in sorted((ROOT / "core").rglob("*.py")):
+    parts = module.relative_to(ROOT).with_suffix("").parts
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    hiddenimports.append(".".join(parts))
 hiddenimports += ["xml.etree.ElementTree", "zipfile", "urllib.request", "urllib.error", "secrets"]
 
 # Qt ships far more than a 2D CAD viewport needs. Everything here is verified
@@ -117,9 +131,8 @@ exe = EXE(
     strip=False,
     upx=False,          # upx breaks Qt plugin loading often enough not to risk it
     console=False,      # a GUI app; errors go to the terminal when run from one
-    icon=str(ROOT / "resources" / "icons" / "ingecad.png")
-    if (ROOT / "resources" / "icons" / "ingecad.png").is_file()
-    else None,
+    # Windows wants an .ico for the executable; elsewhere it is ignored
+    icon=str(ROOT / "resources" / "icons" / ("ingecad.ico" if WINDOWS else "ingecad.png")),
 )
 coll = COLLECT(
     exe,

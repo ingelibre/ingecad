@@ -538,11 +538,15 @@ def test_dim_grip_preview_frames_the_dragged_dimension():
              .render().dimension
     # dragging the second origin re-measures live
     preview = _dim_grip_preview(dim, "dim_defpoint3", 45.0, 0.0)
-    assert preview["text"] == "45.00"
+    # written as the dimension writes it (its style drops trailing zeros)
+    drawn = next(t.dxf.text for t in dim.virtual_entities()
+                 if t.dxftype() in ("MTEXT", "TEXT"))
+    assert drawn == "30"
+    assert preview["text"] == "45"
     assert preview["d1"][1] == preview["d2"][1]     # line stays horizontal
     # dragging the line point relocates it
     preview = _dim_grip_preview(dim, "dim_defpoint", 15.0, 20.0)
-    assert preview["d1"][1] == 20.0 and preview["text"] == "30.00"
+    assert preview["d1"][1] == 20.0 and preview["text"] == "30"
     # the text grip ghosts the label at the cursor
     preview = _dim_grip_preview(dim, "dim_text", 5.0, 6.0)
     assert preview["text_at"] == (5.0, 6.0)

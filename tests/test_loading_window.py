@@ -114,3 +114,65 @@ def test_the_loading_window_api_is_self_contained(qapp):
     w.finish()
     assert not w.isVisible()
     w.deleteLater()
+
+
+def test_the_open_phases_reach_the_window_on_the_gui_thread(qapp, tmp_path):
+    """A lambda on the worker's `phase` ran in the OPEN thread (PySide calls a
+    plain callable in the emitter's thread): the loading window's label was
+    set off the GUI thread -- the CI's segfaults and bus errors here."""
+    import threading
+
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.show()
+    try:
+        win.new_document()
+        where = []
+        real = win._loading_phase
+        win._loading_phase = lambda text: (
+            where.append(threading.current_thread() is threading.main_thread()),
+            real(text))
+        win.open_path(_dxf(tmp_path))
+        _wait(qapp, win)
+        assert where, "no phase was reported"
+        assert all(where), "a phase reached the window from the open thread"
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_no_worker_signal_is_connected_to_a_plain_callable():
+    """The rule behind the test above, for every worker: a lambda or partial
+    on a worker's signal runs on the worker's thread."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    bad = re.compile(r"(worker|warmer|thread)\w*\.\w+\.connect\(\s*(lambda|partial|functools)")
+    found = []
+    for folder in ("core", "views", "formats", "render", "plugins", "tools"):
+        for path in (root / folder).rglob("*.py"):
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if bad.search(line):
+                    found.append(f"{path.relative_to(root)}:{n}: {line.strip()}")
+    assert not found, "\n".join(found)
+
+
+def test_no_worker_is_deleted_by_qt_while_python_holds_it():
+    """`finished -> worker.deleteLater` had Qt delete the open worker on its
+    own thread while the window dropped the Python reference: both destroyed
+    it (SIGBUS in Shiboken::Object::destroy, caught by gdb on the CI). A
+    worker the window keeps a reference to has one owner: Python."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    bad = re.compile(r"\.finished\.connect\(\s*\w*(worker|warmer)\w*\.deleteLater")
+    found = []
+    for folder in ("core", "views", "formats", "render", "plugins", "tools"):
+        for path in (root / folder).rglob("*.py"):
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if bad.search(line):
+                    found.append(f"{path.relative_to(root)}:{n}: {line.strip()}")
+    assert not found, "\n".join(found)

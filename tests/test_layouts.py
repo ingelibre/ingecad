@@ -310,14 +310,14 @@ def test_add_viewport_command_undo():
         doc, "Layout1", (20, 20), (220, 160))
     history.execute(command)
     psp = doc.doc.layouts.get("Layout1")
-    vps = [e for e in psp if e.dxftype() == "VIEWPORT"]
+    vps = [e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1]
     assert len(vps) == 1
     assert vps[0].dxf.width == pytest.approx(200.0)
     history.undo()
-    assert not [e for e in psp if e.dxftype() == "VIEWPORT"]
+    assert not [e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1]
     assert command.removed_handles
     history.redo()
-    assert len([e for e in psp if e.dxftype() == "VIEWPORT"]) == 1
+    assert len([e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1]) == 1
 
 
 def test_model_fit_view_aspect():
@@ -370,13 +370,13 @@ def test_mview_tool_flow():
     tool.on_point((220.0, 160.0))
     assert finished and executed
     psp = doc.doc.layouts.get("Layout1")
-    assert len([e for e in psp if e.dxftype() == "VIEWPORT"]) == 1
+    assert len([e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1]) == 1
 
     # Fit option creates a printable-area viewport
     tool2 = MviewTool(ctx)
     tool2.start()
     assert tool2.on_option("F")
-    assert len([e for e in psp if e.dxftype() == "VIEWPORT"]) == 2
+    assert len([e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1]) == 2
 
 
 def test_mview_alias():
@@ -409,7 +409,7 @@ def test_xp_zoom_sets_exact_scale_and_undoes():
     history.execute(layout_ops.viewport_from_corners(
         doc, "Layout1", (0, 0), (200, 100)))
     psp = doc.doc.layouts.get("Layout1")
-    vp = [e for e in psp if e.dxftype() == "VIEWPORT"][0]
+    vp = [e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1][0]
     before = float(vp.dxf.view_height)
 
     history.execute(layout_ops.xp_zoom_command(vp, 0.01))   # ZOOM 1/100XP
@@ -432,7 +432,7 @@ def test_viewport_fit_command_recenters():
     history.execute(layout_ops.viewport_from_corners(
         doc, "Layout1", (0, 0), (200, 100)))
     psp = doc.doc.layouts.get("Layout1")
-    vp = [e for e in psp if e.dxftype() == "VIEWPORT"][0]
+    vp = [e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1][0]
     history.execute(layout_ops.xp_zoom_command(vp, 2.0))    # zoom way in
     history.execute(layout_ops.viewport_fit_command(doc, vp))
     assert (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y) \
@@ -543,16 +543,16 @@ def test_remove_viewport_command_undo():
     vp.dxf.layer = "0"
     command = layout_ops.RemoveViewportCommand(vp, "Layout1")
     history.execute(command)
-    assert not [e for e in psp if e.dxftype() == "VIEWPORT"]
+    assert not [e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1]
     assert command.removed_handles
     history.undo()
-    vps = [e for e in psp if e.dxftype() == "VIEWPORT"]
+    vps = [e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1]
     assert len(vps) == 1
     assert (vps[0].dxf.center.x, vps[0].dxf.center.y) == (100.0, 100.0)
     assert float(vps[0].dxf.view_height) == 70.0
     assert vps[0].dxf.layer == "0"
     history.redo()
-    assert not [e for e in psp if e.dxftype() == "VIEWPORT"]
+    assert not [e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1]
 
 
 # -- paper-space selection through the real controller -------------------------
@@ -635,9 +635,9 @@ def test_paper_delete_selection_removes_viewport(qapp):
     t.on_click(60.0, 100.0)
     assert t.delete_selection()
     psp = win.document.doc.layouts.get("Layout1")
-    assert not [e for e in psp if e.dxftype() == "VIEWPORT"]
+    assert not [e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1]
     win._cmd_undo()
-    assert len([e for e in psp if e.dxftype() == "VIEWPORT"]) == 1
+    assert len([e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1]) == 1
     win.close()
 
 
@@ -795,7 +795,7 @@ def test_page_setup_command_writes_fields_and_spares_viewports():
     assert psp.dxf.paper_size.startswith("ISO_A4_")
     assert psp.dxf.plot_rotation == 0
     # THE invariant: the colleague's viewports survive untouched
-    vps = [e for e in psp if e.dxftype() == "VIEWPORT"]
+    vps = [e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1]
     assert len(vps) == 1 and vps[0] is vp
     assert (vp.dxf.view_center_point.x, vp.dxf.view_center_point.y,
             float(vp.dxf.view_height)) == view_before
@@ -891,7 +891,7 @@ def test_page_setup_full_options_roundtrip():
     # limits account for the plot offset
     assert tuple(dxf.limmin)[:2] == (-15.0, -9.0)
     # the viewport still survives the full write
-    assert [e for e in psp if e.dxftype() == "VIEWPORT"] == [vp]
+    assert [e for e in psp if e.dxftype() == "VIEWPORT" and e.dxf.id != 1] == [vp]
     history.undo()
     assert int(dxf.plot_type) == 5             # back to schema default
 
@@ -1434,6 +1434,98 @@ def test_move_or_copy_from_the_tab_menu(qapp):
         assert layout_ops.layout_names(win.document)[-1] == "Layout1 (2)"
         win.history.undo()
         assert "Layout1 (2)" not in layout_ops.layout_names(win.document)
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_the_viewport_scale_brings_its_annotation_scale_along(qapp):
+    # #73 (Rafael): viewports at 1:1, 1:2, 1:5 drew annotative text at
+    # different sizes -- the viewport scale changed only the zoom and left
+    # the annotation scale at 1:1. AutoCAD keeps them in step; one undo.
+    from core import annotative
+
+    win, t, vp = _layout_window(qapp)
+    t._pick_tolerance = 2.0
+    t.on_click(60.0, 100.0)                     # select the viewport
+    combo = win._vp_scale_combo
+    win._refresh_vp_scale_combo()
+    target = next(i for i in range(combo.count()) if combo.itemData(i) == (1, 5))
+    before = annotative.viewport_scale(vp)
+    win._on_vp_scale_combo(target)
+    assert layout_ops.viewport_scale(vp) == pytest.approx(1.0 / 5.0)
+    assert annotative.viewport_scale(vp).name == "1:5"
+    win._cmd_undo()
+    assert annotative.viewport_scale(vp) == before
+    assert layout_ops.viewport_scale(vp) != pytest.approx(1.0 / 5.0)
+    win.close()
+
+
+def test_each_page_setup_margin_sits_on_its_side_of_the_sheet(qapp):
+    # #61 (Rafael, review 6, 23:23-25:50): "T R B L" in a row put his 20 mm
+    # on the wrong side twice. Each field now sits on its own side of a
+    # picture of the sheet, which lights the side being edited.
+    from views.page_setup_dialog import PageSetupDialog
+
+    win, t, vp = _layout_window(qapp)
+    layout = win.document.doc.layouts.get("Layout1")
+    dialog = PageSetupDialog(win, layout)
+    dialog.show()
+    qapp.processEvents()
+    # the CI's Xvfb has no window manager: the dialog is not always the
+    # active window there, so the test makes it so here too
+    win.activateWindow()
+    qapp.processEvents()
+    try:
+        preview = dialog.margins_preview.geometry()
+        box = dialog.margins_preview.parentWidget()
+
+        def centre(widget):
+            return widget.mapTo(box, widget.rect().center())
+
+        assert centre(dialog.margin_top).y() < preview.top()
+        assert centre(dialog.margin_bottom).y() > preview.bottom()
+        assert centre(dialog.margin_left).x() < preview.left()
+        assert centre(dialog.margin_right).x() > preview.right()
+        for side in ("top", "right", "bottom", "left"):
+            getattr(dialog, f"margin_{side}").setFocus()
+            qapp.processEvents()
+            assert dialog.margins_preview.lit_side() == side
+        dialog.landscape.setChecked(True)
+        width, height, _m = dialog.sheet()
+        assert width > height
+    finally:
+        dialog.close()
+        win.close()
+
+
+def test_page_setup_leaves_nothing_behind(qapp):
+    """Every Page Setup used to stay alive after closing: a child of the
+    window, held by a focusChanged lambda that kept repainting it."""
+    from PySide6.QtCore import QEvent, SIGNAL
+    from PySide6.QtWidgets import QApplication
+
+    from modal import drive_modal
+    from views.main_window import MainWindow
+    from views.page_setup_dialog import PageSetupDialog
+
+    win = MainWindow()
+    win.show()
+    win.new_document()
+    app = QApplication.instance()
+    focus = SIGNAL("focusChanged(QWidget*,QWidget*)")
+    try:
+        before = app.receivers(focus)
+        for close in ("reject", "accept"):
+            errors: list = []
+            drive_modal(PageSetupDialog,
+                        lambda dialog, c=close: getattr(dialog, c)(), errors)
+            win._invoke_command("PAGESETUP")
+            assert not errors
+        app.sendPostedEvents(None, QEvent.DeferredDelete)
+        qapp.processEvents()
+        assert app.receivers(focus) == before
+        assert not win.findChildren(PageSetupDialog)
     finally:
         win.document.dirty = False
         win.close()

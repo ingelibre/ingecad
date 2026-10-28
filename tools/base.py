@@ -44,12 +44,18 @@ class Tool:
     ctx: ToolContext
     name: str = "TOOL"
     last_point: Optional[Point] = None         # anchor for @rel / distances
+    #: the object snap (SnapHit) the last clicked point came from, or None
+    last_snap: object = None
     preview_points: list[Point] = field(default_factory=list)
     # Editing tools consume the current selection (noun-verb) or ask for
     # one ("Select objects:") before their point prompts. ClassVar on
     # purpose: a dataclass FIELD would make the generated __init__ reset
     # the subclass override back to False on every instance.
     wants_selection: ClassVar[bool] = False
+    #: A selecting tool that changes what it is handed: objects on a locked
+    #: layer are left out of its set, as AutoCAD does. Tools that only read
+    #: the set (LIST, TRIM's cutting edges, BLOCK) say False.
+    modifies_selection: ClassVar[bool] = True
     shift: ClassVar[bool] = False              # Shift held at last click
     # Tools whose clicks pick ENTITIES (trim targets, fillet lines) get raw
     # cursor points: AutoCAD suppresses osnap during object picking.
@@ -89,6 +95,14 @@ class Tool:
 
         return keywords.match(text, self._prompt_source) or ""
 
+    def ucs(self):
+        """The current UCS (core/ucs.py): a typed angle or an "along X"
+        default is measured from its X axis, as in AutoCAD (#91)."""
+        from core import ucs
+
+        fn = getattr(self.ctx.services, "current_ucs", None)
+        return fn() if fn is not None else ucs.WORLD
+
     def on_target_entities(self, entities: list, rect) -> None:
         """Targets captured by a window/crossing during the tool's pick phase."""
 
@@ -103,6 +117,13 @@ class Tool:
 
     def on_point(self, point: Point) -> None: ...
 
+    def drawn_segments(self) -> list:
+        """Segments this command has drawn but not yet committed, as
+        (x1, y1, x2, y2): the object snaps find them as they find the
+        drawing's (AutoCAD snaps to a polyline while it is being drawn).
+        Never the rubber band to the cursor -- only what is decided."""
+        return []
+
     def on_option(self, text: str) -> bool:
         """A non-coordinate token from the prompt. True if consumed."""
         return False
@@ -111,6 +132,12 @@ class Tool:
         """True while the tool expects literal text (dimension text
         override, etc.): Space must insert a space, not execute."""
         return False
+
+    def ortho_applies(self) -> bool:
+        """Does ORTHO constrain the point asked for now? Almost always;
+        not a rectangle's opposite corner, which AutoCAD leaves free (an
+        orthogonal corner is a zero-size rectangle)."""
+        return True
 
     def on_enter(self) -> None:
         """Enter on an empty prompt: finish where that is meaningful."""

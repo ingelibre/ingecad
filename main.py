@@ -110,6 +110,9 @@ def _init_language() -> None:
     deliberate opt-in via Tools > Language.
     """
     i18n.set_language(str(QSettings().value("language", "en")))
+    from views import qt_translations
+
+    qt_translations.install(i18n.current_language())
 
 
 def _self_check() -> int:
@@ -165,6 +168,14 @@ def _self_check() -> int:
         print(f"  {'translations':<14}: MISSING  no language pack has a catalog "
               f"under {i18n.i18n_dir()}")
         problems.append("translations")
+    # Qt's own strings (OK, Cancel, Save...) come from PySide6's catalogs.
+    from PySide6.QtCore import QLibraryInfo
+
+    qt_dir = Path(QLibraryInfo.path(QLibraryInfo.TranslationsPath))
+    qt_ok = (qt_dir / "qtbase_es.qm").is_file()
+    print(f"  {'Qt catalogs':<14}: {'found' if qt_ok else 'MISSING'}  {qt_dir}")
+    if not qt_ok:
+        problems.append("Qt catalogs")
 
     # Plugins ship as folders under plugins/ (docs/plugins.md); a bundle
     # that forgot them, or the module one of them needs, starts fine and
@@ -276,9 +287,19 @@ def main() -> int:
     _apply_dark_theme(app)
     _init_language()
 
+    # A drawing double-clicked while IngeCAD runs opens as a tab of the
+    # running window: this one hands it over and quits.
+    from core import single_instance
+
+    drawings = _drawing_args(sys.argv[1:])
+    instance = single_instance.claim([str(d) for d in drawings])
+    if instance is None:
+        return 0
+
     from views.main_window import MainWindow
 
     window = MainWindow()
+    window.restore_window_geometry()    # as it was last closed (#72)
     # Show before opening, not after. A double-clicked drawing can take
     # seconds, and the window must already be on screen for that wait to be
     # visible at all. It also keeps the status bar honest: QStatusBar only
@@ -286,16 +307,15 @@ def main() -> int:
     # when the message arrives, so opening first painted the "Opening..."
     # text underneath the coordinates, both illegible.
     window.show()
-    # A document passed on the command line (the OS file association's
-    # double-click hands it as argv[1]) opens right away; otherwise start with
-    # a blank drawing, like AutoCAD's Drawing1, so the panels and commands work
-    # from the first click instead of waiting for File > New.
+    # Documents passed on the command line (the OS file association's
+    # double-click hands them as arguments) open right away, a tab each;
+    # otherwise start with a blank drawing, like AutoCAD's Drawing1, so the
+    # panels and commands work from the first click instead of waiting for
+    # File > New.
     opened = False
-    if len(sys.argv) > 1:
-        doc = Path(sys.argv[1])
-        if doc.suffix.lower() in (".dxf", ".dwg") and doc.exists():
-            window.open_path(doc)
-            opened = True
+    if drawings:
+        window.open_paths(drawings)
+        opened = True
     if not opened:
         # A crash left work behind: that is what the user came back for, so
         # it is offered before anything else (AutoCAD shows its Drawing
@@ -309,10 +329,57 @@ def main() -> int:
         # double-clicked in the file manager never sees this window, and the
         # user can retire it with its own checkbox.
         opened = _startup_choice(window)
+    import shiboken6
+
+    if not shiboken6.isValid(window):
+        # closed during the start-up dialogs: a closed window is destroyed
+        # (WA_DeleteOnClose), and there is nothing left to run
+        return 0
     if not opened:
         window.new_document()
     _offer_appimage_integration(window)
-    return app.exec()
+    # drawings handed over during the start-up dialogs open now
+    instance.set_target(_open_handed_over)
+    try:
+        return app.exec()
+    finally:
+        instance.close()
+
+
+def _drawing_args(args: list[str]) -> list[Path]:
+    """The DXF/DWG files among the arguments, as absolute paths: a second
+    IngeCAD hands them to the first, which runs in another directory."""
+    found = []
+    for arg in args:
+        if arg.startswith("-"):
+            continue
+        path = Path(arg)
+        if path.suffix.lower() in (".dxf", ".dwg") and path.exists():
+            found.append(path.resolve())
+    return found
+
+
+def _open_handed_over(paths: list[str]) -> None:
+    """Drawings a second IngeCAD handed over: tabs of the window in front
+    (an IngeCAD can have several windows), which comes forward."""
+    from PySide6.QtWidgets import QApplication
+
+    from views.main_window import MainWindow
+
+    window = QApplication.activeWindow()
+    if not isinstance(window, MainWindow):
+        windows = [w for w in QApplication.topLevelWidgets()
+                   if isinstance(w, MainWindow) and w.isVisible()]
+        if not windows:
+            window = MainWindow()
+            window.show()
+        else:
+            window = windows[-1]
+    window.open_paths(paths)
+    if window.isMinimized():
+        window.showNormal()
+    window.raise_()
+    window.activateWindow()
 
 
 def _offer_appimage_integration(window) -> None:

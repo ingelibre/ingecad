@@ -317,6 +317,88 @@ def dim_style_attribs(document, name: str) -> dict:
     return attribs
 
 
+def fixed_text_heights(document) -> dict[str, float]:
+    """{text style: height} of the text styles that fix their height."""
+    out = {}
+    for style in document.doc.styles:
+        try:
+            height = float(style.dxf.get("height", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if height > 0.0:
+            out[style.dxf.name] = height
+    return out
+
+
+def dim_text_height(doc, get) -> float:
+    """The height a dimension's text is drawn at, before DIMSCALE.
+
+    AutoCAD (Dimension Style, Text Height): "If a fixed text height is set
+    in the Text Style (the text style height is greater than 0), that height
+    overrides the text height set here" -- and ezdxf draws it so. ``get`` is
+    a ``(key, default) -> value`` lookup: a style's ``dxf.get`` or a
+    dimension's override ``get``. The one answer for everything that needs
+    the height -- the drawing, the style dialog's preview, DIMSPACE's
+    spacing, a leader's text, a centre mark's size -- which each read DIMTXT
+    alone and disagreed with the drawing when the style was fixed.
+    """
+    name = get("dimtxsty", None) or "Standard"
+    try:
+        if name in doc.styles:
+            fixed = float(doc.styles.get(name).dxf.get("height", 0.0) or 0.0)
+            if fixed > 0.0:
+                return fixed
+    except Exception:                          # noqa: BLE001 - use DIMTXT
+        pass
+    try:
+        return float(get("dimtxt", 2.5) or 2.5)
+    except (TypeError, ValueError):
+        return 2.5
+
+
+#: What a dimension style means by a variable it does not write, where
+#: ezdxf knows no default: no text style is the Standard one.
+_UNWRITTEN = {"dimtxsty": "Standard"}
+
+
+def dim_style_differences(document, name: str, base: str) -> list[tuple[str, object]]:
+    """What ``name`` sets differently from ``base``, as (variable, value),
+    for the Dimension Style Manager's Description ("ISO-25 + Arrow size =
+    2"). Compared on EFFECTIVE values -- a variable a style does not write
+    counts as its default -- so two styles that agree are not listed as
+    different just because one of them spells the value out (a style made
+    from ISO-25 listed a dozen identical variables and hid its real change).
+    """
+    from core import annotative
+
+    styles = document.doc.dimstyles
+    one, other = styles.get(name), styles.get(base)
+    keys = set(one.dxf.all_existing_dxf_attribs()) | \
+        set(other.dxf.all_existing_dxf_attribs())
+    keys -= {"handle", "owner", "name", "flags"}
+
+    def value(style, key):
+        if style.dxf.hasattr(key):
+            return style.dxf.get(key)
+        if key in _UNWRITTEN:
+            return _UNWRITTEN[key]
+        try:
+            return style.dxf.get_default(key)
+        except Exception:                    # noqa: BLE001 - no default known
+            return None
+
+    def same(a, b) -> bool:
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+            return abs(float(a) - float(b)) <= 1e-9
+        return (a or None) == (b or None)
+
+    out = [(key, value(one, key)) for key in sorted(keys)
+           if not same(value(one, key), value(other, key))]
+    if annotative.is_annotative(one) != annotative.is_annotative(other):
+        out.append(("annotative", annotative.is_annotative(one)))
+    return out
+
+
 def rerender_dimensions(document, style_name: str) -> None:
     """Re-render every dimension that uses ``style_name`` — AutoCAD applies a
     modified style to the dimensions drawn with it. Superseded *D blocks are

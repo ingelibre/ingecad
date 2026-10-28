@@ -29,6 +29,11 @@ _POLAR = re.compile(rf"^(?P<rel>[@#])?(?P<d>{_NUM})\s*<\s*(?P<a>{_NUM})$")
 _DISTANCE = re.compile(rf"^(?P<d>{_NUM})$")
 
 
+def is_direct_distance(text: str) -> bool:
+    """A bare number at a point prompt: AutoCAD's direct distance entry."""
+    return bool(_DISTANCE.match(text.strip()))
+
+
 @dataclass(frozen=True)
 class ParsedPoint:
     x: float
@@ -55,6 +60,12 @@ def parse_point(
     can treat it as a keyword/option instead).
     """
     text = text.strip()
+    if text == "@":
+        # AutoCAD's "@": the last point itself (@0,0) -- how its manual
+        # says to break an object at one point
+        if last_point is None:
+            raise CoordinateError("relative input needs a previous point")
+        return ParsedPoint(last_point[0], last_point[1])
 
     def relative(prefix) -> bool:
         if prefix == "@":

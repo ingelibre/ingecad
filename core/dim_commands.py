@@ -51,9 +51,53 @@ def dim_scale(document, dim) -> float:
 
 
 def text_height(document, dim) -> float:
-    style = _style(document, dim)
-    height = style.dxf.get("dimtxt", 2.5) if style is not None else 2.5
-    return float(height or 2.5) * dim_scale(document, dim)
+    """The height ``dim``'s text is drawn at, DIMSCALE applied."""
+    from core.styles import dim_text_height
+
+    if dim is not None:
+        try:
+            get = dim.override().get
+        except Exception:                      # noqa: BLE001 - the style's
+            get = None
+    else:
+        get = None
+    if get is None:
+        style = _style(document, dim)
+        if style is None:
+            return 2.5 * dim_scale(document, dim)
+        get = style.dxf.get
+    return dim_text_height(document.doc, get) * dim_scale(document, dim)
+
+
+def measurement_text(dim, value: float) -> str:
+    """``value`` written the way ``dim`` writes its measurement: its
+    DIMLFAC, DIMRND, DIMDEC, DIMZIN and decimal separator, each from the
+    dimension's overrides first and then its style -- what a grip-drag
+    preview must show so the number does not jump when the drag lands
+    ("48.23" in the preview, "48" on the drawing, in Rafael's seventh
+    review). DIMRND 0 is AutoCAD's "no rounding", not ezdxf's "drop the
+    decimals"."""
+    from ezdxf.render.dim_base import format_text
+
+    try:
+        override = dim.override()
+        get = override.get
+        # the renderer's own answer, so the preview and the drawing agree
+        separator = override.get_decimal_separator()
+    except Exception:                        # noqa: BLE001 - plain defaults
+        def get(_key, default=None):
+            return default
+        separator = "."
+    factor = float(get("dimlfac", 1.0) or 1.0)
+    if factor < 0.0:            # paper space only; previews are of the model
+        factor = 1.0
+    rounding = get("dimrnd", None)
+    rounding = float(rounding) if rounding else None
+    decimals = get("dimdec", 2)
+    return format_text(value * factor, dimrnd=rounding,
+                       dimdec=int(decimals) if decimals is not None else 2,
+                       dimzin=int(get("dimzin", 8) or 0),
+                       dimdsep=separator or ".")
 
 
 def break_size(document, dim) -> float:

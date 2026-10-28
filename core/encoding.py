@@ -133,6 +133,35 @@ def repair_invalid_defaults(doc) -> int:
     return changed
 
 
+#: Dimension-style variables whose value ezdxf assumes, when the group is
+#: absent, to be something other than the DXF default of 0.
+_DIMSTYLE_ZERO_DEFAULTS = ("dimadec", "dimaltd", "dimarcsym", "dimatfit",
+                           "dimazin", "dimdec", "dimgap", "dimtdec",
+                           "dimtmove", "dimtofl", "dimzin")
+
+
+def repair_dimstyle_defaults(doc) -> int:
+    """Write out the zeros LibreDWG left implicit in every DIMSTYLE.
+
+    dwg2dxf omits a dimension-style group whose value is 0 (as DXF allows:
+    an absent group is 0), but ezdxf fills some of them with its own
+    defaults -- DIMZIN 8 above all, so a style the author set to show
+    trailing zeros lost them on the first redraw of each dimension ("0.10"
+    became "0.1" after a grip edit in dozens of corpus plans). Measured on
+    a real plan against ``dwgread -O JSON``: every absent group was 0 in
+    the DWG. Returns how many styles changed, for the tests.
+    """
+    changed = 0
+    for style in doc.dimstyles:
+        dirty = False
+        for name in _DIMSTYLE_ZERO_DEFAULTS:
+            if not style.dxf.hasattr(name):
+                style.dxf.set(name, 0)
+                dirty = True
+        changed += dirty
+    return changed
+
+
 def _mtext_entities(doc):
     """Every MTEXT in the document — model space, layouts and blocks."""
     for layout in doc.layouts:

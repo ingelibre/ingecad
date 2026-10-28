@@ -208,6 +208,33 @@ def _entities_kept(doc, dropping_blocks: Iterable[str]):
             yield from b
 
 
+def used_linetypes(doc, entities=None, dropping_layers=()) -> set[str]:
+    """The linetypes the drawing uses, upper-cased: by its entities, by the
+    layers that stay, by dimension and multileader styles, as the current
+    one -- plus the three that always count (BYLAYER, BYBLOCK, CONTINUOUS).
+
+    One answer for both questions that need it: what PURGE may remove (with
+    the layers it is dropping in the same pass) and what the Linetype
+    Manager's Delete may remove (AutoCAD: "You can delete only unused
+    linetypes").
+    """
+    if entities is None:
+        entities = _entities_kept(doc, ())
+    dropping = {str(n).upper() for n in dropping_layers}
+    used = {str(e.dxf.get("linetype", "BYLAYER")).upper() for e in entities}
+    used |= {str(l.dxf.get("linetype", "CONTINUOUS")).upper()
+             for l in doc.layers if l.dxf.name.upper() not in dropping}
+    used.add(str(doc.header.get("$CELTYPE", "BYLAYER")).upper())
+    for style in _style_objects(doc):
+        for attr in ("dimltype", "dimltex1", "dimltex2"):
+            used.add(str(style.dxf.get(attr, "")).upper())
+        if style.dxf.is_supported("leader_linetype_handle"):
+            used.add(str(_record_name(
+                doc, style.dxf.get("leader_linetype_handle", None)) or "").upper())
+    used.discard("")
+    return used | _PROTECTED_LTYPES
+
+
 def candidates(doc, nested: bool = True) -> dict[str, list]:
     """What PURGE may remove, per category: names, or entities for the
     unnamed categories (zero-length geometry, empty text)."""
@@ -229,18 +256,7 @@ def candidates(doc, nested: bool = True) -> dict[str, list]:
     out["layers"] = sorted(l.dxf.name for l in doc.layers
                            if l.dxf.name.upper() not in used_layers)
     dropping_layers = ci(out["layers"])
-    # linetypes: entities, the layers that stay, styles, the current one
-    used_lt = ci(e.dxf.get("linetype", "BYLAYER") for e in kept)
-    used_lt |= ci(l.dxf.get("linetype", "CONTINUOUS") for l in doc.layers
-                  if l.dxf.name.upper() not in dropping_layers)
-    used_lt.add(str(header.get("$CELTYPE", "BYLAYER")).upper())
-    for style in _style_objects(doc):
-        for attr in ("dimltype", "dimltex1", "dimltex2"):
-            used_lt.add(str(style.dxf.get(attr, "")).upper())
-        if style.dxf.is_supported("leader_linetype_handle"):
-            used_lt.add(str(_record_name(
-                doc, style.dxf.get("leader_linetype_handle", None)) or "").upper())
-    used_lt |= _PROTECTED_LTYPES
+    used_lt = used_linetypes(doc, kept, dropping_layers)
     out["ltypes"] = sorted(lt.dxf.name for lt in doc.linetypes
                            if lt.dxf.name.upper() not in used_lt)
     # text styles: text entities, dimension and multileader styles, current
@@ -380,6 +396,7 @@ class PurgeCommand(Command):
     """
 
     name = "PURGE"
+    touches_blocks = True
     needs_regen = True
 
     def __init__(self, items: dict[str, list]) -> None:

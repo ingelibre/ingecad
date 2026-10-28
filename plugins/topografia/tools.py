@@ -96,6 +96,7 @@ class ExportPointsTool(Tool):
     """PEXPORT: the selected survey points (or all) -> P,N,E,Z,D text."""
 
     wants_selection = True
+    modifies_selection = False   # reads the set; locked layers count
 
     def start(self) -> None:
         self.name = "PEXPORT"
@@ -707,6 +708,7 @@ class UtmGridTool(Tool):
 class TinTool(Tool):
     """TIN: triangulate the selected points (and breaklines) into a surface."""
 
+    modifies_selection = False   # reads the set; locked layers count
     wants_selection = True
 
     def start(self) -> None:

@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import (QEvent, QObject, QPoint, QSettings, Qt,
+from PySide6.QtCore import (QEvent, QPoint, QSettings, Qt,
                             QThread, QTimer, Signal)
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QDockWidget,
     QLabel,
     QMainWindow,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core import gc_guard
 from core import i18n
 from core.actions import Dispatcher, Prompt
 from core.commands import History
@@ -32,20 +34,29 @@ from core.document import Document, DocumentError
 from core.i18n import tr
 from views import file_dialogs
 from views.command_line import CommandLine
+from views.document_tabs import DocumentTabsMixin
 from views.title_bar import TitleBar
 from core.version import __version__
 from views.viewport import Viewport
 
 SETTING_SIDEBAR_SHOWN = "ui/sidebar_shown"
 SETTING_SIDEBAR_WIDTH = "ui/sidebar_width"
+#: The Linetype control's last entry, "Other...", which opens the manager.
+_OTHER_LINETYPE = "\x00other"
 
 
-class _OpenWorker(QObject):
+class _OpenWorker(QThread):
     """Loads and regens a drawing off the UI thread.
 
     Real plans take seconds (a colleague's 4.5 MB pavement sheet froze the UI
     for minutes before the hatch density cap) — the window must stay alive.
     Only plain Python/ezdxf objects cross the thread boundary.
+
+    A QThread subclass like every other worker. It was a QObject moved to a
+    QThread, the one worker of that shape -- and every crash the CI caught
+    (a SIGBUS destroying it on its own thread, segfaults delivering posted
+    events on the GUI thread) happened while a drawing opened. This object
+    lives on the GUI thread its whole life; only run() is elsewhere.
     """
 
     done = Signal(object, object)   # Document, Scene
@@ -54,9 +65,20 @@ class _OpenWorker(QObject):
 
     def __init__(self, path: Path) -> None:
         super().__init__()
+        self.setObjectName("open-drawing")
         self._path = path
 
     def run(self) -> None:
+        from core import gc_guard
+
+        # every worker under gc_guard.paused(): without it the collector
+        # ran on this thread -- 106 collections while opening a small
+        # drawing with thresholds lowered, any of which may destroy a GUI
+        # object off the GUI thread
+        with gc_guard.paused():
+            self._run()
+
+    def _run(self) -> None:
         from formats.dwg_bridge import DwgBridgeError, load_dwg
         from render.backend import build_scene
 
@@ -216,7 +238,46 @@ class _SaveWorker(QThread):
                 self.error = exc
 
 
-class MainWindow(QMainWindow):
+class _InputHold(QWidget):
+    """Holds keyboard, mouse and shortcuts while a save runs, as AutoCAD
+    does: an application-modal window, invisible and never active. Qt
+    itself then drops the input of every other window -- the main one, the
+    floating toolbars, the shortcuts -- without a line of Python per event
+    (an app-wide event filter did it before, and cost the window a second
+    of GIL waits per save)."""
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint
+                         | Qt.WindowTransparentForInput)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setWindowModality(Qt.ApplicationModal)
+        self.setGeometry(parent.x(), parent.y(), 1, 1)
+
+
+#: QSettings key of the main window's geometry (saveGeometry()).
+SETTING_WINDOW_GEOMETRY = "ui/window_geometry"
+
+
+class _LayoutTabHost(QWidget):
+    """The Model/layout tab row: asks for the width of every tab, even
+    while some wait behind "…"."""
+
+    full_width = 0
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        hint.setWidth(max(hint.width(), self.full_width))
+        return hint
+
+
+def _lineweight_name(value: int) -> str:
+    return {-1: "ByLayer", -2: "ByBlock", -3: "Default"}.get(
+        int(value), f"{int(value) / 100:.2f} mm")
+
+
+class MainWindow(DocumentTabsMixin, QMainWindow):
     # A live viewport regen must fit a frame-ish budget or pan blocks the UI.
     _VP_LIVE_BUDGET_MS = 33.0
 
@@ -274,6 +335,13 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        # Closing a window destroys it. Without this close() only hid it,
+        # and the lambdas its menus and toolbars connect to its signals
+        # live on the C++ side, out of the collector's reach: every closed
+        # window stayed in memory with its thousands of widgets. 135 tests
+        # left 63 windows and 1 GB behind, and every later processEvents
+        # walked them -- why v0.6.5's CI ran 3.4x longer than v0.6.4's.
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.document: Document | None = None
         self._regen_worker: RegenWorker | None = None
         self._regen_rerun = False
@@ -287,6 +355,11 @@ class MainWindow(QMainWindow):
         #: change the tessellation without touching the revision, so the
         #: revision alone cannot be trusted as the cache key).
         self._layout_scenes: dict[str, tuple[int, object]] = {}
+        #: layout name -> (cx, cy, scale): the view each Model/Layout tab was
+        #: left with, as AutoCAD keeps one per tab (core/saved_views.py)
+        self._layout_cameras: dict[str, tuple[float, float, float]] = {}
+        #: the layout whose regen should land on that tab's own view
+        self._regen_view_for: str | None = None
         self._layers_dock = None
         self._layers_panel = None
         self._active_vp = None    # MSPACE-activated viewport entity, if any
@@ -311,6 +384,7 @@ class MainWindow(QMainWindow):
         self._vp_gesture_timer.setInterval(700)
         self._vp_gesture_timer.timeout.connect(self._vp_gesture_commit)
         self._open_thread: QThread | None = None
+        self._pending_opens: list[Path] = []   # see open_paths
         self._open_worker: _OpenWorker | None = None
         self._opening_name = ""
         self.setWindowTitle(f"IngeCAD — {tr('Untitled')}")
@@ -320,7 +394,12 @@ class MainWindow(QMainWindow):
         self.setWindowFlag(Qt.FramelessWindowHint, True)
 
         self.viewport = Viewport(self)
-        self.setCentralWidget(self.viewport)
+        # the drawing tabs on top of the canvas (#71): views/document_tabs.py
+        from views.document_tabs import central_widget
+
+        self._tabs_init()
+        host, self._file_tabs = central_widget(self, self.viewport)
+        self.setCentralWidget(host)
 
         self._menu_bar = QMenuBar(self)
         header = QWidget(self)
@@ -354,13 +433,13 @@ class MainWindow(QMainWindow):
         self.plugins.activate_enabled()
         self.viewport.cursorMoved.connect(self._on_cursor_moved)
 
-        # Frameless windows have no system resize borders; an app-wide filter
-        # turns presses on the outer margin into native resizes, wherever the
-        # child widget under the cursor is. The status bar's size grip still
-        # works as usual.
-        from PySide6.QtWidgets import QApplication
-
-        QApplication.instance().installEventFilter(self)
+        # The canvas's own events (typing over it, the sidebar handle that
+        # rides its edge); the native window's are watched from showEvent.
+        # Never an app-wide filter: it put EVERY event of the application --
+        # paints, timers, deleted widgets -- through Python, and while a
+        # worker held the GIL each one waited its turn. Save as DWG froze
+        # the window 1.05 s for it; 0.29 s without (release bench, 0.6.6).
+        self.viewport.installEventFilter(self)
 
     RESIZE_MARGIN = 8
 
@@ -747,6 +826,130 @@ class MainWindow(QMainWindow):
         self.viewport.refresh_cursor_prefs()
         self.command_line.echo(tr("{name} = {value}", name=name, value=value))
 
+    #: name: (kind, low, high) of the variables _cmd_sysvar answers
+    _SYSVARS = {"DIMASSOC": (int, 0, 2), "CELTSCALE": (float, 1e-9, None),
+                "DIMSCALE": (float, 0.0, None), "LWDISPLAY": (int, 0, 1),
+                "ZOOMFACTOR": (int, 3, 100)}
+
+    def _sysvar_value(self, name: str):
+        from views import viewport as vp_prefs
+
+        header = self.document.doc.header if self.document is not None else {}
+        if name == "LWDISPLAY":
+            return int(self.viewport.lwt_on)
+        if name == "ZOOMFACTOR":
+            return vp_prefs.zoomfactor()
+        if name == "DIMSCALE":
+            from core import styles as style_ops
+
+            return style_ops.dim_style_attribs(
+                self.document, header.get("$DIMSTYLE", "Standard")
+            ).get("dimscale", 1.0) if self.document is not None else 1.0
+        default = {"DIMASSOC": 2, "CELTSCALE": 1.0}[name]
+        return header.get("$" + name, default)
+
+    def _cmd_sysvar(self, name: str, *args) -> Prompt | None:
+        """DIMASSOC, CELTSCALE, DIMSCALE, LWDISPLAY and ZOOMFACTOR typed:
+        "Enter new value for NAME <current>:" as AutoCAD asks."""
+        kind, low, high = self._SYSVARS[name]
+        current = self._sysvar_value(name)
+        text = str(args[0]).strip() if args and str(args[0]).strip() else ""
+        if not text:
+            return Prompt(tr("Enter new value for {name} <{value}>:",
+                             name=name, value=f"{current:g}"),
+                          lambda value: self._cmd_sysvar(name, value)
+                          if str(value).strip() else None)
+        try:
+            value = kind(float(text.replace(",", ".")))
+        except ValueError:
+            self.command_line.echo(tr("Requires a numeric value."))
+            return None
+        if (low is not None and value < low) or (high is not None and value > high):
+            self.command_line.echo(tr("Value must be between {min} and {max}.",
+                                      min=low, max=high if high is not None else "∞"))
+            return None
+        if name == "LWDISPLAY":
+            if bool(value) != self.viewport.lwt_on:
+                self._toggle_mode("lwt")
+        elif name == "ZOOMFACTOR":
+            from views import viewport as vp_prefs
+
+            QSettings().setValue(vp_prefs.SETTING_ZOOMFACTOR, value)
+        elif name == "DIMSCALE":
+            # the renderer reads DIMSCALE from the current style
+            from core import styles as style_ops
+
+            style = self.document.doc.header.get("$DIMSTYLE", "Standard")
+            self.history.execute(
+                style_ops.SetDimStylePropsCommand(style, {"dimscale": value}))
+            self.after_style_change()
+        elif self.document is not None:
+            from core.attributes import SetHeaderCommand
+
+            command = SetHeaderCommand("$" + name, value, name)
+            command.needs_regen = False       # new objects only
+            self.history.execute(command)
+        self.command_line.echo(tr("{name} = {value}", name=name,
+                                  value=f"{value:g}"))
+        return None
+
+    def _cmd_lweight(self, *args) -> Prompt | None:
+        """-LWEIGHT: the lineweight new objects get ($CELWEIGHT)."""
+        from core.attributes import SetHeaderCommand
+
+        def answer(text: str):
+            key = text.strip().upper()
+            if not key:
+                return None
+            named = {"BYLAYER": -1, "BL": -1, "BYBLOCK": -2, "BB": -2,
+                     "DEFAULT": -3, "D": -3}
+            if key in named:
+                value = named[key]
+            else:
+                try:
+                    mm = float(key.replace(",", "."))
+                except ValueError:
+                    self.command_line.echo(tr("Invalid lineweight."))
+                    return ask()
+                from ezdxf.lldxf import const
+
+                value = min(const.VALID_DXF_LINEWEIGHTS,
+                            key=lambda w: abs(w - mm * 100))
+            if self.document is not None:
+                command = SetHeaderCommand("$CELWEIGHT", value, "LWEIGHT")
+                command.needs_regen = False
+                self.history.execute(command)
+            self.command_line.echo(tr("Current lineweight for new objects: {w}",
+                                      w=_lineweight_name(value)))
+            return None
+
+        def ask():
+            current = int(self.document.doc.header.get("$CELWEIGHT", -1)) \
+                if self.document is not None else -1
+            return Prompt(tr("Enter default lineweight for new objects or "
+                             "[ByLayer/ByBlock/Default] <{w}>:",
+                             w=_lineweight_name(current)), answer)
+
+        if args and str(args[0]).strip():
+            return answer(str(args[0]))
+        return ask()
+
+    def _cmd_setvar(self, *args) -> Prompt | None:
+        """SETVAR: a variable by name, then its own prompt."""
+        def answer(text: str):
+            name = text.strip().upper()
+            if not name:
+                return None
+            entry = self.dispatcher._commands.get(name)
+            if entry is None:
+                self.command_line.echo(tr("Unknown variable name."))
+                return None
+            return entry.handler()
+
+        if args and str(args[0]).strip():
+            return answer(str(args[0]))
+        return Prompt(tr("Enter variable name:"), answer)
+
     def _cmd_drafting_var(self, name: str, *args) -> Prompt | None:
         """The Drafting Settings variables, typed: POLARANG (degrees),
         POLARADDANG (angles separated by ;), POLARMODE (bits), GRIDUNIT,
@@ -1001,8 +1204,17 @@ class MainWindow(QMainWindow):
         picked on the canvas, and it comes back as it was (AutoCAD, #52)."""
         from views.print_dialog import PICK_WINDOW, PrintDialog
 
+        document = self.document
+        layout = getattr(self, "_active_layout", "Model")
+        if state is None and document is not None:
+            # reopen as the last plot of this tab left it (Rafael's review 6:
+            # back to Extents / Fit / Meters after a Window / mm / acad.ctb)
+            state = document.plot_settings.get(layout)
         dialog = PrintDialog(self, state)
-        if dialog.exec() != PICK_WINDOW:
+        result = dialog.exec()
+        if result == QDialog.Accepted and document is not None:
+            document.plot_settings[layout] = dialog.state()
+        if result != PICK_WINDOW:
             return
         state = dialog.state()
 
@@ -1020,22 +1232,27 @@ class MainWindow(QMainWindow):
             self._plot_window_callback = None
             picked(None)
 
-    #: What a save holds back while it runs (see _save_off_the_ui_thread).
-    _HELD_DURING_SAVE = frozenset((
-        QEvent.KeyPress, QEvent.KeyRelease, QEvent.ShortcutOverride,
-        QEvent.Shortcut, QEvent.MouseButtonPress, QEvent.MouseButtonRelease,
-        QEvent.MouseButtonDblClick, QEvent.Wheel, QEvent.Drop))
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        # The native window sees every key and press of this window before
+        # any widget does -- and nothing else (no paints, no timers).
+        handle = self.windowHandle()
+        if handle is not None and handle is not getattr(self, "_native_window", None):
+            handle.installEventFilter(self)
+            self._native_window = handle
 
     def eventFilter(self, obj, event) -> bool:
-        if (getattr(self, "_save_worker", None) is not None
-                and event.type() in self._HELD_DURING_SAVE):
-            return True
+        if (event.type() == QEvent.Resize
+                and obj is getattr(self, "_layout_tab_host", None)):
+            self._fit_layout_tabs()
         # The sidebar handle rides the drawing's right edge.
         if (event.type() in (QEvent.Resize, QEvent.Move, QEvent.Show)
                 and obj is getattr(self, "viewport", None)):
             self._place_sidebar_handle()
+        native = obj is getattr(self, "_native_window", None)
         # In-place TEXT typing captures the keyboard before the command line.
         if (event.type() == QEvent.KeyPress and self.tools.text_capturing()
+                and (native or obj is getattr(self, "viewport", None))
                 and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)):
             key = event.key()
             if key in (Qt.Key_Return, Qt.Key_Enter):
@@ -1067,14 +1284,13 @@ class MainWindow(QMainWindow):
             if name != "Model":
                 self._rename_layout_tab(name)
                 return True
+        # Frameless windows have no system resize borders: a press on the
+        # outer margin, whatever widget is under it, is a native resize. The
+        # status bar's size grip still works as usual.
         if (
-            event.type() == QEvent.MouseButtonPress
+            native
+            and event.type() == QEvent.MouseButtonPress
             and event.button() == Qt.LeftButton
-            and isinstance(obj, QWidget)
-            # Call QWidget.window() unbound: our panels store a `self.window`
-            # attribute (the MainWindow) that shadows the QWidget.window()
-            # method, so obj.window() would try to call the MainWindow.
-            and QWidget.window(obj) is self
             and not self.isMaximized()
         ):
             pos = self.mapFromGlobal(event.globalPosition().toPoint())
@@ -1139,6 +1355,7 @@ class MainWindow(QMainWindow):
         self._recent_menu = QMenu(tr("Recent drawings"), self)
         file_menu.addMenu(self._recent_menu)
         self._refresh_recent_menu()
+        item(file_menu, tr("Close"), lambda: self.close_document())
         file_menu.addSeparator()
         item(file_menu, tr("Save"), self.save_document, QKeySequence.Save,
              icon="SAVEAS")
@@ -1311,6 +1528,7 @@ class MainWindow(QMainWindow):
         item(format_menu, tr("Dimension Style..."),
              self._open_dimstyle_manager, icon="DIMSTYLE")
         format_menu.addSeparator()
+        cmd_item(format_menu, tr("Point Style..."), "DDPTYPE", icon=False)
         item(format_menu, tr("Units..."), self._units_dialog)
 
         # -- Draw -------------------------------------------------------------
@@ -1330,11 +1548,13 @@ class MainWindow(QMainWindow):
             item(circle_menu, label,
                  lambda _=False, o=option: self._circle_by(o))
         for label, name in ((tr("Arc"), "ARC"), (tr("Ellipse"), "ELLIPSE"),
-                            (tr("Rectangle"), "RECTANG"), (tr("Polygon"), "POLYGON"),
-                            (tr("Point"), "POINT")):
+                            (tr("Rectangle"), "RECTANG"), (tr("Polygon"), "POLYGON")):
             cmd_item(draw_menu, label, name)
-        # AutoCAD classic: Draw > Point > Divide / Measure
+        # AutoCAD classic: one Draw > Point, a submenu (Rafael's review 6
+        # found a "Point" item right above a "Point" submenu). POINT here
+        # repeats until Enter, so it is the menu's Multiple Point.
         point_menu = draw_menu.addMenu(tr("Point"))
+        cmd_item(point_menu, tr("Multiple Point"), "POINT")
         cmd_item(point_menu, tr("Divide"), "DIVIDE")
         cmd_item(point_menu, tr("Measure"), "MEASURE")
         cmd_item(draw_menu, tr("Spline"), "SPLINE")
@@ -1428,6 +1648,16 @@ class MainWindow(QMainWindow):
         cmd_item(attribute_menu, tr("Block Attribute Manager..."), "BATTMAN",
                  icon=False)
         cmd_item(attribute_menu, tr("Synchronize"), "ATTSYNC", icon=False)
+        # AutoCAD: Modify > Annotative Object Scale > Add/Delete Scales...
+        # (#73: OBJECTSCALE existed and nobody could find it)
+        anno_menu = modify_menu.addMenu(tr("Annotative Object Scale"))
+        cmd_item(anno_menu, tr("Add Current Scale"), "AIOBJECTSCALEADD",
+                 icon=False)
+        cmd_item(anno_menu, tr("Delete Current Scale"), "AIOBJECTSCALEREMOVE",
+                 icon=False)
+        anno_menu.addSeparator()
+        cmd_item(anno_menu, tr("Add/Delete Scales..."), "OBJECTSCALE",
+                 icon=False)
         cmd_item(modify_menu, tr("Explode"), "EXPLODE")
 
         # -- Tools ------------------------------------------------------------
@@ -1459,6 +1689,15 @@ class MainWindow(QMainWindow):
         item(tools_menu, tr("Plugins..."), self._cmd_plugins)
         item(tools_menu, tr("Load Application..."), self._cmd_appload)
         item(tools_menu, tr("Run Script..."), self._cmd_script)
+        # Tools > New UCS, as the classic menu has it (#91); each entry is
+        # UCS with its option typed, like AutoCAD's menu macros.
+        ucs_menu = tools_menu.addMenu(tr("New UCS"))
+        for label, option in ((tr("World"), "W"), (tr("Previous"), "P"),
+                              (tr("Origin"), "O"), (tr("3 Point"), ""),
+                              (tr("Object"), "OB"), (tr("Align to View"), "V"),
+                              (tr("Z"), "Z")):
+            ucs_menu.addAction(label,
+                               lambda o=option: self._ucs_from_menu(o))
         inquiry_menu = tools_menu.addMenu(tr("Inquiry"))
         cmd_item(inquiry_menu, tr("Distance"), "DIST", icon=False)
         cmd_item(inquiry_menu, tr("Area"), "AREA", icon=False)
@@ -1488,10 +1727,27 @@ class MainWindow(QMainWindow):
         item(tools_menu, tr("Options..."), self._cmd_options)
 
         # -- Window / Help ----------------------------------------------------
-        window_menu = menu_bar.addMenu(tr("Window"))
+        # Owned by the window (see the recent drawings menu above): it is
+        # refreshed on every open, switch and close of a drawing tab.
+        previous = getattr(self, "_window_documents_menu", None)
+        if previous is not None:
+            try:
+                previous.deleteLater()      # language switch: no leak
+            except RuntimeError:
+                pass
+        window_menu = QMenu(tr("Window"), self)
+        menu_bar.addMenu(window_menu)
+        # AutoCAD's Window menu: Close, Close All, then the open drawings
+        item(window_menu, tr("Close"), lambda: self.close_document())
+        item(window_menu, tr("Close All"), lambda: self.close_all_documents())
+        window_menu.addSeparator()
         item(window_menu, tr("Layers panel"), self.toggle_layers_panel)
         item(window_menu, tr("Command line"),
              lambda: self.command_line.input.setFocus())
+        window_menu.addSeparator()
+        self._window_documents_menu = window_menu
+        self._window_document_actions = []
+        self._refresh_window_menu()
 
         help_menu = menu_bar.addMenu(tr("Help"))
         item(help_menu, tr("Help (ingecad.org)"), self._cmd_help, QKeySequence("F1"))
@@ -1664,12 +1920,16 @@ class MainWindow(QMainWindow):
         from PySide6.QtGui import QIcon
         from PySide6.QtWidgets import QToolBar
 
+        from core.plugins import SEPARATOR
         from views.icons import command_icon
 
         bar = QToolBar(tr(spec.name), self)
         bar.setObjectName(f"plugin_{spec.id}_toolbar")
         bar.setMovable(True)
         for entry in spec.toolbar:
+            if entry == SEPARATOR:          # as in a plugin's menu
+                bar.addSeparator()
+                continue
             icon = QIcon(str(entry.icon)) if entry.icon else command_icon(entry.command)
             act = QAction(icon, tr(entry.label), self)
             act.setToolTip(f"{tr(entry.label)} ({entry.command})")
@@ -1707,27 +1967,45 @@ class MainWindow(QMainWindow):
             QUrl("https://github.com/ingelibre/ingecad/issues/new/choose"))
 
     def _show_about(self) -> None:
-        from PySide6.QtWidgets import QMessageBox
         from core.version import __version__
+        from views.about_dialog import AboutDialog
 
-        QMessageBox.about(
-            self, tr("About IngeCAD"),
-            f"IngeCAD {__version__}\n"
-            + tr("Free 2D CAD for Linux in the spirit of classic AutoCAD.")
-            + "\nGPL-3.0-or-later · Marco Sumari Tellez")
+        dialog = AboutDialog(self, __version__)
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        dialog.exec()
 
     def _set_language(self, code: str) -> None:
         """Switch the UI language, persist it, and retranslate live."""
         if code == i18n.current_language():
             return
         QSettings().setValue("language", code)
+        previous = i18n.catalog()
         i18n.set_language(code)
-        self._retranslate()
+        from views import qt_translations
 
-    def _retranslate(self) -> None:
+        qt_translations.install(i18n.current_language())   # Qt's own buttons
+        self._retranslate(previous)
+
+    def _retranslate(self, previous: dict | None = None) -> None:
         name = self.document.name if self.document else tr("Untitled")
         self.setWindowTitle(f"IngeCAD — {name}")
         self._build_menus()
+        # everything else built with tr() (#74): side tabs, status-bar
+        # toggles, palettes, toolbars
+        from views.retranslate import retranslate_tree
+
+        retranslate_tree(self, previous or {})
+        for panel in ("_layers_panel", "_properties_panel", "_styles_panel",
+                      "_xrefs_panel"):
+            widget = getattr(self, panel, None)
+            refresh = getattr(widget, "refresh", None)
+            if callable(refresh):
+                refresh()
+        self._update_space_button()
+        # the property combos (ByLayer...) hold user names too, so they are
+        # rebuilt rather than walked: their cache key is dropped
+        self._props_combo_key = object()       # never equal: rebuild them
+        self._refresh_props_toolbar()
 
     # -- command line -----------------------------------------------------------
     def _build_command_line(self) -> None:
@@ -1745,7 +2023,8 @@ class MainWindow(QMainWindow):
         # the automatic save's gate belongs, and why no call site had to
         # learn about it.
         self.history.before_mutation = self._autosave_gate
-        self.dispatcher = Dispatcher(echo=self.command_line.echo)
+        self.dispatcher = Dispatcher(echo=self.command_line.echo,
+                                     echo_prompt=self.command_line.echo_prompt)
 
         from views.tool_controller import ToolController
 
@@ -1770,7 +2049,10 @@ class MainWindow(QMainWindow):
         self._build_mode_toggles()
 
     def _on_command_submitted(self, text: str) -> None:
-        self.command_line.echo_input(text)
+        if self.tools.active() or self.dispatcher.pending_prompt is not None:
+            self.command_line.echo_answer(text)     # "prompt: answer"
+        else:
+            self.command_line.echo_input(text)
         stripped = text.strip()
         if stripped.startswith("'"):
             # Transparent command ('ZOOM, 'PAN, 'REDRAW) — runs without
@@ -1918,6 +2200,7 @@ class MainWindow(QMainWindow):
             if fkey:
                 QShortcut(QKeySequence(fkey), self,
                           lambda k=key: self._toggle_mode(k))
+        self._build_pick_filter(style)
         self._build_annotation_controls(style)
         self._build_statusbar_customization(style)
         self._load_osnap_modes()
@@ -1963,7 +2246,9 @@ class MainWindow(QMainWindow):
         bind("Ctrl+\\", self._on_prompt_cancelled)
         bind("Ctrl+PgUp", lambda: self._step_layout(-1))      # previous layout tab
         bind("Ctrl+PgDown", lambda: self._step_layout(1))     # next layout tab
-        bind("Ctrl+Tab", self._next_window)                   # next drawing window
+        bind("Ctrl+Tab", self._next_drawing)                  # next drawing (tab)
+        bind("Ctrl+Shift+Tab", lambda: self._next_drawing(-1))
+        bind("Ctrl+F4", self.close_document)                  # CLOSE
 
     def _toggle_command_line(self) -> None:
         dock = self._command_dock
@@ -2003,6 +2288,13 @@ class MainWindow(QMainWindow):
             return
         index = (names.index(self._active_layout) + delta) % len(names)
         self.switch_layout(names[index])
+
+    def _next_drawing(self, step: int = 1) -> None:
+        """Ctrl+Tab: the next drawing tab; with one tab, the next window."""
+        if len(self._sessions) > 1:
+            self.step_document(step)
+        else:
+            self._next_window()
 
     def _next_window(self) -> None:
         """Ctrl+Tab: the next open drawing window."""
@@ -2079,6 +2371,66 @@ class MainWindow(QMainWindow):
         QSettings().setValue(self.SETTING_ANNOAUTOSCALE, int(value))
         self._refresh_annotation_controls()
 
+    def _build_pick_filter(self, style: str) -> None:
+        """The selection filter by type (core.pickfilter): lit while it
+        keeps some types out of every pick."""
+        from PySide6.QtWidgets import QToolButton
+
+        self._pick_filter_btn = QToolButton(self)
+        self._pick_filter_btn.setText(tr("FILTER"))
+        self._pick_filter_btn.setCheckable(True)
+        self._pick_filter_btn.setStyleSheet(style)
+        self._pick_filter_btn.setFocusPolicy(Qt.NoFocus)
+        self._pick_filter_btn.clicked.connect(
+            lambda _=False: self._show_pick_filter())
+        self.statusBar().addPermanentWidget(self._pick_filter_btn)
+        self._refresh_pick_filter_button()
+
+    def _show_pick_filter(self) -> None:
+        from views.pick_filter_popup import PickFilterPopup
+
+        self._refresh_pick_filter_button()    # a click must not toggle it
+        popup = PickFilterPopup(self)
+        popup.setAttribute(Qt.WA_DeleteOnClose)
+        button = self._pick_filter_btn
+        popup.adjustSize()
+        corner = button.mapToGlobal(button.rect().topLeft())
+        popup.move(corner.x(), corner.y() - popup.height())
+        popup.show()
+
+    def set_pick_filter(self, allowed) -> None:
+        """Only these object types (core.pickfilter names) may be picked;
+        None switches the filter off."""
+        from core import pickfilter
+
+        self.tools.set_pick_filter(allowed)
+        self._refresh_pick_filter_button()
+        if allowed is None:
+            self.command_line.echo(tr("Selection filter off."))
+        elif not allowed:
+            self.command_line.echo(tr("Selection filter: nothing can be selected."))
+        else:
+            self.command_line.echo(tr(
+                "Selection filter: only {types}.",
+                types=", ".join(pickfilter.display(t) for t in sorted(allowed))))
+
+    def _refresh_pick_filter_button(self) -> None:
+        button = getattr(self, "_pick_filter_btn", None)
+        if button is None:
+            return
+        from core import pickfilter
+
+        allowed = self.tools.pick_filter
+        button.setChecked(allowed is not None)
+        if allowed is None:
+            button.setToolTip(tr("Selection filter by object type: off"))
+        elif not allowed:
+            button.setToolTip(tr("Selection filter by object type: nothing"))
+        else:
+            button.setToolTip(tr(
+                "Selection filter by object type: only {types}",
+                types=", ".join(pickfilter.display(t) for t in sorted(allowed))))
+
     def _build_annotation_controls(self, style: str) -> None:
         """AutoCAD's status-bar annotation scale ("Annotation Scale of the
         current view"), with the two toggles beside it: ANNOALLVISIBLE (show
@@ -2120,6 +2472,18 @@ class MainWindow(QMainWindow):
         self._anno_scale_combo.setMaxVisibleItems(16)
         self._anno_scale_combo.activated.connect(self._on_anno_scale_combo)
         self.statusBar().addPermanentWidget(self._anno_scale_combo)
+        # One click for the selection (Rafael's review 6: the scale had to
+        # reach the selected dimensions through a dialog he never found)
+        self._anno_add_btn = QToolButton(self)
+        self._anno_add_btn.setText("+")
+        self._anno_add_btn.setStyleSheet(style)
+        self._anno_add_btn.setFocusPolicy(Qt.NoFocus)
+        self._anno_add_btn.setToolTip(
+            tr("Add the current annotation scale to the selected annotative "
+               "objects (AIOBJECTSCALEADD)"))
+        self._anno_add_btn.clicked.connect(
+            lambda _=False: self.tools.start_tool("AIOBJECTSCALEADD"))
+        self.statusBar().addPermanentWidget(self._anno_add_btn)
         self.tools.changed.connect(self._refresh_annotation_controls)
         self._refresh_annotation_controls()
 
@@ -2154,7 +2518,15 @@ class MainWindow(QMainWindow):
         current = (annotative.viewport_scale(vp) if vp is not None
                    else annotative.current_scale(doc))
         current_name = current.name if current is not None else "1:1"
-        names = [s.name for s in scales]
+        # the drawing's list plus the standard scales it lacks: a DWG from
+        # another program carries none, and Rafael's showed only 1:1
+        # (standard_scale() adds one to the drawing when it is chosen)
+        from core.units import STANDARD_SCALES, scale_text
+
+        factors = {s.name: s.factor for s in scales}
+        for num, den in STANDARD_SCALES:
+            factors.setdefault(scale_text(num, den), den / num)
+        names = sorted(factors, key=lambda n: (-factors[n], n))
         if current_name not in names:
             names.insert(0, current_name)
         for name in names:
@@ -2184,15 +2556,12 @@ class MainWindow(QMainWindow):
         if self.document is None:
             return False
         doc = self.document.doc
-        if annotative.find_scale(doc, name) is None:
-            if name == "1:1":
-                annotative.default_scale(doc)
-            else:
-                self.command_line.echo(
-                    tr("Scale \"{name}\" is not in the drawing's scale list.",
-                       name=name))
-                self._refresh_annotation_controls()
-                return False
+        if annotative.standard_scale(doc, name) is None:
+            self.command_line.echo(
+                tr("Scale \"{name}\" is not in the drawing's scale list.",
+                   name=name))
+            self._refresh_annotation_controls()
+            return False
         vp, editable = self._annotation_target()
         if not editable:
             self.command_line.echo(
@@ -2305,6 +2674,43 @@ class MainWindow(QMainWindow):
             return self.viewport.lwt_on
         return getattr(self.tools, f"{key}_on")
 
+    def _set_mode_state(self, key: str, value: bool) -> None:
+        if key == "grid":
+            self.viewport.grid_on = value
+        elif key == "lwt":
+            self.viewport.lwt_on = value
+        else:
+            setattr(self.tools, f"{key}_on", value)
+
+    #: The toggles remembered as plain on/off. OSNAP is not one of them: it
+    #: lives in its OSMODE bitcode with the running modes (osnap/osmode).
+    _PERSISTED_MODES = ("snap", "grid", "ortho", "polar", "otrack", "dyn", "lwt")
+
+    @staticmethod
+    def _mode_setting_key(key: str) -> str:
+        """Where a status-bar toggle is kept between sessions, per user, as
+        AutoCAD keeps them in the profile. Grid and lineweight share Options
+        > Display's keys: one question, one place."""
+        from views.options_dialog import SETTING_GRID, SETTING_LWT
+
+        return {"grid": SETTING_GRID, "lwt": SETTING_LWT}.get(
+            key, f"statusbar/{key}")
+
+    def _save_mode_states(self) -> None:
+        """Remember every toggle as it is now, whichever way it was flipped
+        (button, F-key, Ctrl shortcut, DSETTINGS, Options, LWDISPLAY).
+        Before the saved states are read back nothing is written, or the
+        defaults of a starting window would overwrite them."""
+        if not getattr(self, "_mode_states_loaded", False):
+            return
+        saved = self.__dict__.setdefault("_saved_mode_states", {})
+        settings = QSettings()
+        for key in self._PERSISTED_MODES:
+            value = bool(self._mode_state(key))
+            if saved.get(key) is not value:
+                settings.setValue(self._mode_setting_key(key), value)
+                saved[key] = value
+
     # -- status bar customization (AutoCAD's right-click / Customization) -------
     #: What the status bar shows out of the box: the classic drafting
     #: toggles and the space button. The rest is one right-click away, and
@@ -2325,9 +2731,11 @@ class MainWindow(QMainWindow):
             if key == "osnap":
                 widgets.append(self._osnap_arrow)
             items.append((key, tr(tip) + (f" ({fkey})" if fkey else ""), widgets))
-        items += [("annovis", tr("Annotation visibility"), [self._anno_visible_btn]),
+        items += [("pickfilter", tr("Selection filter"), [self._pick_filter_btn]),
+                  ("annovis", tr("Annotation visibility"), [self._anno_visible_btn]),
                   ("annoauto", tr("Annotation autoscale"), [self._anno_auto_btn]),
-                  ("annoscale", tr("Annotation scale"), [self._anno_scale_combo])]
+                  ("annoscale", tr("Annotation scale"),
+                   [self._anno_scale_combo, self._anno_add_btn])]
         return items
 
     def _statusbar_hidden(self) -> set:
@@ -2426,14 +2834,18 @@ class MainWindow(QMainWindow):
 
     # -- running object snaps (the status-bar dropdown) ------------------------
     def _load_display_settings(self) -> None:
-        """Restore what Options > Display persists. Saving a toggle and then
-        losing it on the next start is worse than not offering it."""
-        from views.options_dialog import SETTING_GRID, SETTING_LWT, _bool_setting
+        """Restore the status-bar toggles as the user left them. Turning the
+        grid, polar and lineweight back on at every start was a tester's
+        daily chore (Rafael, 2026-10-18: only OSNAP was remembered). No
+        drawing overrides them: IngeCAD reads none of GRIDMODE, ORTHOMODE,
+        SNAPMODE... from a file, so the user's choice wins, as in AutoCAD's
+        profile."""
+        from views.options_dialog import _bool_setting
 
-        self.viewport.lwt_on = _bool_setting(SETTING_LWT,
-                                             bool(self.viewport.lwt_on))
-        self.viewport.grid_on = _bool_setting(SETTING_GRID,
-                                              bool(self.viewport.grid_on))
+        for key in self._PERSISTED_MODES:
+            self._set_mode_state(key, _bool_setting(
+                self._mode_setting_key(key), bool(self._mode_state(key))))
+        self._mode_states_loaded = True
         self._update_mode_buttons()
 
     def _osnap_settings_key(self) -> str:
@@ -2582,6 +2994,7 @@ class MainWindow(QMainWindow):
     def _update_mode_buttons(self) -> None:
         for key, b in self._mode_buttons.items():
             b.setChecked(self._mode_state(key))
+        self._save_mode_states()
 
     # -- document plumbing for the tools ---------------------------------------
     def _refresh_recent_menu(self) -> None:
@@ -2634,6 +3047,17 @@ class MainWindow(QMainWindow):
         """
         self.open_path(path, as_template=True)
 
+    def _refresh_document_panels(self) -> None:
+        """Every panel that shows the drawing, after the drawing changed
+        under it (a tab switch)."""
+        for name in ("_layers_panel", "_styles_panel", "_properties_panel",
+                     "_xrefs_panel"):
+            panel = getattr(self, name, None)
+            if panel is not None:
+                panel.refresh()
+        if getattr(self, "_props_toolbar", None) is not None:
+            self._refresh_props_toolbar()
+
     def _drop_block_session(self) -> None:
         """The document a Block Editor session belongs to is being replaced.
 
@@ -2651,13 +3075,12 @@ class MainWindow(QMainWindow):
     def new_document(self, template: str | None = None) -> None:
         from core import templates as templates_mod
 
-        if not self.maybe_save_changes():
-            return
-        self._drop_block_session()
-        self.document = templates_mod.new_document(
-            template or self.startup_template())
+        document = templates_mod.new_document(template or self.startup_template())
+        self._tab_for_new_document(document)      # a tab of its own (#71)
+        self.document = document
         self._autosave_arm()          # a new drawing, a new countdown
         self._layout_scenes.clear()   # scenes of the previous drawing
+        self._layout_cameras = {}
         self._active_layout = "Model"
         self._deactivate_viewport()
         self._update_space_button()
@@ -2672,7 +3095,10 @@ class MainWindow(QMainWindow):
             self._styles_panel.refresh()
         if getattr(self, "_properties_panel", None) is not None:
             self._properties_panel.refresh()
+        if getattr(self, "_xrefs_panel", None) is not None:
+            self._xrefs_panel.refresh()    # not the last drawing's references
         self.setWindowTitle(f"IngeCAD — {tr('Untitled')}")
+        self._refresh_file_tabs()
 
     # -- classic toolbars (Draw left, Modify top) ------------------------------
     def _build_toolbars(self) -> None:
@@ -2998,9 +3424,26 @@ class MainWindow(QMainWindow):
             return
         num, den = data
         self._vp_gesture_commit()
-        self.history.execute(layout_ops.xp_zoom_command(vp, num / den))
+        zoom = layout_ops.xp_zoom_command(vp, num / den)
+        # AutoCAD keeps a viewport's annotation scale in step with its scale:
+        # left at 1:1, a 1:5 viewport drew its annotative text five times
+        # too small next to a 1:1 one (#73). One undo step for both.
+        from core import annotative
+        from core.commands import CompositeCommand
+        from core.units import scale_text
+
+        scale = annotative.standard_scale(self.document.doc, scale_text(num, den))
+        if scale is not None:
+            command = CompositeCommand("VPSCALE", [
+                zoom, annotative.SetAnnotationScaleCommand(
+                    scale.name, viewport=vp,
+                    autoscale=self.annoautoscale() > 0)])
+        else:
+            command = zoom
+        self.history.execute(command)
         self.command_line.echo(tr("Viewport scale set to {scale}.",
                                   scale=layout_ops.scale_label(num / den)))
+        self.invalidate_vp_model_cache()
         self.regen_in_memory()
         self._refresh_vp_scale_combo()
 
@@ -3106,7 +3549,10 @@ class MainWindow(QMainWindow):
             names += [n for n in layer_ops.available_linetypes(self.document)
                       if n not in names]
         for name in names:
-            combo.addItem(linetype_icon(name, self.document), name, name)
+            label = tr(name) if name in ("ByLayer", "ByBlock") else name
+            combo.addItem(linetype_icon(name, self.document), label, name)
+        # AutoCAD's Linetype control ends in "Other...", the Linetype Manager
+        combo.addItem(tr("Other..."), _OTHER_LINETYPE)
 
     def _fill_lineweight_combo(self) -> None:
         from core import layers as layer_ops
@@ -3118,7 +3564,7 @@ class MainWindow(QMainWindow):
         combo.clear()
         for value in (-1, -2, *layer_ops.LINEWEIGHTS):
             combo.addItem(lineweight_icon(value),
-                          tr(layer_ops.lineweight_label(value)), value)
+                          layer_ops.lineweight_label(value), value)
 
     def _show_current_properties(self) -> None:
         """Reflect either the selection or the current settings, as AutoCAD."""
@@ -3177,7 +3623,11 @@ class MainWindow(QMainWindow):
         self._apply_property("color", self._color_combo.itemData(index))
 
     def _on_prop_linetype(self, index: int) -> None:
-        self._apply_property("linetype", self._linetype_combo.itemData(index))
+        value = self._linetype_combo.itemData(index)
+        if value == _OTHER_LINETYPE:
+            self._cmd_linetype()
+            return
+        self._apply_property("linetype", value)
 
     def _on_prop_lineweight(self, index: int) -> None:
         self._apply_property("lineweight",
@@ -3211,7 +3661,7 @@ class MainWindow(QMainWindow):
         from core import layers as layer_ops
 
         if prop == "lineweight":
-            return tr(layer_ops.lineweight_label(value))
+            return layer_ops.lineweight_label(value)
         if prop == "color":
             from views.color_dialog import aci_label
 
@@ -3224,6 +3674,12 @@ class MainWindow(QMainWindow):
         if getattr(self, "_properties_panel", None) is not None:
             self._properties_panel.refresh()
         self._refresh_props_toolbar()
+
+    def _ucs_from_menu(self, option: str) -> None:
+        """Tools > New UCS > ...: UCS, then the option, as if typed."""
+        self._invoke_command("UCS")
+        if option and self.tools.active():
+            self._on_command_submitted(option)
 
     def _invoke_command(self, name: str) -> None:
         """A toolbar button runs a command like typing it: any running tool
@@ -3530,11 +3986,18 @@ class MainWindow(QMainWindow):
 
     def _start_regen(self) -> None:
         self._regen_rerun = False
+        # POINT symbols sized relative to the screen ($PDSIZE <= 0) take the
+        # height of the view being regenerated, as in AutoCAD (#69)
+        try:
+            x0, y0, x1, y1 = self.viewport._view_world_rect()
+            self.document.point_view_height = abs(y1 - y0)
+        except Exception:                  # noqa: BLE001 - no view yet
+            pass
         worker = RegenWorker(self.document, self._active_layout,
                              self.document.revision)
         worker.done.connect(self._on_regen_done)
         self._regen_worker = worker
-        worker.start()
+        gc_guard.start(worker)
 
     def _on_regen_done(self, document, scene, revision, layout) -> None:
         worker, self._regen_worker = self._regen_worker, None
@@ -3547,7 +4010,16 @@ class MainWindow(QMainWindow):
             if scene is not None:
                 self._regen_ms[layout] = worker.duration_ms
         if document is not self.document:
-            return          # another file was opened meanwhile
+            # another drawing's tab: keep the scene for when it comes back,
+            # and build the one in view if it asked while this ran
+            for session in self._sessions:
+                if (session.document is document and scene is not None
+                        and revision == document.revision
+                        and layout == session.active_layout):
+                    session.layout_scenes[layout] = (revision, scene)
+            if self._regen_rerun and self.document is not None:
+                self._start_regen()
+            return
         stale = (self._regen_rerun
                  or scene is None
                  or revision != self.document.revision
@@ -3576,9 +4048,66 @@ class MainWindow(QMainWindow):
                 self._vp_hide_baked_content()
             else:
                 self._vp_live_stop()
-        if self._regen_zoom:
+        if self._regen_view_for is not None and self._regen_view_for == layout:
+            self._regen_view_for = None
+            self._regen_zoom = False
+            self._show_tab_view(layout)
+        elif self._regen_zoom:
             self._regen_zoom = False
             self.viewport.zoom_extents()
+
+    # -- each tab's own view (core/saved_views.py) -------------------------------
+    def _current_view(self):
+        """((cx, cy, height in units), aspect) of the canvas."""
+        v = self.viewport.view
+        return (v.cx, v.cy, v.height / v.scale), v.width / max(1, v.height)
+
+    def _remember_tab_view(self) -> None:
+        if self._block_session is not None:
+            return                       # the editor's view is the block's
+        v = self.viewport.view
+        self._layout_cameras[self._active_layout] = (v.cx, v.cy, v.scale)
+
+    def _show_tab_view(self, layout: str) -> None:
+        """A tab shows the view it was left with; the first time, the view
+        the drawing was saved with; failing that, its extents."""
+        from core import saved_views
+
+        view = self.viewport.view
+        camera = self._layout_cameras.get(layout)
+        if camera is not None:
+            view.cx, view.cy, view.scale = camera
+            self.viewport.update()
+            return
+        saved = (saved_views.saved_view(self.document.doc, layout)
+                 if self.document is not None else None)
+        aspect = view.width / max(1, view.height)
+        if saved is not None and saved_views.near(
+                saved, self.viewport.scene_bounds(), aspect):
+            view.cx, view.cy = saved[0], saved[1]
+            view.scale = min(max(view.height / saved[2], view.MIN_SCALE),
+                             view.MAX_SCALE)
+            self.viewport.update()
+            return
+        self.viewport.zoom_extents()
+
+    def _store_views_for_save(self) -> None:
+        """Every tab's view into the drawing, where AutoCAD reads it."""
+        from core import saved_views
+
+        if self.document is None:
+            return
+        self._remember_tab_view()
+        height_px = max(1, self.viewport.view.height)
+        aspect = self.viewport.view.width / height_px
+        names = set(self._layout_names())
+        for layout, (cx, cy, scale) in self._layout_cameras.items():
+            if layout in names and scale > 0:
+                try:
+                    saved_views.store_view(self.document.doc, layout,
+                                           (cx, cy, height_px / scale), aspect)
+                except Exception:  # noqa: BLE001 - a view is never worth a failed save
+                    pass
 
     def _register_commands(self) -> None:
         d = self.dispatcher
@@ -3605,6 +4134,16 @@ class MainWindow(QMainWindow):
                     "CENTERCROSSGAP", "CENTERLAYER", "CENTERMARKEXE"):
             d.register(var, lambda *a, v=var: self._cmd_center_var(v, *a))
         d.register("PLUGINS", self._cmd_plugins)
+        # Commands an AutoCAD user types and found unknown (a YouTuber's
+        # drawing session): the sysvars, PROPERTIES and REDRAW
+        for var in ("DIMASSOC", "CELTSCALE", "DIMSCALE", "LWDISPLAY",
+                    "ZOOMFACTOR"):
+            d.register(var, lambda *a, v=var: self._cmd_sysvar(v, *a))
+        d.register("LWEIGHT", self._cmd_lweight)
+        d.register("SETVAR", self._cmd_setvar)
+        d.register("PROPERTIES", lambda *a: self.toggle_properties_panel())
+        d.register("REDRAW", lambda *a: self.viewport.update())
+        d.register("REDRAWALL", lambda *a: self.viewport.update())
         d.register("HELP", self._cmd_help)
         d.register("BEDIT", self._cmd_bedit)
         d.register("-BEDIT", self._cmd_bedit)
@@ -3613,9 +4152,12 @@ class MainWindow(QMainWindow):
         d.register("QUICKCALC", self._cmd_quickcalc)
         d.register("ADDSELECTED", lambda *a: self._invoke_command("ADDSELECTED"))
         d.register("U", self._cmd_undo)
-        d.register("UNDO", self._cmd_undo)
+        d.register("UNDO", self._cmd_undo_count)
         d.register("REDO", self._cmd_redo)
+        d.register("OOPS", self._cmd_oops)
         d.register("OPEN", lambda *a: self._open_dialog())
+        d.register("CLOSE", lambda *a: self.close_document())
+        d.register("CLOSEALL", lambda *a: self.close_all_documents())
         d.register("SAVEAS", lambda *a: self._save_as_dialog())
         d.register("QUIT", lambda *a: self.close())
         d.register("EXIT", lambda *a: self.close())
@@ -3658,13 +4200,14 @@ class MainWindow(QMainWindow):
                      "REVCLOUD",
                      "DIST", "ID", "AREA", "LIST",
                      "STRETCH", "BREAK", "JOIN",
-                     "CHAMFER", "ARRAY", "MATCHPROP", "PEDIT",
+                     "CHAMFER", "ARRAY", "MATCHPROP", "CHPROP", "PEDIT",
                      "DRAWORDER", "LAYISO", "LAYOFF", "LAYFRZ", "LAYLCK",
                      "LAYULK", "IMAGEATTACH",
                      "TABLE", "PDFATTACH", "IMAGEADJUST", "TRANSPARENCY",
                      "LENGTHEN", "ALIGN", "BOUNDARY", "-BOUNDARY", "DONUT",
                      "OBJECTSCALE", "-OBJECTSCALE",
-                     "SCALETEXT", "XATTACH"):
+                     "AIOBJECTSCALEADD", "AIOBJECTSCALEREMOVE",
+                     "SCALETEXT", "XATTACH", "UCS"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
         d.register("ADJUST", lambda *a: self.tools.start_tool("IMAGEADJUST"))
         d.register("CANNOSCALE", self._cmd_cannoscale)
@@ -3692,17 +4235,20 @@ class MainWindow(QMainWindow):
         d.register("DDUNITS", lambda *a: self._units_dialog())
         d.register("-UNITS", self._cmd_units_cli)
         d.register("LTSCALE", self._cmd_ltscale)
+        # point style (#69): the dialog and its two system variables
+        d.register("DDPTYPE", lambda *a: self._point_style_dialog())
+        d.register("PTYPE", lambda *a: self._point_style_dialog())
+        d.register("PDMODE", self._cmd_pdmode)
+        d.register("PDSIZE", self._cmd_pdsize)
         # drawing cleanup (#37): PURGE has a dialog and a prompt flow; the
         # other two need the mouse and are tools
         d.register("PURGE", self._cmd_purge_dialog)
         d.register("-PURGE", self._cmd_purge_cli)
         for name in ("OVERKILL", "-OVERKILL", "WBLOCK", "-WBLOCK"):
             d.register(name, lambda *a, n=name: self.tools.start_tool(n))
-        # In-scope commands that land in later phases: answer honestly.
-        for name, phase in (
-            ("LINETYPE", 6),
-        ):
-            d.register_future(name, phase)
+        d.register("LINETYPE", self._cmd_linetype)
+        d.register("MULTIPLE", self._cmd_multiple)
+        d.register("-LINETYPE", self._cmd_linetype_cli)
 
     # -- MSPACE / PSPACE (activate a viewport; ZOOM nXP sets its scale) ---------
     def _cmd_mspace(self, *args) -> None:
@@ -4073,7 +4619,7 @@ class MainWindow(QMainWindow):
         worker = _LiveSceneWorker(self.document, self._active_layout, key)
         worker.done.connect(self._on_live_scene_done)
         self._vp_live_worker = worker
-        worker.start()
+        gc_guard.start(worker)
 
     def _on_live_scene_done(self, key, scene) -> None:
         if scene is None or self.document is None or key != self._vp_live_key():
@@ -4342,20 +4888,22 @@ class MainWindow(QMainWindow):
         if self.document is None:
             self.new_document()
         name = self._active_layout
-        if name == "Model":
-            self.command_line.echo(
-                tr("PAGESETUP works on a layout tab — switch to one first."))
-            return
-        layout = self.document.doc.layouts.get(name)
+        # the Model tab has its page setup too: what PLOT starts from there
+        # (Rafael's review 6 tried it first and was sent to a layout)
+        layout = (self.document.doc.modelspace() if name == "Model"
+                  else self.document.doc.layouts.get(name))
         dialog = PageSetupDialog(self, layout)
-        if not dialog.exec():
+        accepted = dialog.exec()
+        values = dialog.values() if accepted else None
+        dialog.deleteLater()           # a child of the window: free it
+        if not accepted:
             return
-        values = dialog.values()
         width, height = values.pop("width"), values.pop("height")
         self.history.execute(layout_ops.page_setup_command(
             layout, width, height, values.pop("margins"),
             values.pop("size_name"), **values))
-        self.regen_in_memory(zoom_after=True)   # the sheet changed size
+        if name != "Model":
+            self.regen_in_memory(zoom_after=True)   # the sheet changed size
         self.command_line.echo(
             tr("Page setup applied to \"{name}\": {w:g} × {h:g} mm.",
                name=name, w=width, h=height))
@@ -4476,6 +5024,38 @@ class MainWindow(QMainWindow):
                type=tr(LINEAR_NAMES.get(units.lunits, "Decimal")),
                precision=units.luprec, scale=tr(units.unit_name)))
 
+    def _point_style_dialog(self) -> None:
+        """DDPTYPE: Format > Point Style... (#69)."""
+        from core import points
+        from views.point_style_dialog import PointStyleDialog
+
+        if self.document is None:
+            self.new_document()
+        dialog = PointStyleDialog(self, self.document.doc)
+        if not dialog.exec():
+            return
+        mode, size = dialog.values()
+        self.history.execute(points.set_point_style_command(mode, size))
+        self.regen_in_memory()
+
+    def _cmd_pdmode(self, *args):
+        from core import points
+
+        if self.document is None:
+            self.new_document()
+        return points.pdmode_command(
+            self.document, self.history.execute, self.command_line.echo,
+            self.regen_in_memory, args=args)
+
+    def _cmd_pdsize(self, *args):
+        from core import points
+
+        if self.document is None:
+            self.new_document()
+        return points.pdsize_command(
+            self.document, self.history.execute, self.command_line.echo,
+            self.regen_in_memory, args=args)
+
     def _units_dialog(self, *args) -> None:
         if self.document is None:
             self.new_document()
@@ -4502,6 +5082,66 @@ class MainWindow(QMainWindow):
             angdir=int(self._header_value("$ANGDIR", 0) or 0),
             angbase=float(self._header_value("$ANGBASE", 0.0) or 0.0),
             args=args)
+
+    def _cmd_multiple(self, *args) -> Prompt | None:
+        """MULTIPLE: repeat the next command until Esc (AutoCAD's prefix,
+        e.g. MULTIPLE DIMRADIUS to dimension radius after radius)."""
+        def on_name(text: str):
+            text = text.strip()
+            if not text:
+                return None
+            name = self.dispatcher.resolve_name(text.split()[0])
+            self.tools.repeat_name = name
+            self.dispatcher.submit(name)
+            if self.tools.tool is None:
+                # not a command that stays running (a dialog, a prompt
+                # flow): it ran once
+                self.tools.repeat_name = None
+            return None
+
+        if args:
+            return on_name(" ".join(args))
+        return Prompt(tr("Enter command name to repeat:"), on_name)
+
+    def _cmd_linetype(self, *args) -> None:
+        """LINETYPE (Format > Linetype, LT): the Linetype Manager."""
+        if self.document is None:
+            self.new_document()
+        from views.linetype_dialog import LinetypeManagerDialog
+
+        dialog = LinetypeManagerDialog(self, self.document, self.tools._execute)
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
+        self._props_combo_key = None          # loaded/renamed linetypes
+        self._refresh_props_toolbar()
+        self._sync_panels()
+
+    def _cmd_linetype_cli(self, *args) -> Prompt | None:
+        """-LINETYPE: AutoCAD's prompt flow (?/Create/Load/Set)."""
+        if self.document is None:
+            self.new_document()
+        from core import linetypes as lt_ops
+
+        def pick_file(caption: str, save: bool) -> str:
+            standard = lt_ops.standard_lin_file(self.document)
+            name_filter = tr("Linetype files (*.lin)")
+            if save:
+                path, _selected = file_dialogs.get_save_file(
+                    self, caption, "custom.lin", name_filter)
+                return path
+            return file_dialogs.get_open_file(self, caption, name_filter,
+                                              select_file=standard)
+
+        def execute(command) -> None:
+            self.tools._execute(command)
+            self._props_combo_key = None
+            self._refresh_props_toolbar()
+
+        return lt_ops.linetype_command(
+            self.document, execute, echo=self.command_line.echo,
+            pick_file=pick_file, args=args)
 
     def _cmd_ltscale(self, *args) -> Prompt | None:
         """LTSCALE — global linetype scale; changing it regenerates."""
@@ -4595,8 +5235,16 @@ class MainWindow(QMainWindow):
                 return
             self.viewport.zoom_extents()
         elif opt in ("W", "WINDOW"):
-            self.viewport.start_zoom_window()
-            self.command_line.echo(tr("Drag a window in the viewport"))
+            if self.tools.tool is None and active_vp is None:
+                # two corners at the prompt, with object snaps, in the Model
+                # tab and on a sheet (#80)
+                self.tools.start_tool("ZOOMWINDOW")
+            else:
+                # transparent 'ZOOM inside a command keeps that command's
+                # prompt; inside a viewport there are no model snaps on
+                # purpose (MSPACE is for navigating): a drag, as before
+                self.viewport.start_zoom_window()
+                self.command_line.echo(tr("Drag a window in the viewport"))
         elif opt in ("P", "PREVIOUS"):
             if not self.viewport.zoom_previous():
                 self.command_line.echo(tr("No previous view"))
@@ -4835,6 +5483,37 @@ class MainWindow(QMainWindow):
         if back is not None and back in self._layout_names():
             self.switch_layout(back)
 
+    def _cmd_undo_count(self, *args) -> Prompt | None:
+        """UNDO asks how many operations, <1> by default (UNDO, Command
+        Reference); it undid one at once and the number typed next ran as
+        an unknown command. U stays the one-step undo."""
+        def commit(text: str):
+            text = text.strip()
+            if not text:
+                count = 1
+            else:
+                try:
+                    count = int(text)
+                except ValueError:
+                    self.command_line.echo(tr("Requires an integer."))
+                    return ask()
+                if count < 1:
+                    self.command_line.echo(tr("Value must be positive."))
+                    return ask()
+            for _ in range(count):
+                if not self.history.can_undo:
+                    break
+                self._cmd_undo()
+            return None
+
+        def ask():
+            return Prompt(
+                tr("Enter the number of operations to undo <1>:"), commit)
+
+        if args:
+            return commit(str(args[0]))
+        return ask()
+
     def _cmd_undo(self, *args) -> None:
         session = self._block_session
         if session is not None and session.undo_blocked():
@@ -4850,6 +5529,21 @@ class MainWindow(QMainWindow):
             # an undo is a change like any click: the layer control, the
             # Layers tab and the Properties tab hear it the same way
             self.tools.changed.emit()
+
+    def _cmd_oops(self, *args) -> None:
+        """OOPS: restore what the last ERASE erased, even after other
+        commands (it was an unknown command)."""
+        from core.actions import EraseCommand, OopsCommand
+
+        erase = next((c for c in reversed(self.history._undo)
+                      if isinstance(c, EraseCommand)), None)
+        command = OopsCommand(erase) if erase is not None else None
+        if command is None or not command.entities:
+            self.command_line.echo(tr("Nothing to restore."))
+            return
+        self.tools._execute(command)
+        self.command_line.echo(
+            tr("{count} restored.", count=len(command.entities)))
 
     def _cmd_redo(self, *args) -> None:
         command = self.history.redo()
@@ -4895,11 +5589,12 @@ class MainWindow(QMainWindow):
         # Model / layout tabs, bottom-left on the coordinates row (BricsCAD).
         self._active_layout = "Model"
         self._block_session = None     # the open Block Editor, if any
-        self._layout_tab_host = QWidget(self)
+        self._layout_tab_host = _LayoutTabHost(self)
         self._layout_tab_bar = QHBoxLayout(self._layout_tab_host)
         self._layout_tab_bar.setContentsMargins(0, 0, 6, 0)
         self._layout_tab_bar.setSpacing(1)
         self.statusBar().addWidget(self._layout_tab_host)
+        self._layout_tab_host.installEventFilter(self)    # fit on resize
 
         # Coordinate readout — the classic AutoCAD tracker. It doubles as the
         # progress line while a drawing opens: see _set_busy. Nothing else may
@@ -4956,7 +5651,19 @@ class MainWindow(QMainWindow):
                 lambda pos, n=name, btn=b: self._layout_tab_menu(
                     n, btn.mapToGlobal(pos)))
             self._tab_buttons[b] = name
+            b.installEventFilter(self)          # double-click renames
             self._layout_tab_bar.addWidget(b)
+        # AutoCAD's overflow: the tabs that do not fit leave the row and
+        # this button lists every layout (a narrow window stacked them on
+        # top of each other, unreadable -- the release tour, 2026-10-10).
+        more = QToolButton(self._layout_tab_host)
+        more.setText("…")
+        more.setToolTip(tr("All layouts"))
+        more.setStyleSheet(self._TAB_STYLE)
+        more.setFocusPolicy(Qt.NoFocus)
+        more.clicked.connect(self._layout_overflow_menu)
+        self._layout_tab_bar.addWidget(more)
+        self._layout_more = more
         plus = QToolButton(self._layout_tab_host)
         plus.setText("+")
         plus.setToolTip(tr("New layout"))
@@ -4964,6 +5671,65 @@ class MainWindow(QMainWindow):
         plus.setFocusPolicy(Qt.NoFocus)
         plus.clicked.connect(self._new_layout_tab)
         self._layout_tab_bar.addWidget(plus)
+        self._layout_plus = plus
+        self._fit_layout_tabs()
+
+    def _fit_layout_tabs(self) -> None:
+        """Show the tabs that fit the row; Model and the active layout
+        always, the rest in order while there is room, "…" for the others."""
+        host = self._layout_tab_host
+        buttons = list(getattr(self, "_tab_buttons", {}))
+        more = getattr(self, "_layout_more", None)
+        plus = getattr(self, "_layout_plus", None)
+        if more is None or plus is None or not buttons:
+            return
+        spacing = self._layout_tab_bar.spacing()
+        width = lambda b: b.sizeHint().width() + spacing  # noqa: E731
+        margins = self._layout_tab_bar.contentsMargins()
+        room = host.width() - margins.left() - margins.right() - width(plus)
+        names = self._tab_buttons
+        must = [b for b in buttons
+                if names[b] in ("Model", self._active_layout)]
+        # Never smaller than Model, the active tab, "…" and "+".
+        host.setMinimumWidth(sum(width(b) for b in must) + width(more)
+                             + width(plus) + margins.left() + margins.right())
+        if sum(width(b) for b in buttons) <= room:
+            shown = set(buttons)
+        else:
+            room -= width(more)
+            used = sum(width(b) for b in must)
+            shown = set(must)
+            for b in buttons:
+                if b in shown:
+                    continue
+                if used + width(b) > room:
+                    break
+                shown.add(b)
+                used += width(b)
+        for b in buttons:
+            b.setVisible(b in shown)
+        more.setVisible(len(shown) < len(buttons))
+        # Ask the status bar for room for every tab, hidden ones included,
+        # or a row that once overflowed would never grow back.
+        full = (sum(width(b) for b in buttons) + width(plus)
+                + margins.left() + margins.right())
+        if host.full_width != full:
+            host.full_width = full
+            host.updateGeometry()
+
+    def _layout_overflow_menu(self) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        for name in self._layout_names():
+            action = menu.addAction(tr("Model") if name == "Model" else name)
+            action.setCheckable(True)
+            action.setChecked(name == self._active_layout)
+            action.setData(name)
+        more = self._layout_more
+        chosen = menu.exec(more.mapToGlobal(more.rect().topLeft()))
+        if chosen is not None:
+            self.switch_layout(chosen.data())
 
     def switch_layout(self, name: str) -> None:
         """Model/Layout tabs: re-render the chosen space (AutoCAD tabs)."""
@@ -4983,10 +5749,14 @@ class MainWindow(QMainWindow):
 
         self.tools.cancel()               # drop tool/selection across spaces
         self._deactivate_viewport()       # MSPACE state is per-tab
+        self._remember_tab_view()         # the tab left keeps its view
         # $TILEMODE + the *Paper_Space block dance, so the file reopens on
         # this tab in AutoCAD too (ezdxf does not touch the header itself).
         layout_ops.switch_active(self.document, name)
         self._active_layout = name        # ... and the document's space
+        first = layout_ops.first_visit_viewport(self.document, name)
+        if first is not None:
+            self.history.execute(first)
         # Pick, snap and the overlay's curve tolerance all describe ONE
         # space; crossing tabs makes every one of them stale.
         self.tools.space_changed()
@@ -4998,9 +5768,9 @@ class MainWindow(QMainWindow):
             # made every Model/Layout switch cost seconds on a real plan).
             self.viewport.set_scene(cached[1])
             self.tools.mark_scene_merged()
-            self.viewport.zoom_extents()
+            self._show_tab_view(name)
         else:
-            self._regen_zoom = True
+            self._regen_view_for = name
             if self._regen_worker is not None:
                 self._regen_rerun = True
             else:
@@ -5201,6 +5971,10 @@ class MainWindow(QMainWindow):
             point = layout_ops.paper_to_model(vp, wx, wy)
             if point is not None:
                 wx, wy = point
+        else:
+            from core import ucs
+
+            wx, wy = ucs.current(self.document).to_ucs(wx, wy)
         units = self.display_units()
         self._coords_label.setText(f"{units.length(wx)}, {units.length(wy)}")
 
@@ -5436,11 +6210,11 @@ class MainWindow(QMainWindow):
         if not self._autosave_idle():
             self._autosave_timer.start(30 * 1000)   # busy: ask again shortly
             return
-        sv_path, info_path = autosave.autosave_paths(self.document.path)
+        sv_path, info_path = self._autosave_paths()
         worker = _AutoSaveWorker(self.document, sv_path, info_path)
         worker.done.connect(self._on_autosave_done)
         self._autosave_worker = worker
-        worker.start()
+        gc_guard.start(worker)
 
     def _on_autosave_done(self, ok: bool, message: str) -> None:
         worker = self._autosave_worker
@@ -5477,20 +6251,50 @@ class MainWindow(QMainWindow):
         if self.document is None:
             return
         self._autosave_gate()
-        autosave.discard(*autosave.autosave_paths(self.document.path))
+        autosave.discard(*self._autosave_paths())
+
+    def _autosave_paths(self, session=None):
+        """This drawing's .sv$ pair; each tab its own (#71)."""
+        from core import autosave
+
+        session = session or self._session
+        document = session.document if session is not None else self.document
+        slot = session.slot if session is not None else 1
+        return autosave.autosave_paths(document.path, slot)
+
+    def _autosave_discard_all(self) -> None:
+        from core import autosave
+
+        self._autosave_discard()
+        for session in self._sessions:
+            if session is not self._session and session.document is not None:
+                autosave.discard(*self._autosave_paths(session))
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         if getattr(self, "_save_worker", None) is not None:
             event.ignore()             # the window closes after the save
             return
-        if not self.maybe_save_changes():
+        if not self.maybe_save_all():      # every open drawing (#71)
             event.ignore()
             return
         self._drain_workers()
         # A normal exit leaves nothing behind: what the Drawing Recovery
         # Manager lists is, by definition, what a crash left.
-        self._autosave_discard()
+        self._autosave_discard_all()
+        if self.isVisible():                 # a never-shown window has none
+            QSettings().setValue(SETTING_WINDOW_GEOMETRY, self.saveGeometry())
         event.accept()
+
+    def restore_window_geometry(self) -> bool:
+        """The size, place and maximized state the window was closed with
+        (#72: it always came back at 1280 x 800). Called by the application
+        at start-up, before show(); a window made in a test keeps its
+        default. On Wayland the compositor places the window, so only the
+        size and the maximized state come back there."""
+        geometry = QSettings().value(SETTING_WINDOW_GEOMETRY)
+        if not geometry:
+            return False
+        return bool(self.restoreGeometry(geometry))
 
     def _drain_workers(self) -> None:
         """Join every background thread before the window dies.
@@ -5520,7 +6324,6 @@ class MainWindow(QMainWindow):
             worker.wait()
         thread = getattr(self, "_open_thread", None)
         if thread is not None:
-            thread.quit()
             thread.wait()
             self._open_thread = None
         timer = getattr(self, "_autosave_timer", None)
@@ -5538,7 +6341,7 @@ class MainWindow(QMainWindow):
             timer = getattr(tools, "_merge_timer", None)
             if timer is not None:
                 timer.stop()
-            for attr in ("_warmers", "_ghost_workers"):
+            for attr in ("_warmers", "_ghost_workers", "_clip_writers"):
                 for w in list(getattr(tools, attr, ()) or ()):
                     w.wait()
 
@@ -5551,6 +6354,7 @@ class MainWindow(QMainWindow):
         Returns (engine, warnings)."""
         from PySide6.QtCore import QEventLoop
 
+        self._store_views_for_save()     # opens where it was left (AutoCAD)
         document = self.document
         worker = _SaveWorker(lambda: document.prepare_save(path, version)())
         loop = QEventLoop()
@@ -5562,12 +6366,21 @@ class MainWindow(QMainWindow):
             self._loading_phase(tr("Writing the DXF, converting with LibreDWG "
                                    "and checking the result..."))
         QApplication.setOverrideCursor(Qt.BusyCursor)
+        # a modal window takes the focus off the windows it blocks and does
+        # not hand it back: remember who typed, and give it back after
+        focused = QApplication.focusWidget()
+        hold = _InputHold(self)
+        hold.show()
         try:
-            worker.start()
+            gc_guard.start(worker)
             if not worker.isFinished():
                 loop.exec()
             worker.wait()
         finally:
+            hold.close()
+            if focused is not None and focused.isVisible():
+                focused.activateWindow()
+                focused.setFocus()
             QApplication.restoreOverrideCursor()
             self._save_worker = None
             self._loading_end()
@@ -5623,14 +6436,34 @@ class MainWindow(QMainWindow):
         self._autosave_arm()
         return True
 
+    def open_paths(self, paths) -> None:
+        """Several drawings, each in a tab of its own, one after another --
+        the file manager's double-clicks handed over by a second IngeCAD
+        (core/single_instance.py), or several files on the command line.
+        An open runs one at a time, so the rest wait their turn."""
+        self._pending_opens.extend(Path(p) for p in paths)
+        self._open_next_pending()
+
+    def _open_next_pending(self) -> None:
+        while self._pending_opens and self._open_thread is None:
+            self.open_path(self._pending_opens.pop(0))
+
     def open_path(self, path: Path, as_template: bool = False) -> None:
         """OS file associations, argv[1], and File > Open land here.
 
         ``as_template`` keeps the content and drops the origin, so the drawing
         becomes an unnamed new one.
         """
-        if not self.maybe_save_changes():
-            return
+        if not as_template:
+            # AutoCAD brings the drawing already open to the front rather
+            # than opening it a second time (two tabs, two sets of edits,
+            # one file).
+            session = self._session_for_path(path)
+            if session is not None:
+                self.switch_document(session)
+                self.command_line.echo(
+                    tr("{name} is already open.", name=path.name))
+                return
         self._open_as_template = bool(as_template)
         if path.suffix.lower() == ".dwg":
             from formats.dwg_bridge import have_dwg_support
@@ -5651,21 +6484,21 @@ class MainWindow(QMainWindow):
         self._set_busy(tr("Opening {name}...", name=path.name))
         self._loading_begin(tr("Loading {name}...", name=path.name),
                             on_cancel=self._cancel_open)
-        thread = QThread(self)
-        thread.setObjectName("open-drawing")
         worker = _OpenWorker(path)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.phase.connect(lambda text: self._loading_phase(tr(text)))
+        # a bound method of this window, never a lambda: PySide runs a plain
+        # callable in the EMITTER's thread, and the loading window's label
+        # was being set from the open thread (the CI's segfaults and bus
+        # errors in test_cancel_abandons_the_open)
+        worker.phase.connect(self._on_open_phase)
         worker.done.connect(self._on_open_done)
         worker.failed.connect(self._on_open_failed)
-        worker.done.connect(thread.quit)
-        worker.failed.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(self._on_open_thread_finished)
-        self._open_thread = thread
-        self._open_worker = worker  # keep alive while the thread runs
-        thread.start()
+        worker.finished.connect(self._on_open_thread_finished)
+        self._open_thread = worker  # "an open is running", and its owner
+        self._open_worker = worker
+        gc_guard.start(worker)
+
+    def _on_open_phase(self, text: str) -> None:
+        self._loading_phase(tr(text))
 
     def _cancel_open(self) -> None:
         """Cancel on the loading window: the worker cannot be stopped
@@ -5690,7 +6523,7 @@ class MainWindow(QMainWindow):
             recent_mod.add(document.path)
             self._refresh_recent_menu()
         self._open_as_template = False
-        self._drop_block_session()
+        self._tab_for_new_document(document)      # a tab of its own (#71)
         self.document = document
         self._autosave_arm()          # a new drawing, a new countdown
         self._layout_scenes.clear()   # scenes of the previous drawing
@@ -5703,7 +6536,9 @@ class MainWindow(QMainWindow):
         # The open built this tab's scene: keep it, so the first switch away
         # and back does not re-tessellate an untouched drawing.
         self._layout_scenes[self._active_layout] = (document.revision, scene)
-        self.viewport.zoom_extents()
+        self._layout_cameras = {}
+        # where its author left it, as AutoCAD opens a drawing
+        self._show_tab_view(self._active_layout)
         self.tools.attach_document(document, flatten=scene.flatten)
         self.refresh_grid_settings()
         self.plugins.document_opened(document)
@@ -5716,6 +6551,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "_props_toolbar", None) is not None:
             self._refresh_props_toolbar()
         self.setWindowTitle(f"IngeCAD — {document.name}")
+        self._refresh_file_tabs()
         if scene.layout_name:
             # Saved on a layout tab ($TILEMODE) or empty modelspace fallback.
             self.command_line.echo(
@@ -5746,6 +6582,12 @@ class MainWindow(QMainWindow):
         # runs microseconds later -- clearing it wiped it before it was read.
         self._set_busy("")
         if self._open_thread is not None:
-            self._open_thread.deleteLater()
+            # ONE owner for the worker: Python, here, on the GUI thread, once
+            # run() has truly returned. A `finished -> worker.deleteLater`
+            # had Qt delete it on the open thread while this line dropped
+            # the Python reference -- both destroyed it (the CI's SIGBUS in
+            # Shiboken::Object::destroy, on the "open-drawing" thread).
+            self._open_thread.wait()
         self._open_thread = None
         self._open_worker = None
+        self._open_next_pending()     # the next drawing handed over, if any

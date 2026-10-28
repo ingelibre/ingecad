@@ -174,8 +174,10 @@ class LineTool(Tool):
                 self.ctx.undo_last()
             self._points.pop()
             self.last_point = self._points[-1] if self._points else None
-            self.prompt("Specify next point or [Undo]:" if self._points
-                        else "Specify first point:")
+            if self._points:
+                self._next_prompt()     # Close is back once 3 points stand
+            else:
+                self.prompt("Specify first point:")
             return True
         if self._locked_dir is not None and self._points:
             # tangent continuation accepts a typed length
@@ -857,7 +859,16 @@ class EllipseTool(Tool):
 class PointTool(Tool):
     def start(self) -> None:
         self.name = "POINT"
-        self.prompt("POINT Specify a point (Enter ends):")
+        # AutoCAD's first line (POINT, p. 1556): the point style in force
+        services = self.ctx.services
+        document = getattr(getattr(services, "window", None), "document", None)
+        if document is not None:
+            from core import points
+
+            self.ctx.echo(tr("Current point modes:  PDMODE={mode}  PDSIZE={size:.4f}",
+                             mode=points.pdmode(document.doc),
+                             size=points.pdsize(document.doc)))
+        self.prompt("Specify a point (Enter ends):")
 
     def on_point(self, point: Point) -> None:
         self.ctx.execute(actions.add_point(point))
@@ -887,7 +898,7 @@ class TextTool(Tool):
     below; a new pick restarts there; Esc finishes.
     """
 
-    default_height = 2.5     # TEXTSIZE: session-sticky
+    default_height = 2.5     # TEXTSIZE when there is no drawing to ask
     last_rotation = 0.0
     _last_final = None       # (pos, height, rotation) of the last session
 
@@ -904,8 +915,20 @@ class TextTool(Tool):
         self._style = None
         style, fixed = self._style_info()
         self.ctx.echo(tr('Current text style: "{s}"  Text height: {h:g}',
-                         s=style, h=fixed or type(self).default_height))
+                         s=style, h=fixed or self._textsize()))
         self.prompt("Specify start point of text or [Justify/Style]:")
+
+    # -- TEXTSIZE: the drawing's own, as AutoCAD keeps it ----------------------
+    def _textsize(self) -> float:
+        """The default height: the drawing's $TEXTSIZE. A session-wide 2.5
+        made every first TEXT 2.5 m tall in a drawing in metres."""
+        return _drawing_textsize(self._document(), type(self).default_height)
+
+    def _set_textsize(self, value: float) -> None:
+        type(self).default_height = value
+        document = self._document()
+        if document is not None:
+            document.doc.header["$TEXTSIZE"] = float(value)
 
     # -- style plumbing --------------------------------------------------------
     def _document(self):
@@ -948,10 +971,10 @@ class TextTool(Tool):
             # current text style is annotative" (p. 1933): the model height
             # follows from the annotation scale when the text is created
             self.prompt("Specify paper text height <{h:g}>:",
-                        h=type(self).default_height)
+                        h=self._textsize())
         else:
             self.prompt("Specify height <{h:g}>:",
-                        h=type(self).default_height)
+                        h=self._textsize())
 
     def _rotation_prompt(self) -> None:
         self.prompt("Specify rotation angle of text <{r:g}>:",
@@ -976,7 +999,7 @@ class TextTool(Tool):
             self._await = None
             if self._align == "FIT":
                 self.prompt("Specify height <{h:g}>:",
-                            h=type(self).default_height)
+                            h=self._textsize())
                 return
             # ALIGNED: height derives from the fit; nominal for the entity
             span = max(math.dist(self._pos, self._p2), 1e-9)
@@ -987,6 +1010,15 @@ class TextTool(Tool):
             self._pos = point
             self.last_point = point
             self._after_point()
+            return
+        if self._asking_by_point():
+            dx, dy = point[0] - self._pos[0], point[1] - self._pos[1]
+            if self._height is None:
+                if math.hypot(dx, dy) > 1e-9:
+                    self._take_height(math.hypot(dx, dy))
+            else:
+                self._take_rotation(math.degrees(math.atan2(dy, dx))
+                                    - self.ucs().degrees)
 
     def on_option(self, text: str) -> bool:
         # The resolver first: it turns the localized keyword, or
@@ -1045,25 +1077,47 @@ class TextTool(Tool):
         if self._pos is None:
             return False
         if self._height is None:
-            value = _parse_number(text) if text else type(self).default_height
+            value = _parse_number(text) if text else self._textsize()
             if value is None or value <= 0:
                 return False
-            self._height = value
-            type(self).default_height = value
-            if self._align == "FIT":
-                self._begin_typing()   # rotation comes from the two points
-            else:
-                self._rotation_prompt()
+            self._take_height(value)
             return True
         if self._rotation is None:
             value = _parse_number(text) if text else type(self).last_rotation
             if value is None:
                 return False
-            self._rotation = value
-            type(self).last_rotation = value
-            self._begin_typing()
+            self._take_rotation(value)
             return True
         return False
+
+    # Typed or picked, a height and an angle land here. A pick measures
+    # from the start point: its distance is the height, its direction the
+    # angle (AutoCAD's "Specify height" / "Specify rotation angle").
+    def _take_height(self, value: float) -> None:
+        self._height = value
+        self._set_textsize(value)
+        if self._align == "FIT":
+            self._begin_typing()   # rotation comes from the two points
+        else:
+            self._rotation_prompt()
+
+    def _take_rotation(self, value: float) -> None:
+        """``value`` is measured from the UCS's X, as AutoCAD's prompt
+        means it (#91); the text keeps the world angle."""
+        self._rotation = value + self.ucs().degrees
+        type(self).last_rotation = value
+        self._begin_typing()
+
+    def _asking_by_point(self) -> bool:
+        """At the height or the rotation prompt, where a pick answers."""
+        return (not self.typing and self._pos is not None and self._await is None
+                and (self._height is None or self._rotation is None))
+
+    def preview_segments(self, cursor: Point):
+        # the rubber band from the start point, as AutoCAD draws it
+        if self._asking_by_point():
+            return [(tuple(self._pos), tuple(cursor))]
+        return []
 
     def _set_align(self, align: str) -> None:
         self._align = align
@@ -1074,6 +1128,12 @@ class TextTool(Tool):
             self.prompt("Specify start point of text or [Justify/Style]:")
 
     def on_enter(self) -> None:
+        if self.typing and not self._buffer:
+            # Enter on an empty line ends the command, as AutoCAD's TEXT
+            # does (docs/reference/draw/autocad-text-mtext.md); the tool
+            # used to stay open, waiting for a next line forever
+            self.finish_typing()
+            return
         if self.typing:
             self._commit_line()      # Enter: commit and drop to a new line
             self._pos = self._next_line_pos()
@@ -1105,7 +1165,7 @@ class TextTool(Tool):
 
     def _begin_typing(self) -> None:
         if self._rotation is None:
-            self._rotation = type(self).last_rotation
+            self._rotation = type(self).last_rotation + self.ucs().degrees
         self.typing = True
         self._buffer = ""
         self.prompt("Enter text (Enter for new line, Esc to finish):")
@@ -1144,8 +1204,22 @@ class TextTool(Tool):
         return (self._pos[0] + d * math.sin(r), self._pos[1] - d * math.cos(r))
 
 
+def _drawing_textsize(document, fallback: float) -> float:
+    try:
+        value = float(document.doc.header.get("$TEXTSIZE", fallback))
+    except Exception:  # noqa: BLE001 -- no drawing, or a broken header
+        return fallback
+    return value if value > 0 else fallback
+
+
 class MTextTool(Tool):
     default_height = 2.5
+
+    def _height(self) -> float:
+        services = self.ctx.services
+        window = getattr(services, "window", None) if services else None
+        return _drawing_textsize(getattr(window, "document", None),
+                                 type(self).default_height)
 
     def start(self) -> None:
         self.name = "MTEXT"
@@ -1163,20 +1237,23 @@ class MTextTool(Tool):
             services = self.ctx.services
             opener = getattr(services, "open_mtext_editor", None)
             if opener is not None:
-                opener(self._first, point, type(self).default_height)
+                opener(self._first, point, self._height())
                 self.ctx.finish()
                 return
             content = self.ctx.ask_text(tr("Enter text:"), "")
             if content:
                 self.ctx.execute(actions.add_mtext(
-                    self._first, point, content, type(self).default_height))
+                    self._first, point, content, self._height(),
+                    frame=self.ucs()))
             self.ctx.finish()
 
     def preview_segments(self, cursor: Point):
         if self._first is None:
             return []
-        p1, p2 = self._first, cursor
-        c = [(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1]), (p1[0], p2[1])]
+        frame = self.ucs()                 # the box is square to the UCS
+        p1, p2 = frame.to_ucs(*self._first), frame.to_ucs(*cursor)
+        c = [frame.to_world(*q) for q in
+             ((p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1]), (p1[0], p2[1]))]
         return list(zip(c, c[1:] + c[:1]))
 
 
@@ -1261,6 +1338,18 @@ class PlineTool(Tool):
         self._sw = self._ew                 # ending width becomes uniform
         type(self).current_width = self._ew
         self.last_point = point
+
+    def drawn_segments(self) -> list:
+        # A straight segment snaps whole (END, MID, NEA, INT, PER); an arc
+        # segment offers its two ends only, as zero-length segments --
+        # its chord is not on the arc.
+        out = []
+        for (a, b), seg in zip(zip(self._verts, self._verts[1:]), self._segs):
+            if seg["bulge"] == 0.0:
+                out.append((a[0], a[1], b[0], b[1]))
+            else:
+                out.extend([(a[0], a[1], a[0], a[1]), (b[0], b[1], b[0], b[1])])
+        return out
 
     def _bulge_from_geom(self, geom, start: Point, end: Point) -> float:
         # entity angles are stored CCW, so the entity sweep equals the user's
@@ -1768,9 +1857,18 @@ class RectangTool(Tool):
         self.prompt(
             "Specify other corner point or [Area/Dimensions/Rotation]:")
 
+    def ortho_applies(self) -> bool:
+        # the opposite corner is free; a Rotation picked by point is not
+        return not (self._first is not None and self._await is None)
+
     # -- geometry --------------------------------------------------------------
+    def _rotation(self) -> float:
+        """The rectangle's turn in the world: its Rotation option, which
+        AutoCAD measures from the UCS's X axis (#91)."""
+        return type(self).rotation + self.ucs().degrees
+
     def _to_local(self, point: Point) -> tuple[float, float]:
-        rot = math.radians(type(self).rotation)
+        rot = math.radians(self._rotation())
         dx, dy = point[0] - self._first[0], point[1] - self._first[1]
         return (dx * math.cos(rot) + dy * math.sin(rot),
                 -dx * math.sin(rot) + dy * math.cos(rot))
@@ -1779,7 +1877,7 @@ class RectangTool(Tool):
         cls = type(self)
         try:
             points = actions.rect_vertices(
-                self._first, length, width, rotation_deg=cls.rotation,
+                self._first, length, width, rotation_deg=self._rotation(),
                 chamfer=cls.chamfer, fillet=cls.fillet,
                 pl_width=cls.pl_width)
         except ValueError:
@@ -1813,7 +1911,8 @@ class RectangTool(Tool):
             else:
                 p1 = self._pending["rp1"]
                 type(self).rotation = math.degrees(
-                    math.atan2(point[1] - p1[1], point[0] - p1[0]))
+                    math.atan2(point[1] - p1[1], point[0] - p1[0])) \
+                    - self.ucs().degrees
                 self._await = None
                 self._first_prompt() if self._first is None \
                     else self._corner_prompt()
@@ -2029,11 +2128,11 @@ class RectangTool(Tool):
                 width = self._dims[1] if ly >= 0 else -self._dims[1]
                 points = actions.rect_vertices(
                     self._first, length, width,
-                    rotation_deg=type(self).rotation)
+                    rotation_deg=self._rotation())
             else:
                 lx, ly = self._to_local(cursor)
                 points = actions.rect_vertices(
-                    self._first, lx, ly, rotation_deg=type(self).rotation)
+                    self._first, lx, ly, rotation_deg=self._rotation())
         except ValueError:
             return []
         ring = [(p[0], p[1]) for p in points]
@@ -2070,8 +2169,8 @@ class PolygonTool(Tool):
         self.ctx.finish()
 
     def _typed_radius(self, radius: float) -> None:
-        # bottom edge horizontal (snap angle 0): vertices straddle -90
-        first = -90.0 + 180.0 / self._sides
+        # bottom edge along the UCS's X: vertices straddle -90 from it
+        first = self.ucs().degrees - 90.0 + 180.0 / self._sides
         r = radius if self._mode == "I" \
             else radius / math.cos(math.pi / self._sides)
         self._build_ring(actions.polygon_ring(
@@ -2375,7 +2474,9 @@ class PdfAttachTool(Tool):
         except Exception:
             target = None
         if target is None or not target.exists():
-            cache = pathlib.Path.home() / ".cache" / "ingecad" / "pdf"
+            from core.paths import user_cache_dir
+
+            cache = user_cache_dir() / "pdf"
             cache.mkdir(parents=True, exist_ok=True)
             target = cache / f"{source.stem}-p{page + 1}.png"
             image.save(str(target))

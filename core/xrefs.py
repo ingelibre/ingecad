@@ -56,6 +56,12 @@ class XrefInfo:
     resolved: Optional[Path]      # where the file was found, or None
     status: str                   # "Loaded" | "Unloaded" | "Not found" | "Unreferenced"
     inserts: int
+    #: "dwg" for a drawing; "image" for a raster image, "pdf" for a PDF page
+    #: attached as one (PDFATTACH's NAME-pN.png): the palette lists them all,
+    #: as AutoCAD's External References palette does.
+    kind: str = "dwg"
+    #: An image's IMAGEDEF handle -- its key in the palette.
+    handle: str = ""
 
 
 # -- definitions ---------------------------------------------------------------
@@ -160,17 +166,23 @@ def load(path: Path):
         return _load_locked(path, key)
 
 
+def read_drawing(path: Path):
+    """Another drawing file, DWG or DXF, read as a Document (raises when it
+    cannot be read). What an xref shows and what INSERT ▸ Browse defines."""
+    from core.document import Document
+
+    path = Path(path)
+    if path.suffix.lower() == ".dwg":
+        from formats.dwg_bridge import load_dwg
+
+        return load_dwg(path)
+    return Document.load(path)
+
+
 def _load_locked(path: Path, key):
     _LOADING.add(str(path))
     try:
-        from core.document import Document
-
-        if path.suffix.lower() == ".dwg":
-            from formats.dwg_bridge import load_dwg
-
-            document = load_dwg(path)
-        else:
-            document = Document.load(path)
+        document = read_drawing(path)
     except Exception as exc:                 # noqa: BLE001 - unreadable: not found
         import logging
 
@@ -254,6 +266,92 @@ def references(document) -> list[XrefInfo]:
         out.append(XrefInfo(block.name, path, is_overlay(block), resolved,
                             status, counts.get(block.name, 0)))
     return sorted(out, key=lambda x: x.name.lower())
+
+
+IMAGE_DICT = "ACAD_IMAGE_DICT"
+
+
+def image_references(document) -> list[XrefInfo]:
+    """The raster images (and PDF pages attached as images) a drawing
+    references, for the External References palette (Rafael, review 6,
+    55:00-58:00: the palette listed only DWGs). Status as for a drawing:
+    found next to the drawing or where saved, "Not found", or
+    "Unreferenced" when no IMAGE uses the definition any more."""
+    import re
+
+    from core.layers import placed_entities
+
+    doc = document.doc
+    images = doc.rootdict.get(IMAGE_DICT)
+    if images is None:
+        return []
+    counts: dict[str, int] = {}
+    for entity in placed_entities(document):
+        if entity.dxftype() == "IMAGE":
+            key = entity.dxf.get("image_def_handle", "")
+            counts[key] = counts.get(key, 0) + 1
+    out = []
+    for name, image_def in images.items():
+        if image_def is None or not image_def.is_alive or image_def.dxftype() != "IMAGEDEF":
+            continue
+        path = str(image_def.dxf.get("filename", ""))
+        resolved = resolve_path(getattr(document, "path", None), path)
+        handle = image_def.dxf.handle
+        if resolved is None:
+            status = "Not found"
+        elif not counts.get(handle):
+            status = "Unreferenced"
+        else:
+            status = "Loaded"
+        kind = "pdf" if re.search(r"-p\d+\.png$", path, re.I) else "image"
+        # AutoCAD keys the dictionary by a plain name; ezdxf by the whole
+        # file path -- the palette shows the name either way
+        label = str(name)
+        if any(c in label for c in "/\\."):
+            label = Path(label.replace("\\", "/")).stem
+        out.append(XrefInfo(label, path, False, resolved, status,
+                            counts.get(handle, 0), kind=kind, handle=handle))
+    return sorted(out, key=lambda x: x.name.lower())
+
+
+class DetachImageCommand(Command):
+    """The palette's Detach for an image (AutoCAD's -IMAGE Detach): every
+    IMAGE that shows it leaves the drawing, and the definition leaves the
+    image dictionary. One undo step puts both back."""
+
+    name = "IMAGE"
+    needs_regen = True
+
+    def __init__(self, handle: str) -> None:
+        self.handle = handle
+        self._unlinked: list = []
+        self._key = None
+
+    def do(self, document) -> None:
+        doc = document.doc
+        self._unlinked = []
+        for layout in doc.layouts_and_blocks():
+            for entity in list(layout):
+                if entity.dxftype() == "IMAGE" and \
+                        entity.dxf.get("image_def_handle", "") == self.handle:
+                    layout.unlink_entity(entity)
+                    self._unlinked.append((layout, entity))
+        images = doc.rootdict.get(IMAGE_DICT)
+        if images is not None:
+            for key, value in list(images.items()):
+                if value is not None and value.dxf.handle == self.handle:
+                    self._key = (key, value)
+                    images.discard(key)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        images = document.doc.rootdict.get(IMAGE_DICT)
+        if self._key is not None and images is not None:
+            images[self._key[0]] = self._key[1]
+        for layout, entity in reversed(self._unlinked):
+            layout.add_entity(entity)
+        self._unlinked = []
+        document.dirty = True
 
 
 def match_names(document, pattern: str) -> list[str]:

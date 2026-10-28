@@ -121,3 +121,50 @@ def test_extend_tool_reaches_a_tangent_circle():
     ends = [(l.dxf.start.y, l.dxf.end.y) for l in h.msp.query("LINE")]
     assert ends == [pytest.approx((-30.0, 20.0))]
     assert line is not None
+
+
+# -- EXTEND an ARC (Rafael's seventh review, 08:46) ------------------------------
+
+def _arc_and_tangent_line(h):
+    """An R26 arc from 10° to 150°, and a line tangent to its circle at -10°
+    -- outside the arc, so the line can never reach it: the ARC has to be
+    extended to the line, as AutoCAD does. IngeCAD answered "EXTEND supports
+    LINE and PLINE for now"."""
+    r = 26.0
+    h.msp.add_arc((0, 0), r, 10, 150)
+    t = math.radians(-10)
+    touch = (r * math.cos(t), r * math.sin(t))
+    down = (math.sin(t), -math.cos(t))
+    h.msp.add_line(touch, (touch[0] + 15 * down[0], touch[1] + 15 * down[1]))
+    h.services.index.invalidate()
+    return r
+
+
+def test_extend_stretches_an_arc_to_a_tangent_line():
+    h = Harness()
+    r = _arc_and_tangent_line(h)
+    tool = ExtendTool(h.ctx)
+    tool.start()
+    tool.on_selection([])                                   # every edge
+    near_start = (r * math.cos(math.radians(14)), r * math.sin(math.radians(14)))
+    tool.on_point(near_start)
+    arc = next(iter(h.msp.query("ARC")))
+    assert arc.dxf.start_angle % 360 == pytest.approx(350.0, abs=1e-6)
+    assert arc.dxf.end_angle == pytest.approx(150.0)
+    h.history.undo()
+    arc = next(iter(h.msp.query("ARC")))
+    assert arc.dxf.start_angle == pytest.approx(10.0), "not one undo step"
+
+
+def test_extend_stretches_the_arc_end_nearest_the_pick():
+    h = Harness()
+    h.msp.add_arc((0, 0), 10, 0, 90)
+    h.msp.add_line((-20, 5), (5, 5))       # meets the circle at x = -8.66
+    h.services.index.invalidate()
+    tool = ExtendTool(h.ctx)
+    tool.start()
+    tool.on_selection([])
+    tool.on_point((1.0, 9.9))                               # near the 90° end
+    arc = next(iter(h.msp.query("ARC")))
+    assert arc.dxf.start_angle == pytest.approx(0.0)
+    assert arc.dxf.end_angle == pytest.approx(150.0)        # where y = 5, x < 0

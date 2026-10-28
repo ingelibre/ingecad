@@ -169,7 +169,7 @@ def test_objectscale_adds_and_deletes_but_never_the_default():
     assert {r.scale.name for r in A.representations(text)} == {"1:50", "1:100"}
     default = A.ObjectScaleCommand([text], "1:50", add=False)
     default.do(document)
-    assert default.skipped == 1
+    assert default.unchanged == 1
     assert {r.scale.name for r in A.representations(text)} == {"1:50", "1:100"}
 
 
@@ -254,8 +254,8 @@ def test_the_status_bar_control_sets_cannoscale_and_the_regen_follows(qapp):
 
         def height():
             scene = build_scene(win.document, "Model")
-            parts = [getattr(scene, b).data["pos"][lo:hi]
-                     for b, lo, hi in scene.handle_ranges.get(text.dxf.handle, [])]
+            parts = [getattr(scene, b).data["pos"][first:first + count]
+                     for b, first, count in scene.handle_ranges.get(text.dxf.handle, [])]
             ys = [float(p[1]) for part in parts for p in part]
             return max(ys) - min(ys)
 
@@ -329,3 +329,154 @@ def test_the_dimension_style_dialog_offers_annotative(qapp):
     props = dlg.result_props()
     assert props["annotative"] is True and props["dimscale"] == 0.0
     dlg.deleteLater()
+
+
+def test_a_new_drawing_carries_autocads_scale_list():
+    # #73 (Rafael): a new drawing's scale list was empty, so 1:1 was the
+    # only scale ever offered to dimensions and viewports
+    names = {s.name for s in A.scale_list(Document.new().doc)}
+    assert {"1:1", "1:2", "1:5", "1:10", "1:50", "1:100", "2:1", "5:1"} <= names
+
+
+def test_a_drawing_without_a_scale_list_takes_a_standard_scale_on_use(qapp, tmp_path):
+    # a DXF from another program has no ACAD_SCALELIST: OBJECTSCALE with
+    # 1:5 answered "not in the drawing's scale list"
+    from core import actions
+    from views.main_window import MainWindow
+
+    bare = ezdxf.new("R2018")
+    bare.saveas(tmp_path / "bare.dxf")
+    win = MainWindow()
+    win.maybe_save_changes = lambda: True
+    try:
+        win.open_path(tmp_path / "bare.dxf")
+        while win._open_thread is not None:
+            qapp.processEvents()
+        doc = win.document.doc
+        assert A.scale_list(doc) == []
+        style = doc.header.get("$TEXTSTYLE", "Standard")
+        A.set_style_annotative(doc.styles.get(style), True)
+        win.tools._execute(actions.add_text((0, 0), "A", 2.5))
+        text = [e for e in doc.modelspace() if e.dxftype() == "TEXT"][-1]
+        win.tools.selection = {text.dxf.handle}
+        win._on_command_submitted("-OBJECTSCALE")
+        win._on_command_submitted("A")
+        win._on_command_submitted("1:5")
+        assert "1:5" in {r.scale.name for r in A.representations(text)}
+        assert A.find_scale(doc, "1:5").drawing == pytest.approx(5.0)
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_objectscale_is_in_the_modify_menu(qapp):
+    # AutoCAD: Modify > Annotative Object Scale > Add/Delete Scales...
+    from core.i18n import tr
+
+    win = _window(qapp)
+    try:
+        # PySide: hold every action and menu in a local while it is used
+        bar = win._menu_bar.actions()
+        modify_action = next(a for a in bar
+                             if a.text().replace("&", "") == tr("Modify"))
+        modify = modify_action.menu()
+        items = modify.actions()
+        anno_action = next(a for a in items if a.text().replace("&", "")
+                           == tr("Annotative Object Scale"))
+        anno = anno_action.menu()
+        entries = [a.text() for a in anno.actions()]
+        assert tr("Add/Delete Scales...") in entries
+    finally:
+        win.close()
+
+
+def test_existing_dimensions_become_annotative_from_properties(qapp):
+    # #73, Rafael (review 6, 44:00-47:00): dimensions drawn first, the
+    # styles made annotative after -- the dimensions kept their plain size
+    # and OBJECTSCALE said "no annotative objects". AutoCAD's way is the
+    # Annotative property; then OBJECTSCALE adds the other scales.
+    from core import actions
+    from core.i18n import tr
+
+    win = _window(qapp)
+    try:
+        document = win.document
+        doc = document.doc
+        A.set_current_scale(doc, A.standard_scale(doc, "1:1"))
+        dims = []
+        for x in (0, 200):
+            cmd = actions.dim_linear((x, 0), (x + 100, 0), (x + 50, 20))
+            win.tools._execute(cmd)
+            dims.append(cmd.dim)
+        style = doc.dimstyles.get(dims[0].dxf.dimstyle)
+        A.set_style_annotative(style, True)                 # too late for these two
+        assert not any(A.is_annotative(d) for d in dims)
+        win.tools.selection = {d.dxf.handle for d in dims}
+        panel = win._properties_panel
+        panel.refresh()
+        tree = panel.tree
+        combo = None
+        for i in range(tree.topLevelItemCount()):
+            section = tree.topLevelItem(i)
+            for j in range(section.childCount()):
+                if section.child(j).text(0) == tr("Annotative"):
+                    combo = tree.itemWidget(section.child(j), 1)
+        assert combo is not None, "no Annotative row for dimensions"
+        combo.activated.emit(combo.findData(1))
+        assert all(A.is_annotative(d) for d in dims)
+        assert all([r.scale.name for r in A.representations(d)] == ["1:1"] for d in dims)
+        win._on_command_submitted("-OBJECTSCALE")
+        win._on_command_submitted("A")
+        win._on_command_submitted("2:1")
+        assert all({r.scale.name for r in A.representations(d)} == {"1:1", "2:1"}
+                   for d in dims)
+        win._cmd_undo()                                      # the 2:1
+        win._cmd_undo()                                      # the property
+        assert not any(A.is_annotative(d) for d in dims)
+        assert all(A.representations(d) == [] for d in dims)
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_an_annotative_text_style_scales_the_dimension_text():
+    # #85, Rafael (2026-10-12): in viewports at other scales the arrows of
+    # an annotative dimension scaled and its text did not. The dimension
+    # text was in an annotative text style with a (paper) height of 2.5,
+    # held at 2.5 in the model at every scale.
+    from core import actions
+
+    doc, _ = _doc("1:50")
+    document = Document(doc)
+    doc.header["$DIMSTYLE"] = "Standard"
+    style = doc.styles.add("Anno", font="arial.ttf")
+    style.dxf.height = 2.5
+    A.set_style_annotative(style, True)
+    dimstyle = doc.dimstyles.get("Standard")
+    dimstyle.dxf.dimtxsty = "Anno"
+    A.set_style_annotative(dimstyle, True)
+    cmd = actions.dim_linear((0, 0), (1000, 0), (500, 300))
+    cmd.do(document)
+    A.ObjectScaleCommand([cmd.dim], "1:100", add=True).do(document)
+
+    heights = {}
+    for rep in A.representations(cmd.dim):
+        (text,) = doc.blocks.get(rep.first(2)).query("MTEXT")
+        heights[rep.scale.name] = text.dxf.char_height
+    assert heights == {"1:50": pytest.approx(125.0), "1:100": pytest.approx(250.0)}
+
+
+def test_a_plain_fixed_height_style_still_sets_the_text_unscaled():
+    from core import actions
+
+    doc, _ = _doc("1:50")
+    document = Document(doc)
+    doc.header["$DIMSTYLE"] = "Standard"
+    doc.styles.add("Fixed", font="arial.ttf").dxf.height = 2.5
+    dimstyle = doc.dimstyles.get("Standard")
+    dimstyle.dxf.dimtxsty = "Fixed"
+    dimstyle.dxf.dimscale = 50.0
+    cmd = actions.dim_linear((0, 0), (1000, 0), (500, 300))
+    cmd.do(document)
+    (text,) = cmd.dim.get_geometry_block().query("MTEXT")
+    assert text.dxf.char_height == pytest.approx(2.5)

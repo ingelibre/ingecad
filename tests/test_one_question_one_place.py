@@ -295,3 +295,46 @@ def test_the_activated_viewport_is_read_in_two_places_only():
             if count:
                 readers[path.relative_to(ROOT).as_posix()] = count
     assert readers == {"views/tool_controller.py": 1, "views/viewport.py": 1}
+
+
+# -- the height a dimension's text is drawn at --------------------------------------
+
+def test_every_reader_of_the_dimension_text_height_agrees_with_the_drawing():
+    """AutoCAD: a text style with a fixed height overrides DIMTXT (Dimension
+    Style > Text Height). The drawing did it; DIMSPACE's spacing, a leader's
+    text, the centre-line scale and the style preview read DIMTXT alone, so
+    with Rafael's annotative Arial at 2 and DIMTXT 2.5 they used the wrong
+    one (seventh review, 11:48-12:30)."""
+    from core import actions, centerlines, leaders
+    from core.dim_commands import text_height
+    from core.document import Document
+    from core.styles import dim_text_height
+
+    document = Document.new()
+    doc = document.doc
+    doc.styles.add("FIJO", font="arial.ttf").dxf.height = 3.0
+    style = doc.dimstyles.get("ISO-25")
+    style.dxf.dimtxsty = "FIJO"
+    style.dxf.dimtxt = 2.5
+    style.dxf.dimscale = 1.0
+    doc.header["$DIMSTYLE"] = "ISO-25"
+    actions.dim_linear((0, 0), (40, 0), (0, -8)).do(document)
+    dim = [e for e in doc.modelspace() if e.dxftype() == "DIMENSION"][-1]
+    drawn = next(e for e in dim.virtual_entities() if e.dxftype() == "MTEXT")
+    assert drawn.dxf.char_height == pytest.approx(3.0), "the drawing's own answer"
+    assert dim_text_height(doc, style.dxf.get) == pytest.approx(3.0)
+    assert text_height(document, dim) == pytest.approx(3.0)        # DIMSPACE
+    assert leaders.dimstyle_values(doc)[1] == pytest.approx(3.0)   # LEADER
+    assert centerlines.annotation_scale(doc) == pytest.approx(
+        3.0 / centerlines.PAPER_TEXT_MM)
+
+
+def test_the_style_preview_draws_the_fixed_text_height(qapp):
+    """The preview built a fresh drawing whose text style fixed nothing, so
+    it showed DIMTXT's text where the drawing shows the text style's."""
+    from views.dimstyle_dialog import render_dim_preview
+
+    attribs = {"dimtxsty": "FIJO", "dimtxt": 2.5, "dimasz": 2.5}
+    plain = render_dim_preview(attribs).toImage()
+    fixed = render_dim_preview(attribs, fixed_heights={"FIJO": 6.0}).toImage()
+    assert plain != fixed, "the fixed height changed nothing in the preview"

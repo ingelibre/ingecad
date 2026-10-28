@@ -82,6 +82,42 @@ def _entity_endpoints(entity, pick: Point, quadrant_rule: bool = False):
     return None
 
 
+def _object_refs(entity, ends) -> dict:
+    """DIMASSOC references for an object picked at "select object": both
+    ends of the line, arc or polyline segment, the circle's two points."""
+    from core import dimassoc as da
+
+    handle = entity.dxf.handle
+    kind = entity.dxftype()
+    if kind in ("LINE", "ARC"):
+        start = da.Reference(da.START, [handle])
+        end = da.Reference(da.OSNAP["END"], [handle], param=1.0)
+        if kind == "ARC":
+            start.param, end.param = (math.radians(a) for a in ocs.angles_wcs(entity))
+        refs = {1: start, 2: end}
+    elif kind == "CIRCLE":
+        c = ocs.center_wcs(entity)
+        refs = {bit: da.Reference(da.OSNAP["QUA"], [handle],
+                                  param=math.atan2(p[1] - c.y, p[0] - c.x))
+                for bit, p in ((1, ends[0]), (2, ends[1]))}
+    elif kind == "LWPOLYLINE":
+        refs = {}
+        for g in range(1, len(entity) + 1):
+            a = da.Reference(da.START, [handle], gsmarker=g)
+            b = da.Reference(da.OSNAP["END"], [handle], gsmarker=g, param=1.0)
+            pa, pb = da.resolve(entity, a), da.resolve(entity, b)
+            if pa is not None and pb is not None and \
+                    math.dist(pa, ends[0]) < 1e-9 and math.dist(pb, ends[1]) < 1e-9:
+                refs = {1: a, 2: b}
+                break
+    else:
+        return {}
+    # only what really sits on the origins found
+    return {bit: ref for bit, ref in refs.items()
+            if (p := da.resolve(entity, ref)) is not None
+            and math.dist(p, ends[bit - 1]) <= 1e-9 * max(1.0, abs(p[0]), abs(p[1]))}
+
+
 class _DimTextMixin:
     """AutoCAD's Mtext/Text/Angle options, shared by every dimension tool."""
 
@@ -114,7 +150,8 @@ class _DimTextMixin:
             return True
         if self._pending == "textangle":
             try:
-                self._text_rotation = float(raw)
+                # from the UCS's X, as typed angles are (#91)
+                self._text_rotation = float(raw) + self.ucs().degrees
             except ValueError:
                 self.ctx.echo(tr("Requires a numeric angle."))
                 return True
@@ -166,6 +203,8 @@ class _TwoPointDim(_DimTextMixin, Tool):
     def start(self) -> None:
         self._p1: Point | None = None
         self._p2: Point | None = None
+        #: the objects the two origins were snapped to (core/dimassoc)
+        self._refs: dict = {}
         self._select_mode = False
         self._reset_text_state()
         self.prompt("Specify first extension line origin or <select object>:")
@@ -251,7 +290,12 @@ class _TwoPointDim(_DimTextMixin, Tool):
         return tools.px_to_space(SNAP_PX)
 
     def _align_angle(self, point: Point):
-        """0/90 when this tool draws an axis-parallel dimension line."""
+        """0/90 when this tool draws an axis-parallel dimension line.
+
+        In a turned UCS the lines are not parallel to the world's axes,
+        which is what the magnet compares: it stays off there."""
+        if self.ucs().angle != 0.0:
+            return None
         angle = getattr(self, "_forced_angle", None)
         if angle is None and hasattr(self, "_angle_for"):
             angle = self._angle_for(point)
@@ -293,24 +337,38 @@ class _TwoPointDim(_DimTextMixin, Tool):
                     tr("Select a line, arc, circle, or polyline segment."))
                 return
             self._p1, self._p2 = ends
+            self._refs = _object_refs(e, ends)
             self.entity_picker = False   # snap returns for the line location
             self.prompt(self._location_prompt())
             return
         if self._p1 is None:
             self._p1 = point
+            self._tie(1, point)
             self.last_point = point
             self.prompt("Specify second extension line origin:")
         elif self._p2 is None:
             self._p2 = point
+            self._tie(2, point)
             self.last_point = point
             self.prompt(self._location_prompt())
         else:
             point = self._adjust_location(point)
             cmd = self._make(point)
+            cmd.associate = dict(self._refs) or None
             self.ctx.execute(cmd)
             if cmd.dim is not None and (cmd.dim.dxf.dimtype & 15) in (0, 1):
                 set_last_dimension(cmd.dim)
             self.ctx.finish()
+
+    def _tie(self, bit: int, point: Point) -> None:
+        """Remember the object this origin was snapped to (DIMASSOC)."""
+        services = self.ctx.services
+        finder = getattr(services, "dimassoc_reference", None)
+        ref = finder(point, self.last_snap) if finder is not None else None
+        if ref is not None:
+            self._refs[bit] = ref
+        else:
+            self._refs.pop(bit, None)
 
     def preview_segments(self, cursor: Point):
         # Only the phase-1 rubber band; the location phase draws a rich
@@ -372,15 +430,22 @@ class DimLinearTool(_TwoPointDim):
             return
         super().on_enter()
 
+    def _world_forced(self):
+        """Horizontal, Vertical and Rotated are the UCS's (#91)."""
+        if self._forced_angle is None:
+            return None
+        return self._forced_angle + self.ucs().degrees
+
     def _angle_for(self, cursor: Point) -> float:
         if self._forced_angle is not None:
-            return self._forced_angle
-        return actions.linear_dim_angle(self._p1, self._p2, cursor)
+            return self._world_forced()
+        return actions.linear_dim_angle(self._p1, self._p2, cursor, self.ucs())
 
     def _make(self, location: Point):
         return actions.dim_linear(self._p1, self._p2, location,
-                                  angle=self._forced_angle, text=self._text,
-                                  text_rotation=self._text_rotation)
+                                  angle=self._world_forced(), text=self._text,
+                                  text_rotation=self._text_rotation,
+                                  frame=self.ucs())
 
     def _frame(self, cursor: Point):
         a = math.radians(self._angle_for(cursor))
@@ -397,12 +462,14 @@ class DimLinearTool(_TwoPointDim):
                    + (self._p2[1] - self._p1[1]) * math.sin(a))
 
     def _measured(self) -> float:
-        dx = abs(self._p2[0] - self._p1[0])
-        dy = abs(self._p2[1] - self._p1[1])
+        frame = self.ucs()
+        p1, p2 = frame.to_ucs(*self._p1), frame.to_ucs(*self._p2)
+        dx = abs(p2[0] - p1[0])
+        dy = abs(p2[1] - p1[1])
         if self._forced_angle is not None:
             a = math.radians(self._forced_angle)
-            return abs((self._p2[0] - self._p1[0]) * math.cos(a)
-                       + (self._p2[1] - self._p1[1]) * math.sin(a))
+            return abs((p2[0] - p1[0]) * math.cos(a)
+                       + (p2[1] - p1[1]) * math.sin(a))
         return dx if dx >= dy else dy
 
 
@@ -464,8 +531,14 @@ class _CurvedDim(_DimTextMixin, Tool):
             self._ent = e
             self.prompt(self._location_prompt())
         else:
+            from core import dimassoc
+
             c = ocs.center_wcs(self._ent)
-            self.ctx.execute(self._make((c.x, c.y), self._ent.dxf.radius, point))
+            cmd = self._make((c.x, c.y), self._ent.dxf.radius, point)
+            # AutoCAD ties a radius or diameter to its circle (bit 2, CEN)
+            cmd.associate = {2: dimassoc.Reference(dimassoc.OSNAP["CEN"],
+                                                   [self._ent.dxf.handle])}
+            self.ctx.execute(cmd)
             self.ctx.finish()
 
     def preview_segments(self, cursor: Point):
@@ -499,6 +572,23 @@ class DimDiameterTool(_CurvedDim):
     def _make(self, center, radius, location):
         return actions.dim_diameter(center, radius, location, text=self._text,
                                     text_rotation=self._text_rotation)
+
+
+def _straight_edge(entity, pick):
+    """((x0, y0), (x1, y1)) of a LINE, or of the straight polyline segment
+    picked (lots that come from QGIS are polylines); None otherwise."""
+    if entity.dxftype() == "LINE":
+        s, w = entity.dxf.start, entity.dxf.end
+        return ((s.x, s.y), (w.x, w.y))
+    if entity.dxftype() == "LWPOLYLINE":
+        from core import modify
+
+        found = modify.polyline_pick(entity, pick)
+        if isinstance(found, str):
+            return None
+        x0, y0, x1, y1 = found[1]
+        return ((x0, y0), (x1, y1))
+    return None
 
 
 class DimAngularTool(_DimTextMixin, Tool):
@@ -592,20 +682,23 @@ class DimAngularTool(_DimTextMixin, Tool):
                 self._mode = "circle2"
                 self.entity_picker = False
                 self.prompt("Specify second angle endpoint:")
-            elif t == "LINE":
-                s, w = e.dxf.start, e.dxf.end
-                self._line1 = ((s.x, s.y), (w.x, w.y))
+            elif t in ("LINE", "LWPOLYLINE"):
+                line = _straight_edge(e, point)
+                if line is None:
+                    self.ctx.echo(tr("Select an arc, circle, line, or a "
+                                     "straight polyline segment."))
+                    return
+                self._line1 = line
                 self._mode = "line2"
                 self.prompt("Select second line:")
             else:
                 self.ctx.echo(tr("Select an arc, circle, or line."))
         elif mode == "line2":
             e = self.ctx.services.pick_entity(point) if self.ctx.services else None
-            if e is None or e.dxftype() != "LINE":
+            line2 = _straight_edge(e, point) if e is not None else None
+            if line2 is None:
                 self.ctx.echo(tr("Select second line:"))
                 return
-            s, w = e.dxf.start, e.dxf.end
-            line2 = ((s.x, s.y), (w.x, w.y))
             if actions.line_intersection(self._line1, line2) is None:
                 self.ctx.echo(tr("Lines are parallel."))
                 return
@@ -624,24 +717,37 @@ class DimAngularTool(_DimTextMixin, Tool):
             self._p2 = point
             self._to_locate()
         else:   # locate
-            region = self._quadrant if self._quadrant is not None else point
-            if self._line2 is not None:
-                res = actions.angular_from_lines(self._line1, self._line2,
-                                                 region)
-                if res is None:
-                    self.ctx.echo(tr("Lines are parallel."))
-                    return
-                vertex, p1, p2 = res
-                cmd = actions.dim_angular(vertex, p1, p2, point,
-                                          text=self._text,
-                                          text_rotation=self._text_rotation)
-            else:
-                cmd = actions.dim_angular(
-                    self._vertex, self._p1, self._p2, point,
-                    region=region if self._region_free else None,
-                    text=self._text, text_rotation=self._text_rotation)
+            cmd = self._command_at(point)
+            if cmd is None:
+                self.ctx.echo(tr("Lines are parallel."))
+                return
             self.ctx.execute(cmd)
             self.ctx.finish()
+
+    def _command_at(self, point: Point):
+        """The dimension a click at ``point`` leaves, or None."""
+        region = self._quadrant if self._quadrant is not None else point
+        if self._line2 is not None:
+            res = actions.angular_from_lines(self._line1, self._line2, region)
+            if res is None:
+                return None
+            vertex, p1, p2 = res
+            return actions.dim_angular(vertex, p1, p2, point, text=self._text,
+                                       text_rotation=self._text_rotation)
+        if self._vertex is None or self._p1 is None or self._p2 is None:
+            return None
+        return actions.dim_angular(
+            self._vertex, self._p1, self._p2, point,
+            region=region if self._region_free else None,
+            text=self._text, text_rotation=self._text_rotation)
+
+    def preview_command(self, point: Point):
+        """While the arc is placed, the whole dimension follows the cursor
+        -- arc, arrows, text -- as the linear ones do (GeoCad Yaguarete
+        had to add it); before that, nothing."""
+        if self._mode != "locate" or self._pending is not None:
+            return None
+        return self._command_at(point)
 
     def _to_locate(self) -> None:
         self._mode = "locate"
@@ -775,7 +881,8 @@ class DimOrdinateTool(_DimTextMixin, Tool):
     def _measured(self) -> float:
         if self._feature is None:
             return 0.0
-        return self._feature[1] if self._dtype == "Y" else self._feature[0]
+        x, y = self.ucs().to_ucs(*self._feature)       # from the UCS origin
+        return y if self._dtype == "Y" else x
 
     def on_option(self, text: str) -> bool:
         if self._text_options(text, ready=self._feature is not None):
@@ -811,7 +918,8 @@ class DimOrdinateTool(_DimTextMixin, Tool):
             return
         self.ctx.execute(actions.dim_ordinate(
             self._feature, point, dtype=self._dtype,
-            text=self._text, text_rotation=self._text_rotation))
+            text=self._text, text_rotation=self._text_rotation,
+            frame=self.ucs()))
         self.ctx.finish()
 
     def preview_segments(self, cursor: Point):

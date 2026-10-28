@@ -330,8 +330,20 @@ CONTEXT_CLASSES = {
     "DIMENSION": ("ACDB_ALDIMOBJECTCONTEXTDATA_CLASS",
                   "AcDbAlignedDimensionObjectContextData"),
 }
-#: dimension types (dimtype & 7) whose representation body is measured
-_DIM_TYPES_WITH_CONTEXT = (0, 1)
+#: radius and diameter dimensions have context classes of their own, the
+#: common dimension body plus their arc points (LibreDWG's dwg.h, after the
+#: Open Design spec: RADIM 11-31 first arc point; DMDIM 11-31 and 12-32);
+#: no drawing of the corpus carries one, so the writer was checked with ODA
+DIM_CONTEXT_CLASSES = {
+    0: CONTEXT_CLASSES["DIMENSION"],
+    1: CONTEXT_CLASSES["DIMENSION"],
+    3: ("ACDB_DMDIMOBJECTCONTEXTDATA_CLASS",
+        "AcDbDiametricDimensionObjectContextData"),
+    4: ("ACDB_RADIMOBJECTCONTEXTDATA_CLASS",
+        "AcDbRadialDimensionObjectContextData"),
+}
+#: dimension types (dimtype & 7) that can carry scale representations
+_DIM_TYPES_WITH_CONTEXT = tuple(DIM_CONTEXT_CLASSES)
 #: CLASS flags AutoCAD writes for SCALE and every context class (measured)
 _CLASS_FLAGS = 1153
 
@@ -448,19 +460,124 @@ def _body_for(entity) -> list:
                 (40, repr(float(entity.dxf.get("width", 0.0)))),
                 (41, "0.0"), (42, "0.0"), (43, "0.0"), (71, 0)]
     if dxftype == "DIMENSION" and (entity.dimtype & 7) in _DIM_TYPES_WITH_CONTEXT:
+        kind = entity.dimtype & 7
         mid = entity.dxf.get("text_midpoint", (0.0, 0.0, 0.0))
-        defpoint = entity.dxf.get("defpoint", (0.0, 0.0, 0.0))
+
+        def point(code, value):
+            return [(code, repr(float(value[0]))), (code + 10, repr(float(value[1]))),
+                    (code + 20, repr(float(value[2]) if len(value) > 2 else 0.0))]
+
         # the measured body: the *D block of this scale, then the dimension's
-        # text placement, then the aligned subclass with the line's defpoint
-        return [(100, "AcDbDimensionObjectContextData"),
+        # text placement, then the kind's own subclass
+        body = [(100, "AcDbDimensionObjectContextData"),
                 (2, entity.dxf.get("geometry", "")), (293, 0),
                 (10, repr(float(mid[0]))), (20, repr(float(mid[1]))),
                 (294, 1), (140, "0.0"), (298, 0), (291, 0), (70, 1),
-                (292, 0), (71, 0), (280, 31), (295, 0), (296, 0), (297, 0),
-                (100, "AcDbAlignedDimensionObjectContextData"),
-                (11, repr(float(defpoint[0]))), (21, repr(float(defpoint[1]))),
-                (31, repr(float(defpoint[2]) if len(defpoint) > 2 else 0.0))]
+                (292, 0), (71, 0), (280, 31), (295, 0), (296, 0), (297, 0)]
+        zero = (0.0, 0.0, 0.0)
+        if kind in (0, 1):
+            body += [(100, "AcDbAlignedDimensionObjectContextData")] \
+                + point(11, entity.dxf.get("defpoint", zero))
+        elif kind == 4:
+            body += [(100, "AcDbRadialDimensionObjectContextData")] \
+                + point(11, entity.dxf.get("defpoint4", zero))
+        else:
+            body += [(100, "AcDbDiametricDimensionObjectContextData")] \
+                + point(11, entity.dxf.get("defpoint4", zero)) \
+                + point(12, entity.dxf.get("defpoint", zero))
+        return body
     raise ValueError(f"{dxftype} cannot carry scale representations yet")
+
+
+def render_scale_block(dim, scale: Scale) -> dict:
+    """Draw ``dim`` at ``scale`` into a *D block of its own and leave the
+    dimension as it was; the representation fields of that drawing ({group
+    code: value}: the block, the text position, the line's defpoint).
+
+    An annotative dimension is sized by its scale: DIMSCALE = the scale's
+    factor, exactly as one born at that scale is drawn (AddDimensionCommand).
+    """
+    from types import SimpleNamespace
+
+    from core.actions import _stamp_dim_block_byblock
+
+    saved_block = dim.dxf.get("geometry", None)
+    had_mid = dim.dxf.hasattr("text_midpoint")
+    saved_mid = dim.dxf.get("text_midpoint", None)
+    saved_defpoint = dim.dxf.get("defpoint", None)
+    saved_acad = list(dim.get_xdata("ACAD")) if dim.has_xdata("ACAD") else None
+    global _drawing_scale
+    _drawing_scale += 1
+    try:
+        override = dim.override()
+        override["dimscale"] = scale.factor
+        override.render()
+        block = dim.dxf.get("geometry", "")
+        _stamp_dim_block_byblock(SimpleNamespace(doc=dim.doc), dim)
+        mid = dim.dxf.get("text_midpoint", saved_mid) or (0.0, 0.0, 0.0)
+        defpoint = dim.dxf.get("defpoint", saved_defpoint) or (0.0, 0.0, 0.0)
+    finally:
+        _drawing_scale -= 1
+        if saved_block is not None:
+            dim.dxf.geometry = saved_block
+        if had_mid:
+            dim.dxf.text_midpoint = saved_mid
+        else:
+            dim.dxf.discard("text_midpoint")
+        if saved_defpoint is not None:
+            dim.dxf.defpoint = saved_defpoint
+        dim.discard_xdata("ACAD")
+        if saved_acad is not None:
+            dim.set_xdata("ACAD", saved_acad)
+    layout = {2: block, 10: float(mid[0]), 20: float(mid[1])}
+    if (dim.dimtype & 7) in (0, 1):      # the line's defpoint is per scale
+        layout.update({11: float(defpoint[0]), 21: float(defpoint[1])})
+    return layout
+
+
+#: depth of render_scale_block: its own render must not refresh again
+_drawing_scale = 0
+
+
+def refresh_scale_blocks(dim) -> None:
+    """Redraw the blocks of every non-default scale of an annotative
+    dimension from the dimension as it is now. Called after anything
+    redraws or moves it (grips, STRETCH, MOVE, a style change...): AutoCAD
+    keeps every scale's drawing in step with the dimension, and the extra
+    blocks were left behind -- the 2:1 viewport showed the old dimension."""
+    if _drawing_scale or dim.dxftype() != "DIMENSION" or dim.doc is None \
+            or not is_annotative(dim):
+        return
+    for rep in [r for r in representations(dim) if not r.is_default]:
+        old_block = rep.first(2)
+        if remove_representation(dim, rep.scale) is None:
+            continue
+        add_representation(dim, rep.scale, default=False)
+        drop_unreferenced_block(dim.doc, old_block)
+
+
+def block_referenced(doc, name: str) -> bool:
+    """Is the anonymous *D block drawn by any dimension -- as its own
+    geometry or as one of its scale representations?"""
+    for e in doc.entitydb.values():
+        if not e.is_alive:
+            continue
+        if e.dxftype() in ("DIMENSION", "ARC_DIMENSION") \
+                and e.dxf.get("geometry", None) == name:
+            return True
+        if e.dxftype().endswith("DIMOBJECTCONTEXTDATA_CLASS"):
+            for sub in _subclass_tags(e):
+                if any(c == 2 and v == name for c, v in sub):
+                    return True
+    return False
+
+
+def drop_unreferenced_block(doc, name) -> None:
+    if name and name in doc.blocks and not block_referenced(doc, name):
+        try:
+            doc.blocks.delete_block(name, safe=False)
+        except Exception:                        # noqa: BLE001
+            pass
 
 
 def supports_representation(entity) -> bool:
@@ -480,9 +597,15 @@ def add_representation(entity, scale: Scale, *, default: bool,
     scale gets its own position. Makes the entity annotative.
     """
     dxftype = entity.dxftype()
-    name, cpp = CONTEXT_CLASSES[dxftype]
+    name, cpp = (DIM_CONTEXT_CLASSES[entity.dimtype & 7]
+                 if dxftype == "DIMENSION" else CONTEXT_CLASSES[dxftype])
     doc = entity.doc
     _register_class(doc, name, cpp)
+    if dxftype == "DIMENSION" and not default and layout is None:
+        # another scale draws its own block (AutoCAD: a 4-scale dimension
+        # owns 4 *D blocks) -- pointing at the default one drew it at the
+        # default's size in every viewport
+        layout = render_scale_block(entity, scale)
     body = _body_for(entity)
     if layout:
         body = [(c, repr(layout[c]) if isinstance(layout[c], float)
@@ -525,6 +648,30 @@ from core.commands import Command  # noqa: E402  (the reader above is import-lig
 def default_scale(doc) -> Scale:
     """1:1, added to the scale list when the drawing has none."""
     return ensure_scale(doc, "1:1", 1.0, 1.0)
+
+
+def seed_standard_scales(doc) -> None:
+    """A new drawing's scale list, as AutoCAD's templates carry one (#73:
+    IngeCAD's started empty, so only 1:1 was ever offered): the same list
+    PLOT and PAGESETUP offer, core.units.STANDARD_SCALES."""
+    from core.units import STANDARD_SCALES, scale_text
+
+    for num, den in STANDARD_SCALES:
+        ensure_scale(doc, scale_text(num, den), num, den)
+
+
+def standard_scale(doc, name: str) -> Optional[Scale]:
+    """``name`` from the drawing's scale list; a standard scale the list
+    lacks (a DXF from another program carries none) is added on use."""
+    found = find_scale(doc, name)
+    if found is not None:
+        return found
+    from core.units import STANDARD_SCALES, scale_text
+
+    for num, den in STANDARD_SCALES:
+        if scale_text(num, den) == name.strip():
+            return ensure_scale(doc, name.strip(), num, den)
+    return None
 
 
 def scale_or_default(doc) -> Scale:
@@ -745,6 +892,79 @@ class SetAnnotationScaleCommand(Command):
         document.dirty = True
 
 
+class AnnotativePropertyCommand(Command):
+    """Properties > Annotative: Yes/No on texts and dimensions that exist
+    (#73). Rafael made his dimension and text styles annotative AFTER
+    dimensioning (review 6, 44:00-47:00): the dimensions already drawn kept
+    their plain size, and OBJECTSCALE answered "no annotative objects"
+    because, as in AutoCAD, a style does not change the objects already
+    made with it -- AutoCAD's way is this property.
+
+    Yes: the object gets a representation at the current annotation scale
+    (CANNOSCALE). A text keeps its model height (its paper height is that
+    over the scale); a dimension is drawn again at that scale (DIMSCALE =
+    the scale's factor), as one born in an annotative style is.
+    No: its scale representations go; it keeps the look it has.
+    """
+
+    name = "ANNOTATIVE"
+    needs_regen = True
+
+    def __init__(self, entities, on: bool) -> None:
+        self.entities = [e for e in entities if e.dxftype() in ("TEXT", "MTEXT", "DIMENSION")]
+        self.on = bool(on)
+        self._saved: list = []
+
+    def do(self, document) -> None:
+        from core.actions import rerender_dimension
+
+        doc = document.doc
+        scale = current_scale(doc) or default_scale(doc)
+        self._saved = []
+        for entity in self.entities:
+            if is_annotative(entity) == self.on:
+                continue
+            self._saved.append((entity, entity.get_xdata(ANNO_APPID)
+                                if entity.has_xdata(ANNO_APPID) else None,
+                                entity.get_xdata("ACAD") if entity.has_xdata("ACAD") else None,
+                                [r.scale.name for r in representations(entity)]))
+            if self.on:
+                if entity.dxftype() == "DIMENSION":
+                    override = entity.override()
+                    override["dimscale"] = scale.factor
+                    override.commit()
+                    rerender_dimension(document, entity)
+                    annotate_new_dimension(document, entity, scale)
+                elif supports_representation(entity):
+                    add_representation(entity, scale, default=True)
+                else:
+                    set_annotative(entity, True)
+            else:
+                remove_representations(entity)
+                entity.discard_xdata(ANNO_APPID)
+        document.dirty = True
+
+    def undo(self, document) -> None:
+        from core.actions import rerender_dimension
+
+        for entity, anno, acad, scales in reversed(self._saved):
+            remove_representations(entity)
+            entity.discard_xdata(ANNO_APPID)
+            if anno is not None:
+                entity.set_xdata(ANNO_APPID, list(anno))
+            for index, name in enumerate(scales):
+                found = find_scale(document.doc, name)
+                if found is not None and supports_representation(entity):
+                    add_representation(entity, found, default=index == 0)
+            if entity.dxftype() == "DIMENSION":
+                entity.discard_xdata("ACAD")
+                if acad is not None:
+                    entity.set_xdata("ACAD", list(acad))
+                rerender_dimension(document, entity)
+        self._saved = []
+        document.dirty = True
+
+
 class ObjectScaleCommand(Command):
     """OBJECTSCALE Add / Delete on a selection, one undo step."""
 
@@ -756,25 +976,31 @@ class ObjectScaleCommand(Command):
         self.scale_name = scale_name
         self.add = add
         self._done: list = []      # (entity, saved) for Delete; entities for Add
-        self.skipped = 0
+        # How many were left as they were (the scale already there, or not
+        # there to delete). A COUNT -- not ``skipped``, which on the editing
+        # commands is the list of entities that could not be transformed and
+        # which the tool controller reads as such: an int there raised
+        # TypeError and left Add Current Scale hanging, mute, until a second
+        # Enter (Rafael's seventh review, 22:01-22:19).
+        self.unchanged = 0
 
     def do(self, document) -> None:
         scale = find_scale(document.doc, self.scale_name)
         if scale is None:
             raise ValueError(f"no scale named {self.scale_name!r} in the drawing")
         self._done = []
-        self.skipped = 0
+        self.unchanged = 0
         for entity in self.entities:
             if self.add:
                 if has_scale(entity, scale) or not supports_representation(entity):
-                    self.skipped += 1
+                    self.unchanged += 1
                     continue
                 add_representation(entity, scale, default=False)
                 self._done.append((entity, None))
             else:
                 saved = remove_representation(entity, scale)
                 if saved is None:
-                    self.skipped += 1
+                    self.unchanged += 1
                     continue
                 self._done.append((entity, saved))
         document.dirty = True

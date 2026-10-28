@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 
-from core import actions, editmath, ocs, polyoffset
+from core import actions, editmath, modify, ocs, polyoffset
 from core.i18n import tr
 from tools.base import Point, Tool
 
@@ -29,67 +29,133 @@ class EraseTool(Tool):
         self.ctx.finish()
 
 
-class MoveTool(Tool):
+class _DisplacementTool(Tool):
+    """The base-point dialogue MOVE, COPY and STRETCH share (MOVE, p.1211):
+    a base point, or Displacement -- typed D, or Enter, its default -- for a
+    vector; and Enter at the second point takes the first point as the
+    displacement ("2,3 then Enter moves 2 in X and 3 in Y")."""
+
     wants_selection = True
 
     def start(self) -> None:
-        self.name = "MOVE"
         self._entities: list = []
         self._base: Point | None = None
+        self._asking_displacement = False
+
+    def _ask_base(self) -> None:
+        self.prompt("Specify base point or [Displacement] <Displacement>:")
+
+    def _ask_displacement(self) -> None:
+        self._asking_displacement = True
+        self.prompt("Specify displacement <0,0,0>:")
 
     def on_selection(self, entities: list) -> None:
         if not entities:
             self.ctx.finish()
             return
         self._entities = entities
-        self.prompt("Specify base point:")
+        self._ask_base()
+
+    def on_option(self, text: str) -> bool:
+        if self._entities and self._base is None \
+                and not self._asking_displacement \
+                and self.option(text) == "D":
+            self._ask_displacement()
+            return True
+        return False
 
     def on_point(self, point: Point) -> None:
+        if self._asking_displacement:
+            # the typed coordinates ARE the vector, not a place
+            self._asking_displacement = False
+            self._apply(point[0], point[1], last=True)
+            return
         if self._base is None:
             self._base = point
             self.last_point = point
             # the dragged geometry follows the cursor (ghost preview)
             self.ghost_entities = self._entities
             self.ghost_base = point
-            self.prompt("Specify second point:")
-        else:
-            dx, dy = point[0] - self._base[0], point[1] - self._base[1]
-            self.ctx.execute(actions.move_entities(self._entities, dx, dy))
-            self.ctx.finish()
+            self._ask_second(first=True)
+            return
+        self._apply(point[0] - self._base[0], point[1] - self._base[1],
+                    last=False)
+
+    def on_enter(self) -> None:
+        if self._asking_displacement:
+            self.ctx.finish()                 # <0,0,0>: nothing moves
+            return
+        if self._entities and self._base is None:
+            self._ask_displacement()          # <Displacement> is the default
+            return
+        if self._base is not None and self._first_second:
+            # Enter at the second point: the first point is the vector
+            self._apply(self._base[0], self._base[1], last=True)
+            return
+        self.ctx.finish()
+
+    _first_second = True
+
+    def _ask_second(self, first: bool) -> None:
+        self._first_second = first
+        self.prompt("Specify second point or <use first point as displacement>:")
+
+    def _apply(self, dx: float, dy: float, last: bool) -> None:
+        raise NotImplementedError
 
     def preview_segments(self, cursor: Point):
         return [(self._base, cursor)] if self._base else []
 
 
-class CopyTool(Tool):
-    wants_selection = True
+class MoveTool(_DisplacementTool):
+    def start(self) -> None:
+        super().start()
+        self.name = "MOVE"
+
+    def _apply(self, dx: float, dy: float, last: bool) -> None:
+        self.ctx.execute(actions.move_entities(self._entities, dx, dy))
+        self.ctx.finish()
+
+
+class CopyTool(_DisplacementTool):
+    """COPY repeats (COPYMODE 0): after the first copy the prompt offers
+    Exit and Undo, the copies made so far going back one by one."""
 
     def start(self) -> None:
+        super().start()
         self.name = "COPY"
-        self._entities: list = []
-        self._base: Point | None = None
+        self._copies = 0
 
-    def on_selection(self, entities: list) -> None:
-        if not entities:
+    def on_option(self, text: str) -> bool:
+        if super().on_option(text):
+            return True
+        key = self.option(text)
+        if self._base is not None and not self._first_second:
+            if key == "E":
+                self.ctx.finish()
+                return True
+            if key == "U":
+                if self._copies and self.ctx.undo_last is not None:
+                    self.ctx.undo_last()
+                    self._copies -= 1
+                if not self._copies:
+                    self._ask_second(first=True)
+                else:
+                    self._ask_more()
+                return True
+        return False
+
+    def _ask_more(self) -> None:
+        self._first_second = False
+        self.prompt("Specify second point or [Exit/Undo] <Exit>:")
+
+    def _apply(self, dx: float, dy: float, last: bool) -> None:
+        self.ctx.execute(actions.copy_entities(self._entities, dx, dy))
+        self._copies += 1
+        if last:
             self.ctx.finish()
             return
-        self._entities = entities
-        self.prompt("Specify base point:")
-
-    def on_point(self, point: Point) -> None:
-        if self._base is None:
-            self._base = point
-            self.last_point = point
-            self.ghost_entities = self._entities
-            self.ghost_base = point
-            self.prompt("Specify second point (multiple; Enter ends):")
-        else:
-            dx, dy = point[0] - self._base[0], point[1] - self._base[1]
-            self.ctx.execute(actions.copy_entities(self._entities, dx, dy))
-            # AutoCAD COPY stays active for multiple placements.
-
-    def preview_segments(self, cursor: Point):
-        return [(self._base, cursor)] if self._base else []
+        self._ask_more()
 
 
 class RotateTool(Tool):
@@ -101,6 +167,7 @@ class RotateTool(Tool):
         self._base: Point | None = None
         self._reference: float | None = None
         self._ref_first: Point | None = None
+        self._copy = False
 
     def on_selection(self, entities: list) -> None:
         if not entities:
@@ -114,6 +181,12 @@ class RotateTool(Tool):
         # AutoCAD's _global form, into the English key the
         # branches below have always compared against.
         t = self.option(text) or text.upper()
+        if t == "C" and self._base is not None and self._reference is None:
+            # Copy: the originals stay, a rotated copy is made (p.1588)
+            self._copy = True
+            self.ctx.echo(tr("Rotating a copy of the selected objects."))
+            self.prompt("Specify rotation angle or [Copy/Reference]:")
+            return True
         if t in ("R", "REFERENCE") and self._base is not None:
             self._reference = -1.0  # waiting for reference angle
             self.prompt("Specify reference angle (two points or typed):")
@@ -129,11 +202,12 @@ class RotateTool(Tool):
                 self.prompt("Specify new angle:")
             elif self._reference is not None:
                 self.ctx.execute(actions.rotate_entities(
-                    self._entities, self._base, angle - self._reference))
+                    self._entities, self._base, angle - self._reference,
+                    copy=self._copy))
                 self.ctx.finish()
             else:
                 self.ctx.execute(actions.rotate_entities(
-                    self._entities, self._base, angle))
+                    self._entities, self._base, angle, copy=self._copy))
                 self.ctx.finish()
             return True
         return False
@@ -146,7 +220,7 @@ class RotateTool(Tool):
             # which is what AutoCAD shows and what makes the angle obvious.
             self.ghost_entities = self._entities
             self.ghost_base = point
-            self.prompt("Specify rotation angle or [Reference]:")
+            self.prompt("Specify rotation angle or [Copy/Reference]:")
             return
         ang = math.degrees(math.atan2(point[1] - self._base[1],
                                       point[0] - self._base[0]))
@@ -161,7 +235,8 @@ class RotateTool(Tool):
             return
         if self._reference is not None:
             ang -= self._reference
-        self.ctx.execute(actions.rotate_entities(self._entities, self._base, ang))
+        self.ctx.execute(actions.rotate_entities(self._entities, self._base, ang,
+                                                 copy=self._copy))
         self.ctx.finish()
 
     def preview_segments(self, cursor: Point):
@@ -186,6 +261,7 @@ class ScaleTool(Tool):
         self._entities: list = []
         self._base: Point | None = None
         self._ref_length: float | None = None
+        self._copy = False
 
     def on_selection(self, entities: list) -> None:
         if not entities:
@@ -199,6 +275,12 @@ class ScaleTool(Tool):
         # AutoCAD's _global form, into the English key the
         # branches below have always compared against.
         t = self.option(text) or text.upper()
+        if t == "C" and self._base is not None and self._ref_length is None:
+            # Copy: the originals stay, a scaled copy is made (p.1652)
+            self._copy = True
+            self.ctx.echo(tr("Scaling a copy of the selected objects."))
+            self.prompt("Specify scale factor or [Copy/Reference]:")
+            return True
         if t in ("R", "REFERENCE") and self._base is not None:
             self._ref_length = -1.0
             self.prompt("Specify reference length:")
@@ -216,11 +298,12 @@ class ScaleTool(Tool):
                 self.prompt("Specify new length:")
             elif self._ref_length is not None:
                 self.ctx.execute(actions.scale_entities(
-                    self._entities, self._base, value / self._ref_length))
+                    self._entities, self._base, value / self._ref_length,
+                    copy=self._copy))
                 self.ctx.finish()
             else:
                 self.ctx.execute(actions.scale_entities(
-                    self._entities, self._base, value))
+                    self._entities, self._base, value, copy=self._copy))
                 self.ctx.finish()
             return True
         return False
@@ -231,7 +314,7 @@ class ScaleTool(Tool):
             self.last_point = point
             self.ghost_entities = self._entities
             self.ghost_base = point
-            self.prompt("Specify scale factor or [Reference]:")
+            self.prompt("Specify scale factor or [Copy/Reference]:")
             return
         # AutoCAD takes the factor from the distance to the base point, and
         # shows it growing as you go.
@@ -246,7 +329,7 @@ class ScaleTool(Tool):
         if self._ref_length is not None:
             factor = factor / self._ref_length
         self.ctx.execute(actions.scale_entities(
-            self._entities, self._base, factor))
+            self._entities, self._base, factor, copy=self._copy))
         self.ctx.finish()
 
     def preview_segments(self, cursor: Point):
@@ -323,7 +406,9 @@ class OffsetTool(Tool):
     a wall by the thickness of another one without doing arithmetic.
     """
 
-    distance = 10.0        # sticky through the session, like AutoCAD's
+    #: sticky through the session, like AutoCAD's OFFSETDIST; None is
+    #: Through, the value it starts with (-1: "<Through>", OFFSET p.1286)
+    distance: float | None = None
     erase_source = False
     layer_mode = "source"  # or "current"
 
@@ -347,7 +432,8 @@ class OffsetTool(Tool):
                          layer=tr("Current") if cls.layer_mode == "current"
                          else tr("Source")))
         self.prompt("Specify offset distance or [Through/Erase/Layer] <{d}>:",
-               d=f"{cls.distance:g}")
+                    d=tr("Through") if cls.distance is None
+                    else f"{cls.distance:g}")
 
     def _ask_object(self) -> None:
         self._phase = "object"
@@ -384,6 +470,7 @@ class OffsetTool(Tool):
         if self._phase == "distance":
             if token in ("T", "THROUGH"):
                 self._through = True
+                cls.distance = None           # remembered, as OFFSETDIST -1
                 self._ask_object()
                 return True
             if token in ("E", "ERASE"):
@@ -430,7 +517,9 @@ class OffsetTool(Tool):
             self.on_option("")
             return
         if self._phase == "distance":
-            self._ask_object()          # Enter takes the <current> distance
+            # Enter takes the <current> distance -- or Through
+            self._through = type(self).distance is None
+            self._ask_object()
             return
         self.ctx.finish()
 
@@ -495,6 +584,8 @@ class OffsetTool(Tool):
         return abs(math.dist((cx, cy), side) - r) or None
 
     def _emit(self, entity, side: Point) -> None:
+        from core.modify import carry_body
+
         distance = self._distance_for(entity, side)
         if not distance:
             self.ctx.echo(tr("Value must be positive."))
@@ -503,19 +594,25 @@ class OffsetTool(Tool):
         layer = attribs.pop("layer", None)
         kind = entity.dxftype()
         if kind in ("LWPOLYLINE", "POLYLINE"):
-            result = polyoffset.offset_polyline(
+            pieces = polyoffset.offset_polylines(
                 _polyline_rows(entity), _polyline_closed(entity),
                 distance, side)
-            if result is None:
+            if not pieces:
                 self.ctx.echo(tr("The offset does not fit that polyline."))
                 return
-            rows, closed = result
-            command = actions.AddEntityCommand(
+            # a shape the offset splits into islands gives one polyline per
+            # island, as AutoCAD's OFFSET does (#58)
+            adds = [actions.AddEntityCommand(
                 "OFFSET",
-                lambda msp, r=rows, c=closed, a=attribs: _add_polyline(
-                    msp, r, c, a),
-                layer=layer)
-            self.ctx.execute(command)
+                lambda msp, r=rows, c=closed, a=attribs: carry_body(
+                    _add_polyline(msp, r, c, a), entity),
+                layer=layer) for rows, closed in pieces]
+            if len(adds) == 1:
+                self.ctx.execute(adds[0])
+            else:
+                from core.commands import CompositeCommand
+
+                self.ctx.execute(CompositeCommand("OFFSET", adds))
             self._done_any = True
             if type(self).erase_source:
                 self.ctx.execute(actions.EraseCommand([entity]))
@@ -526,8 +623,8 @@ class OffsetTool(Tool):
             n = editmath.offset_line(seg, distance, side)
             command = actions.AddEntityCommand(
                 "OFFSET",
-                lambda msp, p=n, a=attribs: msp.add_line(
-                    (p[0], p[1]), (p[2], p[3]), dxfattribs=dict(a)),
+                lambda msp, p=n, a=attribs: carry_body(msp.add_line(
+                    (p[0], p[1]), (p[2], p[3]), dxfattribs=dict(a)), entity),
                 layer=layer)
         else:
             cx, cy, radius = ocs.circle_wcs(entity)
@@ -540,15 +637,16 @@ class OffsetTool(Tool):
             if kind == "CIRCLE":
                 command = actions.AddEntityCommand(
                     "OFFSET",
-                    lambda msp, c=center, r=new_r, a=attribs:
-                        msp.add_circle(c, r, dxfattribs=dict(a)),
+                    lambda msp, c=center, r=new_r, a=attribs: carry_body(
+                        msp.add_circle(c, r, dxfattribs=dict(a)), entity),
                     layer=layer)
             else:
                 a0, a1 = ocs.arc_wcs(entity)[3:]
                 command = actions.AddEntityCommand(
                     "OFFSET",
                     lambda msp, c=center, r=new_r, s=a0, en=a1, a=attribs:
-                        msp.add_arc(c, r, s, en, dxfattribs=dict(a)),
+                        carry_body(msp.add_arc(c, r, s, en, dxfattribs=dict(a)),
+                                   entity),
                     layer=layer)
         self.ctx.execute(command)
         self._done_any = True
@@ -593,18 +691,9 @@ def _distance_to_polyline(entity, point) -> float:
     """Shortest distance from a point to the polyline's own geometry."""
     elements = polyoffset.elements_of(
         _polyline_rows(entity), _polyline_closed(entity))
-    best = None
-    for element in elements:
-        if element[0] == "L":
-            _k, p0, p1 = element
-            _t, closest = polyoffset._closest_on_segment(p0, p1, point)
-            distance = math.dist(point, closest)
-        else:
-            _k, center, radius, _a0, _a1, _ccw = element
-            distance = abs(math.dist(point, center) - radius)
-        if best is None or distance < best:
-            best = distance
-    return best or 0.0
+    if not elements:
+        return 0.0
+    return min(polyoffset.distance_to(point, e) for e in elements)
 
 
 def _add_polyline(msp, rows, closed: bool, attribs: dict):
@@ -620,14 +709,40 @@ def _number(text: str):
         return None
 
 
+def _mode_word(quick: bool) -> str:
+    """TRIMEXTENDMODE's two words, in their own context: "Standard" alone
+    is also the name of a style, which is never translated."""
+    from core.i18n import tr_context
+
+    return tr_context("Trim mode|Quick") if quick \
+        else tr_context("Trim mode|Standard")
+
+
 class _TrimExtendBase(Tool):
     wants_selection = True   # the cutting/boundary edges
+    modifies_selection = False   # reads the set; locked layers count
     entity_picker = True
     accepts_target_windows = True
     trim_mode = True
 
     def start(self) -> None:
+        from core import trimmode
+
         self._edges_handles: list[str] | None = None
+        self._asking_mode = False
+        #: Fence points while one is drawn, the first Crossing corner, and
+        #: the edge list before each change, for Undo
+        self._fence: list | None = None
+        self._cross_anchor: Point | None = None
+        self._crossing = False
+        self._history: list = []
+        self.quick = trimmode.trimextendmode() == 1
+        self.ctx.echo(tr("Current settings: Projection=UCS, Edge=None, "
+                         "Mode={mode}", mode=_mode_word(self.quick)))
+        # Quick: every object is an edge, nothing to pick first
+        self.wants_selection = not self.quick
+        if self.quick:
+            self._object_prompt()
 
     def selection_prompt(self) -> str:
         return (tr("Select cutting edges <Enter selects all>:") if self.trim_mode
@@ -636,15 +751,177 @@ class _TrimExtendBase(Tool):
     def on_selection(self, entities: list) -> None:
         # Enter with empty selection = all entities are edges (modern AutoCAD)
         self._edges_handles = [e.dxf.handle for e in entities] or None
-        self.prompt("Select object to trim (Shift extends):" if self.trim_mode
-                    else "Select object to extend (Shift trims):")
+        self._object_prompt()
+
+    def _object_prompt(self) -> None:
+        """AutoCAD 2021's object prompt, per command and mode."""
+        self._fence = None
+        self._crossing = False
+        self._picking_points(False)
+        if self.trim_mode:
+            self.prompt(
+                "Select object to trim or shift-select to extend or "
+                "[cuTting edges/Fence/Crossing/mOde/Undo]:" if self.quick else
+                "Select object to trim or shift-select to extend or "
+                "[Fence/Crossing/mOde/Undo]:")
+        else:
+            self.prompt(
+                "Select object to extend or shift-select to trim or "
+                "[Boundary edges/Fence/Crossing/mOde/Undo]:" if self.quick else
+                "Select object to extend or shift-select to trim or "
+                "[Fence/Crossing/mOde/Undo]:")
+
+    def _picking_points(self, on: bool) -> None:
+        """Fence and Crossing take plain points: no object pick, no target
+        window, osnap on."""
+        self.entity_picker = not on
+        self.accepts_target_windows = not on
+
+    def on_option(self, text: str) -> bool:
+        from core import trimmode
+
+        if self._asking_mode:
+            key = self.option(text) if text.strip() else \
+                ("Q" if self.quick else "S")
+            if key not in ("Q", "S"):
+                return False
+            self._asking_mode = False
+            trimmode.set_trimextendmode(1 if key == "Q" else 0)
+            self.quick = key == "Q"
+            if self.quick:
+                self._edges_handles = None        # every object, as Quick is
+                self._object_prompt()
+            else:
+                self.ctx.services.request_selection()
+            return True
+        key = self.option(text)
+        if self._fence is not None and key == "U":
+            if self._fence:
+                self._fence.pop()
+            self._fence_prompt()
+            return True
+        if self._fence is None and not self._crossing:
+            if key == "F":
+                # Fence: every object the line crosses (TRIM, p.1951)
+                self._fence = []
+                self._picking_points(True)
+                self.prompt("Specify first fence point:")
+                return True
+            if key == "C":
+                self._crossing = True
+                self._cross_anchor = None
+                self._picking_points(True)
+                self.prompt("Specify first corner:")
+                return True
+            if key == "U":
+                self._undo_one()
+                return True
+        if key == "O":
+            self._asking_mode = True
+            source = ("Enter a trim mode option [Quick/Standard] <{mode}>:"
+                      if self.trim_mode else
+                      "Enter an extend mode option [Quick/Standard] <{mode}>:")
+            self.prompt(source, mode=_mode_word(self.quick))
+            return True
+        if self.quick and key in ("T", "B"):
+            # cuTting edges / Boundary edges: pick them, then trim as Standard
+            self.ctx.services.request_selection()
+            return True
+        return False
 
     def on_point(self, point: Point) -> None:
+        if self._fence is not None:
+            self._fence.append(point)
+            self.last_point = point
+            self._fence_prompt()
+            return
+        if self._crossing:
+            if self._cross_anchor is None:
+                self._cross_anchor = point
+                self.prompt("Specify opposite corner:")
+                return
+            ax, ay = self._cross_anchor
+            rect = (min(ax, point[0]), min(ay, point[1]),
+                    max(ax, point[0]), max(ay, point[1]))
+            index = getattr(self.ctx.services, "index", None)
+            entities = []
+            if index is not None:
+                entities = [e for h in index.crossing(rect)
+                            if (e := index.entity(h)) is not None and e.is_alive]
+            self.on_target_entities(entities, rect)
+            self._object_prompt()
+            return
         entity = self.ctx.services.pick_entity(point)
         if entity is None:
             self.ctx.echo(tr("Nothing there."))
             return
         self.apply_to_entity(entity, point)
+
+    def _fence_prompt(self) -> None:
+        if not self._fence:
+            self.prompt("Specify first fence point:")
+        else:
+            self.prompt("Specify next fence point or [Undo]:")
+
+    def on_enter(self) -> None:
+        if self._fence is not None:
+            fence, self._fence = self._fence, None
+            if len(fence) >= 2:
+                self._apply_fence(fence)
+            self._object_prompt()
+            return
+        if self._crossing:
+            self._object_prompt()
+            return
+        self.ctx.finish()
+
+    def _apply_fence(self, fence: list) -> None:
+        """Trim (or extend) every object the fence crosses, at the first
+        point where it crosses it."""
+        index = getattr(self.ctx.services, "index", None)
+        if index is None:
+            return
+        done = set()
+        self._grouping = [None if self._edges_handles is None
+                          else list(self._edges_handles), 0]
+        try:
+            self._fence_pass(index, fence, done)
+        finally:
+            group, self._grouping = self._grouping, None
+            if group[1]:
+                self._history.append(group)
+
+    def _fence_pass(self, index, fence, done) -> None:
+        for a, b in zip(fence, fence[1:]):
+            rect = (min(a[0], b[0]), min(a[1], b[1]),
+                    max(a[0], b[0]), max(a[1], b[1]))
+            for handle in index.crossing(rect):
+                entity = index.entity(handle)
+                if entity is None or not entity.is_alive or handle in done:
+                    continue
+                point = _fence_crossing(entity, a, b)
+                if point is not None:
+                    done.add(handle)
+                    self.apply_to_entity(entity, point)
+
+    def _undo_one(self) -> None:
+        """Undo inside the command: the last change, and the edge list as it
+        was before it (a trimmed edge keeps cutting through its pieces)."""
+        if not self._history:
+            self.ctx.echo(tr("Command has been completely undone."))
+            self._object_prompt()
+            return
+        edges, count = self._history.pop()
+        for _ in range(count):
+            self.ctx.undo_last()
+        self._edges_handles = edges
+        self._object_prompt()
+
+    def preview_segments(self, cursor: Point):
+        if self._fence:
+            points = list(self._fence) + [cursor]
+            return list(zip(points, points[1:]))
+        return []
 
     def on_target_entities(self, entities: list, rect) -> None:
         """Window/crossing over targets: trim each near the rect center."""
@@ -686,6 +963,11 @@ class _TrimExtendBase(Tool):
             name, [entity],
             [(lambda msp, f=f: inherit_style(f(msp), entity))
              for f in factories])
+        edges = None if self._edges_handles is None else list(self._edges_handles)
+        if getattr(self, "_grouping", None) is not None:
+            self._grouping[1] += 1           # one fence, one Undo
+        else:
+            self._history.append([edges, 1])
         self.ctx.execute(cmd)
         if self._edges_handles is not None:
             handle = None
@@ -704,7 +986,7 @@ class _TrimExtendBase(Tool):
             pick_t = _param_on_segment(seg, point)
             pieces = editmath.trim_segment(seg, segs, circles, pick_t)
             if pieces is None:
-                self.ctx.echo(tr("No cutting edge crosses it."))
+                self._nothing_crosses(entity)
                 return
             factories = [
                 (lambda msp, p=p: msp.add_line((p[0], p[1]), (p[2], p[3])))
@@ -718,7 +1000,11 @@ class _TrimExtendBase(Tool):
             arc = editmath.trim_circle(center, radius, segs, pick_ang,
                                        cutter_circles=circles)
             if arc is None:
-                self.ctx.echo(tr("A circle needs two crossings to trim."))
+                if self.quick and not editmath.circle_crossings(
+                        center, radius, segs, circles):
+                    self._nothing_crosses(entity)
+                else:
+                    self.ctx.echo(tr("A circle needs two crossings to trim."))
                 return
             a0, a1 = arc
             self._replace("TRIM", entity,
@@ -732,7 +1018,7 @@ class _TrimExtendBase(Tool):
                 center, radius, start, end, segs, pick_ang,
                 cutter_circles=circles)
             if spans is None:
-                self.ctx.echo(tr("No cutting edge crosses it."))
+                self._nothing_crosses(entity)
                 return
             factories = [
                 (lambda msp, c=center, r=radius, s=s0, e=e0:
@@ -749,7 +1035,7 @@ class _TrimExtendBase(Tool):
                 [(p[0], p[1]) for p in pts], entity.closed, point,
                 segs, circles)
             if chains is None:
-                self.ctx.echo(tr("No cutting edge crosses it."))
+                self._nothing_crosses(entity)
                 return
             factories = [
                 (lambda msp, c=chain: msp.add_lwpolyline(c))
@@ -758,6 +1044,15 @@ class _TrimExtendBase(Tool):
             self._replace("TRIM", entity, factories)
         else:
             self.ctx.echo(tr("TRIM supports LINE, PLINE, CIRCLE and ARC for now."))
+
+    def _nothing_crosses(self, entity) -> None:
+        """No cutting edge crosses the picked object. Standard says so;
+        Quick erases it, as AutoCAD 2021's Quick TRIM does with an object
+        that has no intersections (Rafael erased such stubs by hand)."""
+        if getattr(self, "quick", False):
+            self.ctx.execute(actions.EraseCommand([entity]))
+            return
+        self.ctx.echo(tr("No cutting edge crosses it."))
 
     def _extend(self, entity, point, segs, circles) -> None:
         t = entity.dxftype()
@@ -787,8 +1082,20 @@ class _TrimExtendBase(Tool):
                 return
             self._replace("EXTEND", entity,
                           [lambda msp, c=new_pts: msp.add_lwpolyline(c)])
+        elif t == "ARC":
+            cx, cy, radius, start, end = ocs.arc_wcs(entity)
+            center = (cx, cy)
+            pick_ang = math.atan2(point[1] - cy, point[0] - cx)
+            arc = editmath.extend_arc(center, radius, start, end, pick_ang,
+                                      segs, circles)
+            if arc is None:
+                self.ctx.echo(tr("No boundary edge to extend to."))
+                return
+            self._replace("EXTEND", entity,
+                          [lambda msp, c=center, r=radius, a=arc:
+                               msp.add_arc(c, r, a[0], a[1])])
         else:
-            self.ctx.echo(tr("EXTEND supports LINE and PLINE for now."))
+            self.ctx.echo(tr("EXTEND supports LINE, ARC and PLINE for now."))
 
 
 class TrimTool(_TrimExtendBase):
@@ -930,20 +1237,25 @@ class FilletTool(Tool):
         if self._await == "polyline":
             self._fillet_polyline(entity)
             return
-        if entity is None or entity.dxftype() not in ("LINE", "ARC", "CIRCLE"):
-            self.ctx.echo(tr("FILLET joins lines, arcs and circles."))
+        if entity is None or entity.dxftype() not in (
+                "LINE", "ARC", "CIRCLE", "LWPOLYLINE"):
+            self.ctx.echo(tr("FILLET joins lines, arcs, circles and "
+                             "polyline segments."))
             return
         if self._first is None:
             self._first = entity
             self._first_pick = point
             self.prompt("Select second object or shift-select to apply corner:")
             return
-        if entity is self._first:
+        if entity is self._first and entity.dxftype() != "LWPOLYLINE":
             self.ctx.echo(tr("Pick a different object."))
             return
         # Shift on the second pick: a sharp corner, radius 0 this once
         radius = 0.0 if getattr(self, "shift", False) else type(self).radius
-        if "LINE" == entity.dxftype() == self._first.dxftype():
+        kinds = {entity.dxftype(), self._first.dxftype()}
+        if "LWPOLYLINE" in kinds:
+            done = self._fillet_segments(entity, point, radius)
+        elif "LINE" == entity.dxftype() == self._first.dxftype():
             done = self._fillet_lines(entity, point, radius)
         else:
             done = self._fillet_curves(entity, point, radius)
@@ -987,28 +1299,32 @@ class FilletTool(Tool):
                       lambda msp: inherit_style(
                           msp.add_arc(center, r, a0, a1), source))
             return True
-        if radius == 0:
-            result = editmath.fillet_corner(s1, s2)
-            if result is None:
-                self.ctx.echo(tr("Lines are parallel."))
-                return False
-            n1, n2 = result
+        # Each line keeps the side it was picked on, measured from where
+        # they cross -- on crossing lines the end farther from the corner
+        # is often the other side (GeoCad Yaguarete had to patch it).
+        result = editmath.sided_fillet(s1, self._first_pick, s2, point, radius)
+        if result == "parallel":
+            self.ctx.echo(tr("Lines are parallel."))
+            return False
+        if result == "too large":
+            self.ctx.echo(tr("Radius does not fit."))
+            return False
+        _corner, t1, t2, center, far1, far2, _sweep = result
+        def kept(seg, far, tangent):
+            # the line keeps its own direction: start stays the start
+            if math.dist((seg[0], seg[1]), far) < 1e-12:
+                return (far[0], far[1], tangent[0], tangent[1])
+            return (tangent[0], tangent[1], far[0], far[1])
+
+        n1, n2 = kept(s1, far1, t1), kept(s2, far2, t2)
+        if center is None:
             arc = None
         else:
-            result = editmath.fillet_arc(s1, s2, radius)
-            if result is None:
-                self.ctx.echo(tr("Radius does not fit."))
-                return False
-            center, r, a0, a1, t1, t2 = result
-            corner = editmath.line_line_intersection(s1, s2, infinite2=True)[1]
-
-            def far_piece(seg, tangent):
-                d_start = math.hypot(seg[0] - corner[0], seg[1] - corner[1])
-                d_end = math.hypot(seg[2] - corner[0], seg[3] - corner[1])
-                far = (seg[0], seg[1]) if d_start >= d_end else (seg[2], seg[3])
-                return (far[0], far[1], tangent[0], tangent[1])
-
-            n1, n2 = far_piece(s1, t1), far_piece(s2, t2)
+            r = math.dist(center, t1)
+            a0 = math.degrees(math.atan2(t1[1] - center[1], t1[0] - center[0]))
+            a1 = math.degrees(math.atan2(t2[1] - center[1], t2[0] - center[0]))
+            if (a1 - a0) % 360.0 > 180.0:       # the short way round
+                a0, a1 = a1, a0
             arc = (lambda msp, c=center, rr=r, s=a0, e=a1:
                    inherit_style(msp.add_arc(c, rr, s, e), source))
         # The two trimmed pieces keep their own object's properties; the
@@ -1020,6 +1336,43 @@ class FilletTool(Tool):
                    lambda msp, p=n2: inherit_style(
                       msp.add_line((p[0], p[1]), (p[2], p[3])), entity)],
                   arc)
+        return True
+
+    _SEGMENT_REASONS = {
+        "arc": "FILLET takes the straight segments of a polyline.",
+        "tilted": "The polyline is not in the drawing's plane.",
+        "not adjacent": "The segments must be adjacent or separated by "
+                        "one segment.",
+        "not an end": "A line joins a polyline at one of its end segments.",
+        "closed": "A line cannot join a closed polyline.",
+        "parallel": "Lines are parallel.",
+        "too large": "Radius is too large.",
+        "short": "The polyline has no segment there.",
+        "nothing": "Radius is too large.",
+    }
+
+    def _fillet_segments(self, entity, point, radius) -> bool:
+        """A polyline segment in the pair (FILLET, p. 801)."""
+        from core import trimmode
+
+        if entity.dxftype() == self._first.dxftype() == "LWPOLYLINE" \
+                and entity is not self._first and (
+                    entity.closed or self._first.closed):
+            self.ctx.echo(tr(self._SEGMENT_REASONS["closed"]))
+            return False
+        if not {entity.dxftype(), self._first.dxftype()} <= {
+                "LINE", "LWPOLYLINE"}:
+            self.ctx.echo(tr("FILLET joins a polyline segment with a line "
+                             "or another polyline segment."))
+            return False
+        command, reason = modify.fillet_with_polylines(
+            self._first, self._first_pick, entity, point, radius,
+            trim=trimmode.trimmode())
+        if command is None:
+            self.ctx.echo(tr(self._SEGMENT_REASONS.get(
+                reason, "Radius is too large.")))
+            return False
+        self.ctx.execute(command)
         return True
 
     def _fillet_curves(self, entity, pick, radius) -> bool:
@@ -1118,6 +1471,27 @@ def _entity_bbox(entity):
     return None
 
 
+def _fence_crossing(entity, a: Point, b: Point):
+    """Where the fence segment a-b first crosses ``entity``, or None."""
+    from ezdxf import path as ezpath
+    from ezdxf.math import Vec2, intersection_line_line_2d
+
+    try:
+        vertices = [Vec2(v) for v in ezpath.make_path(entity).flattening(
+            max(math.dist(a, b) * 1e-4, 1e-9))]
+    except Exception:  # noqa: BLE001 -- an object the fence cannot read
+        return None
+    start, end = Vec2(a), Vec2(b)
+    best = None
+    for p, q in zip(vertices, vertices[1:]):
+        hit = intersection_line_line_2d((start, end), (p, q), virtual=False)
+        if hit is not None:
+            d = start.distance(hit)
+            if best is None or d < best[0]:
+                best = (d, (hit.x, hit.y))
+    return best[1] if best else None
+
+
 def _point_on_entity_near(entity, target: Point):
     """Closest point ON the entity to a target point (window-trim picks)."""
     t = entity.dxftype()
@@ -1178,6 +1552,8 @@ class PasteTool(Tool):
             self.ctx.echo(tr("Clipboard is empty."))
             self.ctx.finish()
             return
+        originals = getattr(self.ctx.services, "clipboard_originals", None)
+        self._originals = originals() if callable(originals) else None
         # ghost: the actual clipboard geometry follows the cursor
         self.ghost_entities = self._sources
         self.ghost_base = self._base
@@ -1185,7 +1561,8 @@ class PasteTool(Tool):
 
     def on_point(self, point: Point) -> None:
         dx, dy = point[0] - self._base[0], point[1] - self._base[1]
-        self.ctx.execute(actions.PasteCommand(self._sources, dx, dy))
+        self.ctx.execute(actions.PasteCommand(self._sources, dx, dy,
+                                              originals=self._originals))
         self.ctx.finish()
 
 
@@ -1225,7 +1602,8 @@ class PasteBlockTool(PasteTool):
         from core.commands import CompositeCommand, DeferredCommand
 
         dx, dy = point[0] - self._base[0], point[1] - self._base[1]
-        paste = actions.PasteCommand(self._sources, dx, dy)
+        paste = actions.PasteCommand(self._sources, dx, dy,
+                                     originals=self._originals)
 
         def block(document):
             doc = document.doc

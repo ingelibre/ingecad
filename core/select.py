@@ -150,6 +150,10 @@ class GeometryIndex:
         # out of window/crossing because its boundary already answers those.
         # [(owner id, polygon Nx2, (minx, miny, maxx, maxy))]
         self._areas: list = []
+        # A turned text's real outline (4x2 corners), by owner id: its box
+        # row stays for window/crossing, but a click must land in THIS --
+        # the box of a 45 degree label is mostly empty paper.
+        self._text_quads: dict = {}
 
     def invalidate(self) -> None:
         self._dirty = True
@@ -508,6 +512,70 @@ class GeometryIndex:
             box_o.append(oid)
 
     @staticmethod
+    def _text_quad(e):
+        """The four corners of a TURNED text's own rectangle, or None for
+        one that reads square to the sheet (its box is already exact).
+
+        Measured on an unturned copy at the same anchor, then turned about
+        that anchor -- where TEXT turns about (the alignment point once it
+        is justified) and where MTEXT hangs from."""
+        kind = e.dxftype()
+        if kind not in ("TEXT", "MTEXT", "ATTDEF", "ATTRIB"):
+            return None
+        try:
+            if kind == "MTEXT":
+                angle = float(e.get_rotation())
+            else:
+                angle = float(e.dxf.get("rotation", 0.0))
+            if abs(math.remainder(angle, 90.0)) < 1e-6:
+                return None
+            flat = e.copy()
+            if kind == "MTEXT":
+                flat.dxf.discard("text_direction")
+                flat.dxf.rotation = 0.0
+                pivot = e.dxf.insert
+            else:
+                flat.dxf.rotation = 0.0
+                justified = (e.dxf.get("halign", 0) or e.dxf.get("valign", 0)) \
+                    and e.dxf.hasattr("align_point")
+                pivot = e.dxf.align_point if justified else e.dxf.insert
+            extents = GeometryIndex._text_extents(flat)
+        except Exception:
+            return None
+        if extents is None:
+            return None
+        x0, y0, x1, y1 = extents
+        a = math.radians(angle)
+        c, s_ = math.cos(a), math.sin(a)
+        corners = np.array([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]) \
+            - (pivot.x, pivot.y)
+        turned = corners @ np.array([[c, s_], [-s_, c]])
+        return turned + (pivot.x, pivot.y)
+
+    def _note_quad(self, e, oid) -> None:
+        quad = self._text_quad(e)
+        if quad is not None:
+            self._text_quads[oid] = quad
+
+    def _in_quad(self, oid, cx: float, cy: float, tolerance: float) -> bool:
+        """Is the cursor on this owner's turned text (within tolerance)?
+        True for everything that has no turned outline."""
+        quad = self._text_quads.get(int(oid))
+        if quad is None:
+            return True
+        edges = np.column_stack((quad, np.roll(quad, -1, axis=0)))
+        cross = ((edges[:, 2] - edges[:, 0]) * (cy - edges[:, 1])
+                 - (edges[:, 3] - edges[:, 1]) * (cx - edges[:, 0]))
+        if (cross >= 0).all() or (cross <= 0).all():
+            return True
+        return bool(_dist_point_segments(edges, cx, cy).min() <= tolerance)
+
+    def _quad_edges(self, ids) -> np.ndarray:
+        rows = [np.column_stack((q, np.roll(q, -1, axis=0)))
+                for oid, q in self._text_quads.items() if oid in ids]
+        return np.vstack(rows) if rows else np.empty((0, 4))
+
+    @staticmethod
     def _seg_bounds_of(segs: np.ndarray) -> np.ndarray:
         if not len(segs):
             return np.empty((0, 4))
@@ -522,6 +590,7 @@ class GeometryIndex:
         self._owners = []
         self._owner_ids = {}
         self._areas = []
+        self._text_quads = {}
         segs: list = []
         seg_o: list = []
         circles: list = []
@@ -549,6 +618,7 @@ class GeometryIndex:
                 continue    # the sheet's own "main" viewport is not an object
             self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
                           pboxes, pbox_o, self._areas)
+            self._note_quad(e, oid)
         self._segs = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
         self._seg_oidx = np.asarray(seg_o, dtype=np.int32)
         self._seg_bounds = self._seg_bounds_of(self._segs)
@@ -586,6 +656,7 @@ class GeometryIndex:
                 continue
             self._extract(e, oid, segs, seg_o, circles, circle_o, boxes, box_o,
                           pboxes, pbox_o, self._areas)
+            self._note_quad(e, oid)
         if segs:
             new = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
             self._segs = np.vstack([self._segs, new])
@@ -625,6 +696,8 @@ class GeometryIndex:
         ids = self._ids_of(handles)
         if not len(ids):
             return
+        for i in ids:
+            self._text_quads.pop(int(i), None)
         if self._areas:
             drop = set(int(i) for i in ids)
             self._areas = [a for a in self._areas if a[0] not in drop]
@@ -668,6 +741,10 @@ class GeometryIndex:
         mask = np.isin(self._pick_box_oidx, ids)
         if mask.any():
             self._pick_boxes[mask] += shift4
+        for i in ids:
+            quad = self._text_quads.get(int(i))
+            if quad is not None:
+                quad += (dx, dy)
         self.version += 1
 
     def add_translated(self, pairs, dx: float, dy: float) -> set:
@@ -721,6 +798,10 @@ class GeometryIndex:
                 setattr(self, bounds_name,
                         np.vstack([bounds, bounds[rows] + shift4]))
             found_ids.update(np.unique(oidx[rows]).tolist())
+        for sid in src_ids:
+            quad = self._text_quads.get(int(sid))
+            if quad is not None:
+                self._text_quads[int(remap[sid])] = quad + (dx, dy)
         self.version += 1
         missing |= {s for s, _n in known
                     if self._owner_ids[s] not in found_ids}
@@ -763,6 +844,9 @@ class GeometryIndex:
             inside = ((cx >= b[:, 0] - tolerance) & (cx <= b[:, 2] + tolerance)
                       & (cy >= b[:, 1] - tolerance) & (cy <= b[:, 3] + tolerance))
             hits = np.nonzero(inside)[0]
+            if len(hits) and self._text_quads:
+                hits = np.array([k for k in hits if self._in_quad(
+                    self._box_oidx[k], cx, cy, tolerance)], dtype=np.int64)
             if len(hits):
                 areas = ((b[hits, 2] - b[hits, 0]) * (b[hits, 3] - b[hits, 1]))
                 best = (tolerance, self._owners[
@@ -837,6 +921,9 @@ class GeometryIndex:
                       & (cy >= boxes[:, 1] - tolerance)
                       & (cy <= boxes[:, 3] + tolerance))
             hits = np.nonzero(inside)[0]
+            if len(hits) and self._text_quads and boxes is self._boxes:
+                hits = np.array([k for k in hits if self._in_quad(
+                    oidx[k], cx, cy, tolerance)], dtype=np.int64)
             if not len(hits):
                 continue
             areas = ((boxes[hits, 2] - boxes[hits, 0])
@@ -976,6 +1063,24 @@ class GeometryIndex:
         if not len(ids) or not len(self._circle_oidx):
             return np.empty((0, 4))
         return self._circles[np.isin(self._circle_oidx, ids)]
+
+    def highlight_of(self, handles: Iterable[str]):
+        """(segments, circles, boxes) to outline the given entities: a
+        turned text by its own rectangle, not by its box."""
+        if self._dirty:
+            self._build()
+        segs = self.segments_of(handles)
+        circles = self.circles_of(handles)
+        boxes = self.boxes_of(handles)
+        if self._text_quads:
+            ids = {int(i) for i in self._ids_of(handles)}
+            turned = [i for i in ids if i in self._text_quads]
+            if turned:
+                segs = np.vstack([segs, self._quad_edges(set(turned))])
+                keep = ~np.isin(self._box_oidx, turned) & \
+                    np.isin(self._box_oidx, list(ids))
+                boxes = self._boxes[keep]
+        return segs, circles, boxes
 
     def boxes_of(self, handles: Iterable[str]) -> np.ndarray:
         if self._dirty:

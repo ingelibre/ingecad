@@ -172,6 +172,9 @@ def test_manager_modify_executes_command(qapp, monkeypatch):
                 props["dimtxt"] = 4.0
                 return {"dimtxt": 4.0}
 
+            def changed_props(self):
+                return {"dimtxt": 4.0}       # the one field the user edited
+
         monkeypatch.setattr(mod, "DimStyleEditorDialog", FakeEditor)
         # The seeded height depends on the drawing's template (a metres
         # drawing carries 0.0025, a millimetre one 2.5), so undo is checked
@@ -227,3 +230,33 @@ def test_the_preview_scales_itself_to_the_style(qapp):
     # a style with no text falls back to the arrow size, never to zero
     assert _preview_scale({"dimasz": 0.5}) > 0
     assert _preview_scale({}) == 1.0
+
+
+def _dim_text(doc):
+    dim = doc.modelspace().query("DIMENSION")[0]
+    for e in doc.doc.blocks[dim.dxf.geometry]:
+        if e.dxftype() in ("MTEXT", "TEXT"):
+            return e.dxf.text
+    return None
+
+
+def test_ok_in_the_style_editor_keeps_the_decimals(qapp):
+    """Rafael's sixth review: OK in Modify Dimension Style, nothing
+    touched, and every dimension lost its decimals -- the dialog writes
+    DIMRND 0, which AutoCAD reads as "no rounding" and ezdxf read as
+    "remove the fraction"."""
+    from views.dimstyle_dialog import DimStyleEditorDialog
+
+    doc = Document.new()
+    style_ops.install_default_styles(doc)
+    history = History(doc)
+    history.execute(actions.dim_linear((0, 0), (12.3456, 0), (5, 4)))
+    before = _dim_text(doc)
+    assert before.endswith(",35"), before
+    attribs = style_ops.dim_style_attribs(doc, "ISO-25")
+    dlg = DimStyleEditorDialog(None, "ISO-25", attribs, ["Standard"])
+    props = dlg.result_props()                  # OK, nothing changed
+    dlg.deleteLater()
+    assert props["dimrnd"] == 0.0
+    history.execute(style_ops.SetDimStylePropsCommand("ISO-25", props))
+    assert _dim_text(doc) == before

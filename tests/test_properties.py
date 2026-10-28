@@ -119,11 +119,18 @@ def test_polyline_area_only_when_closed():
 
 # -- the Properties bar: current settings vs the selection ---------------------
 
-def _fresh_window(qapp):
+def _fresh_window(qapp, linetypes=("DASHED", "CENTER")):
+    """A new drawing with ``linetypes`` loaded, as a user loads them: a new
+    drawing carries only Continuous, as acadiso.dwt's does."""
+    from core import linetypes as lt_ops
     from views.main_window import MainWindow
 
     win = MainWindow()
     win.new_document("mm")
+    if linetypes:
+        win.tools._execute(lt_ops.LoadLinetypesCommand(list(linetypes)))
+        win._props_combo_key = None
+        win._refresh_props_toolbar()
     return win
 
 

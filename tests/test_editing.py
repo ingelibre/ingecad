@@ -1193,3 +1193,116 @@ def test_a_fillet_arc_takes_the_layer_only_when_both_edges_agree(qapp):
     finally:
         win.document.dirty = False
         win.close()
+
+
+# -- OFFSET simplifies a shape it cannot follow (#58, Riccardo) ---------------
+
+_RICCARDO = [(0, 0, 0, 0, 0), (11, 0, 0, 0, 0), (11, 12, 0, 0, 1),
+             (9, 12, 0, 0, -1), (4.5, 12, 0, 0, 1), (0, 12, 0, 0, 0)]
+
+
+def _check_clean_offset(rows, closed, source, distance):
+    """No loop left: the result never crosses itself, and every point of it
+    is at least ``distance`` from the original shape."""
+    from core import polyoffset as P
+
+    original = P.elements_of(source, True)
+    result = P.elements_of(rows, closed)
+    for element in result:
+        for s in (0.05, 0.25, 0.5, 0.75, 0.95):
+            point = P._point_at(element, s)
+            assert min(P.distance_to(point, o) for o in original) \
+                >= distance - 1e-6, f"{point} is inside the offset distance"
+    n = len(result)
+    for i in range(n):
+        for j in range(i + 2, n):
+            if closed and i == 0 and j == n - 1:
+                continue
+            assert not P._crossings(result[i], result[j]), "the offset crosses itself"
+
+
+@pytest.mark.parametrize("distance", [1.0, 2.0, 3.0])
+def test_an_inward_offset_drops_what_no_longer_fits(distance):
+    from core.polyoffset import offset_polylines
+
+    pieces = offset_polylines(_RICCARDO, True, distance, (5.5, 5.0))
+    assert len(pieces) == 1
+    rows, closed = pieces[0]
+    assert closed
+    _check_clean_offset(rows, closed, _RICCARDO, distance)
+
+
+@pytest.mark.parametrize("distance", [1.0, 2.0, 3.0])
+def test_an_outward_offset_closes_the_cup_it_cannot_follow(distance):
+    from core.polyoffset import offset_polylines
+
+    pieces = offset_polylines(_RICCARDO, True, distance, (-5.0, 5.0))
+    assert len(pieces) == 1
+    rows, closed = pieces[0]
+    _check_clean_offset(rows, closed, _RICCARDO, distance)
+    # past the cup's radius (2.25) the cup is gone: no arc that turns back in
+    has_cup = any(r[4] < 0 for r in rows)
+    assert has_cup == (distance < 2.25)
+
+
+def test_an_offset_too_large_for_the_shape_gives_nothing():
+    from core.polyoffset import offset_polylines
+
+    assert offset_polylines(_RICCARDO, True, 6.0, (5.5, 5.0)) == []
+
+
+_HOURGLASS = [(0, 0), (8, 0), (8, 4), (12, 4), (12, 0), (20, 0), (20, 10),
+              (12, 10), (12, 6), (8, 6), (8, 10), (0, 10)]
+
+
+def test_an_offset_that_pinches_a_neck_gives_two_islands():
+    from core.polyoffset import offset_polylines
+
+    source = _rows(_HOURGLASS)
+    pieces = offset_polylines(source, True, 1.5, (4.0, 5.0))
+    assert len(pieces) == 2
+    for rows, closed in pieces:
+        assert closed
+        _check_clean_offset(rows, closed, source, 1.5)
+    centres = sorted(sum(r[0] for r in rows) / len(rows) for rows, _c in pieces)
+    assert centres[0] < 8 < 12 < centres[1]
+
+
+def test_offset_command_adds_every_island(qapp):
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+    win.new_document()
+    try:
+        win.tools._execute(actions.add_polyline(_HOURGLASS, closed=True))
+        before = len(win.document.modelspace().query("LWPOLYLINE"))
+        win.dispatcher.submit("OFFSET")
+        win.tools.on_text("1.5")
+        win.tools.on_click(0.0, 5.0)          # the polyline
+        win.tools.on_click(4.0, 5.0)          # inside
+        win.tools.on_text("")                 # Enter ends OFFSET
+        assert len(win.document.modelspace().query("LWPOLYLINE")) == before + 2
+        win._cmd_undo()
+        assert len(win.document.modelspace().query("LWPOLYLINE")) == before
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_an_arc_extended_past_zero_degrees_keeps_angles_in_range():
+    """Found by the release tour: an arc from 0° to 90° extended down to a
+    line came out with a start angle of -11.5°. AutoCAD writes [0, 360)."""
+    import math
+
+    h = Harness()
+    h.msp.add_line((-6.0, -1.0), (6.0, -1.0))
+    h.msp.add_arc((0.0, 0.0), 5.0, 0.0, 90.0)
+    tool = ExtendTool(h.ctx)
+    tool.start()
+    tool.on_selection([])
+    tool.on_point((4.33, 2.5))           # near the 0° end
+    arc = h.msp.query("ARC")[0]
+    want = 360.0 - math.degrees(math.asin(0.2))
+    assert 0.0 <= arc.dxf.start_angle < 360.0
+    assert arc.dxf.start_angle == pytest.approx(want)
+    assert arc.dxf.end_angle == pytest.approx(90.0)

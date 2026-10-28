@@ -61,21 +61,84 @@ class InsertTool(Tool):
         self._verify_pass = False
         self._text_state = False
         names = self.ctx.services.block_names() if self.ctx.services else []
-        if not names:
-            self.ctx.echo(tr("No blocks defined."))
-            self.ctx.finish()
-            return
-        chosen = self.ctx.ask_choice(tr("Insert block:"), names, names[0])
+        # AutoCAD's Insert dialog: the defined blocks, or Browse... for a
+        # drawing file (#70: with no block defined there was no way on)
+        browse = tr("Browse...")
+        chosen = self.ctx.ask_choice(tr("Insert block:"), names + [browse],
+                                     names[0] if names else browse)
+        if chosen == browse:
+            chosen = self._block_from_file()
+            if self._await == "redefine":
+                return                    # the answer comes first
         if not chosen:
             self.ctx.finish()
             return
         self._block_name = chosen
         self.prompt("Specify insertion point [Scale/Rotate]:")
 
+    def _block_from_file(self) -> str | None:
+        """Browse...: define the chosen drawing as a block named after it, or
+        or -- asked first -- redefine the block of that name."""
+        from pathlib import Path
+
+        pick = getattr(self.ctx.services, "pick_drawing_file", None)
+        filename = pick() if callable(pick) else ""
+        if not filename:
+            return None
+        path = Path(filename)
+        document = getattr(self.ctx.services, "document", None)
+        if document is None:
+            document = getattr(getattr(self.ctx.services, "window", None),
+                               "document", None)
+        name = path.stem
+        if document is not None and name in document.doc.blocks:
+            # AutoCAD asks before touching a definition every reference
+            # shares (Rafael's sixth review: ours inserted the old one
+            # without a word, and the edited file never arrived).
+            self._redefine = (name, path)
+            self._await = "redefine"
+            self.entity_picker = True
+            self.prompt(self.REDEFINE, name=name)
+            return name
+        source = self._read(path)
+        if source is None:
+            return None
+        self.ctx.execute(actions.DefineBlockFromFileCommand(name, source))
+        return name
+
+    REDEFINE = 'Block "{name}" already exists. Redefine it? [Yes/No] <No>:'
+
+    def _read(self, path):
+        from core import xrefs
+
+        try:
+            return xrefs.read_drawing(path)
+        except Exception as exc:          # noqa: BLE001 - unreadable file
+            self.ctx.echo(tr("Cannot read {file}: {error}",
+                             file=path.name, error=exc))
+            return None
+
+    def _answer_redefine(self, text: str) -> None:
+        name, path = self._redefine
+        self._await = None
+        self.entity_picker = False
+        if self.option(text) == "Y":
+            source = self._read(path)
+            if source is None:
+                self.ctx.finish()
+                return
+            self.ctx.execute(actions.RedefineBlockFromFileCommand(name, source))
+            self.ctx.echo(tr("Block {name} redefined.", name=name))
+        self._block_name = name
+        self.prompt("Specify insertion point [Scale/Rotate]:")
+
     def on_option(self, text: str) -> bool:
         # The resolver first: it turns the localized keyword, or
         # AutoCAD's _global form, into the English key the
         # branches below have always compared against.
+        if self._await == "redefine":
+            self._answer_redefine(text)
+            return True
         if self._text_state:
             # an attribute value: Enter keeps the default shown
             from core import attributes as att
@@ -206,6 +269,9 @@ class InsertTool(Tool):
         return bool(self._text_state)
 
     def on_enter(self) -> None:
+        if self._await == "redefine":
+            self._answer_redefine("")     # <No>: the drawing's own block
+            return
         if self._text_state:
             self.on_option("")
             return
@@ -214,14 +280,16 @@ class InsertTool(Tool):
     def _insert(self) -> None:
         from core import attributes as att
 
+        # the rotation is measured from the UCS's X, as AutoCAD's (#91)
+        rotation = self._rotation + self.ucs().degrees
         if self._attdefs:
             command = att.insert_block_with_attribs(
                 self._block_name, self._point, self._xscale, self._xscale,
-                self._rotation, self._values)
+                rotation, self._values)
         else:
             command = actions.insert_block(
                 self._block_name, self._point, self._xscale, self._xscale,
-                self._rotation)
+                rotation)
         self.ctx.execute(command)
         self.ctx.finish()
 
@@ -265,6 +333,10 @@ class HatchTool(Tool):
 
     # Last-used settings persist for the session (AutoCAD remembers them).
     _last = {"pattern": "SOLID", "scale": 1.0, "angle": 0.0, "color": 256}
+
+    def _world_angle(self, angle: float) -> float:
+        """The pattern angle is measured from the UCS's X (#91)."""
+        return float(angle) + self.ucs().degrees
     # Set by the Palette to launch HATCH straight into point-picking with the
     # already-chosen pattern (skips the style dialog). One-shot.
     _skip_dialog = False
@@ -338,7 +410,7 @@ class HatchTool(Tool):
             return
         s = self.settings
         self.ctx.execute(actions.add_hatch(
-            boundaries, s["pattern"], s["scale"], s["angle"],
+            boundaries, s["pattern"], s["scale"], self._world_angle(s["angle"]),
             color=s.get("color", 256), islands=self.islands))
         self.ctx.echo(tr("Hatch created."))
         self.ctx.finish()
@@ -614,10 +686,13 @@ class HatchCliTool(HatchTool):
             self.ctx.finish()
             return
         s = self.settings
+        user_def = self._user_def
+        if user_def is not None:
+            user_def = (self._world_angle(user_def[0]),) + tuple(user_def[1:])
         self.ctx.execute(actions.add_hatch(
-            boundaries, s["pattern"], s["scale"], s["angle"],
+            boundaries, s["pattern"], s["scale"], self._world_angle(s["angle"]),
             color=s.get("color", 256), islands=self.islands,
-            style=type(self)._style, user_def=self._user_def))
+            style=type(self)._style, user_def=user_def))
         self.ctx.echo(tr("Hatch created."))
         self.ctx.finish()
 

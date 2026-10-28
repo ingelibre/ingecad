@@ -76,10 +76,18 @@ class CompositeCommand(Command):
     def do(self, document) -> None:
         for command in self.commands:
             command.do(document)
+            # a member recorded by History brings its associative
+            # dimensions along (a script folded into one step, #90)
+            followup = getattr(command, "dimassoc_followup", None)
+            if followup is not None:
+                followup.do(document)
 
     def undo(self, document) -> None:
         removed = []
         for command in reversed(self.commands):
+            followup = getattr(command, "dimassoc_followup", None)
+            if followup is not None:
+                followup.undo(document)
             command.undo(document)
             removed.extend(getattr(command, "removed_handles", ()) or ())
         self.removed_handles = removed
@@ -104,9 +112,52 @@ class History:
 
     def execute(self, command: Command) -> None:
         self._gate()
+        state = self.dimassoc_state()
         command.do(self.document)
+        self.record(command, state)
+
+    def dimassoc_state(self):
+        """The associative dimensions as they are now (core.dimassoc), to
+        hand to ``record`` once the command has mutated the drawing."""
+        from core import dimassoc
+
+        return dimassoc.before(self.document) if self.document is not None else None
+
+    def record(self, command: Command, dimassoc_state=None) -> None:
+        """Put an already-applied command on the undo stack (execute's last
+        step; grips and in-place edits, which mutate first, call it alone).
+
+        With the ``dimassoc_state`` taken before the mutation, associative
+        dimensions follow their objects in the same undo step. Grips called
+        this without one and a dimension stayed behind its line (#90)."""
+        if dimassoc_state is not None:
+            from core import dimassoc
+
+            command.dimassoc_followup = dimassoc.react(self.document,
+                                                       dimassoc_state)
+            if command.dimassoc_followup is not None:
+                command.dimassoc_followup.do(self.document)
         self._undo.append(command)
         self._redo.clear()
+        self._mark_blocks(command, applied=True)
+
+    def _mark_blocks(self, command: Command, applied: bool = False) -> None:
+        """Tell the document a block definition changed: anything done in
+        the Block Editor, or by a command that says it redefines blocks.
+        What caches a definition's geometry (the snap engine) keys on
+        ``blocks_revision``. Decided when the command is applied and kept
+        on it, so its undo after BCLOSE still counts."""
+        document = self.document
+        if document is None:
+            return
+        if applied:
+            command._touched_blocks = bool(
+                getattr(command, "touches_blocks", False)
+                or getattr(document, "edit_block", None) is not None
+                or any(getattr(c, "_touched_blocks", False)
+                       for c in getattr(command, "commands", ())))
+        if getattr(command, "_touched_blocks", False):
+            document.blocks_revision = getattr(document, "blocks_revision", 0) + 1
 
     @property
     def can_undo(self) -> bool:
@@ -121,8 +172,12 @@ class History:
             return None
         self._gate()
         command = self._undo.pop()
+        followup = getattr(command, "dimassoc_followup", None)
+        if followup is not None:
+            followup.undo(self.document)
         command.undo(self.document)
         self._redo.append(command)
+        self._mark_blocks(command)
         return command
 
     def redo(self) -> Command | None:
@@ -131,7 +186,11 @@ class History:
             return None
         command = self._redo.pop()
         command.do(self.document)
+        followup = getattr(command, "dimassoc_followup", None)
+        if followup is not None:
+            followup.do(self.document)
         self._undo.append(command)
+        self._mark_blocks(command)
         return command
 
     def clear(self) -> None:

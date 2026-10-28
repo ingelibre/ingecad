@@ -17,7 +17,6 @@ not follow yet, so an .stb plots like no table at all -- said so in PLOT.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -25,8 +24,9 @@ BUILTIN = ("acad.ctb", "monochrome.ctb", "Grayscale.ctb", "Screening 50%.ctb")
 
 
 def folder() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "IngeCAD" / "PlotStyles"
+    from core.paths import user_config_dir
+
+    return user_config_dir() / "PlotStyles"
 
 
 def ensure_builtin(where: Optional[Path] = None) -> Path:

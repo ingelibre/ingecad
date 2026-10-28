@@ -74,6 +74,27 @@ def test_the_pattern_comes_from_the_drawing_not_from_the_library():
     assert lt_ops.pattern_of(document, "Continuous") == []
 
 
+@pytest.mark.parametrize("measurement,center", [
+    (1, [31.75, -6.35, 6.35, -6.35]),     # acadiso.lin
+    (0, [1.25, -0.25, 0.25, -0.25]),      # acad.lin
+])
+def test_a_metric_drawing_loads_acadiso_values_an_imperial_one_acad(
+        measurement, center):
+    """AutoCAD picks the library by MEASUREMENT: acadiso.lin for a metric
+    drawing, where the classic families are in millimetres (25.4 times
+    acad.lin's numbers), acad.lin for an imperial one. The ISO family is the
+    same in both. IngeCAD loaded acad.lin's everywhere, so a CENTER line in
+    a millimetre plan came out 25 times shorter than AutoCAD's."""
+    document = _document()
+    document.doc.header["$MEASUREMENT"] = measurement
+    lt_ops.LoadLinetypesCommand(["CENTER", "ACAD_ISO02W100"]).do(document)
+    assert lt_ops.pattern_of(document, "CENTER") == pytest.approx(center)
+    assert lt_ops.pattern_of(document, "ACAD_ISO02W100") == pytest.approx(
+        [12.0, -3.0])
+    name = "ingecadiso.lin" if measurement else "ingecad.lin"
+    assert lt_ops.standard_lin_file(document).name == name
+
+
 def test_every_library_linetype_loads_with_exactly_its_dashes():
     """What the Load dialog offers is what the drawing gets.
 
@@ -88,7 +109,7 @@ def test_every_library_linetype_loads_with_exactly_its_dashes():
     names = [n for n in lt_ops.library_names() if n != "CONTINUOUS"]
     lt_ops.LoadLinetypesCommand(names).do(document)
     for name in names:
-        expected = lt_ops.library()[name][1]
+        expected = lt_ops.library(document)[name][1]
         assert lt_ops.pattern_of(document, name) == pytest.approx(expected), name
         entry = document.doc.linetypes.get(name)
         length = [t.value for t in entry.pattern_tags.tags if t.code == 40]
@@ -181,7 +202,10 @@ def test_the_select_dialog_lists_what_is_loaded_with_a_sample(qapp):
         dialog.deleteLater()
 
 
-def test_the_load_dialog_offers_only_what_is_missing(qapp):
+def test_the_load_dialog_offers_the_whole_library_loaded_ones_too(qapp):
+    """Load OR RELOAD Linetypes (reference p. 1046): AutoCAD lists every
+    definition of the file, the loaded ones too -- picking one of those is a
+    reload, which it confirms first. CONTINUOUS is never listed."""
     from views.linetype_dialog import LoadLinetypesDialog
 
     document = _document()
@@ -191,7 +215,7 @@ def test_the_load_dialog_offers_only_what_is_missing(qapp):
         offered = [dialog.table.item(r, 0).text()
                    for r in range(dialog.table.rowCount())]
         assert "CENTER" in offered
-        assert "DASHED" not in offered, "an already loaded linetype was offered"
+        assert "DASHED" in offered, "a loaded linetype cannot be reloaded"
         assert "CONTINUOUS" not in offered
 
         # The sample has to be the WHOLE pattern. It was not: the library
@@ -210,3 +234,84 @@ def test_the_load_dialog_offers_only_what_is_missing(qapp):
         assert _ink(drawn) > 20, "the ISO sample is blank"
     finally:
         dialog.deleteLater()
+
+
+# -- the Layers panel's Load button, the way a user reaches it ------------------
+
+@pytest.mark.parametrize("purged_first", [False, True])
+def test_load_from_the_layers_panel_loads_and_sets_the_layer(qapp, purged_first):
+    """Rafael's seventh review, 23:20: Layers ▸ the layer's linetype ▸ Load...
+    ▸ ACAD_ISO04W100 ▸ OK, and nothing was loaded -- before or after PURGE.
+    The dialog looked for the undo history through ``parent().window()``;
+    its parent, the Layers panel, keeps the main window in an attribute
+    called ``window``, which shadows the method, and the TypeError died
+    inside the slot. Every click here goes the way the user's did."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QPushButton
+
+    from core.cleanup import PurgeCommand
+    from core.layers import NewLayerCommand
+    from modal import drive_modal
+    from views.linetype_dialog import LoadLinetypesDialog, SelectLinetypeDialog
+    from views.main_window import MainWindow
+
+    wanted = "ACAD_ISO04W100"
+    errors: list[BaseException] = []
+    win = MainWindow()
+    try:
+        win.show()
+        win.resize(1200, 800)
+        win.new_document()
+        qapp.processEvents()
+        if purged_first:
+            unused = [n for n in lt_ops.loaded_names(win.document)
+                      if n.upper() != "CONTINUOUS"]
+            win.tools._execute(PurgeCommand({"ltypes": unused}))
+        assert wanted not in lt_ops.loaded_names(win.document)
+        win.tools._execute(NewLayerCommand("Ejes"))
+        panel = win._layers_panel
+        panel.refresh()
+        qapp.processEvents()
+        row = panel._rows.index("Ejes")
+
+        def load_dialog(dialog):
+            names = [dialog.table.item(r, 0).text()
+                     for r in range(dialog.table.rowCount())]
+            dialog.table.selectRow(names.index(wanted))
+            dialog.accept()
+
+        def select_dialog(dialog):
+            drive_modal(LoadLinetypesDialog, load_dialog, errors)
+            load = next(b for b in dialog.findChildren(QPushButton)
+                        if b.text().rstrip(".…") in ("Load", "Cargar"))
+            load.click()                      # spins the Load dialog's modal
+            assert dialog.result_name() == wanted, "loaded but not listed"
+            dialog.accept()
+
+        drive_modal(SelectLinetypeDialog, select_dialog, errors)
+        table = panel.table
+        rect = table.visualItemRect(table.item(row, 6))
+        QTest.mouseClick(table.viewport(), Qt.LeftButton, pos=rect.center())
+        if errors:
+            raise errors[0]
+
+        assert wanted in lt_ops.loaded_names(win.document), "Load loaded nothing"
+        layer = win.document.doc.layers.get("Ejes")
+        assert layer.dxf.linetype == wanted, "the layer did not take it"
+        win._cmd_undo()
+        assert layer.dxf.linetype == "Continuous"
+        win._cmd_undo()
+        assert wanted not in lt_ops.loaded_names(win.document), (
+            "the load is not its own undo step")
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_a_new_drawing_carries_only_continuous_as_acadiso_dwt():
+    """AutoCAD's acadiso.dwt loads no linetype but Continuous; the rest come
+    from acadiso.lin when wanted, with its millimetre values. IngeCAD's new
+    drawings carried 18 of ezdxf's, with values neither file has."""
+    document = Document.new()
+    assert lt_ops.loaded_names(document) == ["Continuous"]

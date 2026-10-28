@@ -186,6 +186,27 @@ def test_the_xref_definition_round_trips_untouched(tmp_path):
     assert len(inserts) == 1 and inserts[0].dxf.name == "topo"
 
 
+
+def test_the_xref_survives_save_as_dwg_and_reopen(tmp_path):
+    # #66: a DWG title block attached, saved as DWG, reopened -- the xref
+    # was gone. LibreDWG's DXF import dropped the BLOCK entity's 70 (xref
+    # bits) and 1 (path), which a DWG keeps in the BLOCK_HEADER.
+    from formats.dwg_bridge import find_dwg2dxf, find_dxf2dwg, load_dwg
+
+    if find_dxf2dwg() is None or find_dwg2dxf() is None:
+        pytest.skip("LibreDWG not available")
+    _referenced(tmp_path)
+    document = Document.load(_host(tmp_path, overlay=True))
+    out = tmp_path / "host.dwg"
+    document.save_as(out)
+    back = load_dwg(out)
+    found = {b.name: b for b in xrefs.xref_blocks(back.doc)}
+    assert "topo" in found
+    assert found["topo"].block.dxf.xref_path == "topo.dxf"
+    assert found["topo"].block.is_xref_overlay
+    assert [e.dxf.name for e in back.doc.modelspace().query("INSERT")] == ["topo"]
+
+
 # -- commands ------------------------------------------------------------------------
 
 def test_attach_and_detach_are_exact_undo_steps(tmp_path):
@@ -365,3 +386,136 @@ def test_a_second_caller_waits_for_a_load_in_flight(tmp_path, monkeypatch):
     worker.join(5)
     assert second is not None, "a load in flight read as not found"
     assert first and first[0] is second
+
+
+def test_insert_browses_for_a_dwg_and_the_block_survives_save(qapp, tmp_path):
+    # #70: INSERT answered "No blocks defined" -- no way to insert another
+    # drawing (Rafael's DWG title block). Browse... defines it as a block
+    # named after the file, and it must still be there after Save as DWG.
+    from formats.dwg_bridge import find_dwg2dxf, find_dxf2dwg, load_dwg
+    from views.main_window import MainWindow
+
+    if find_dxf2dwg() is None or find_dwg2dxf() is None:
+        pytest.skip("LibreDWG not available")
+    title = ezdxf.new("R2018")
+    title.layers.add("MARCO", color=3)
+    title.modelspace().add_lwpolyline(
+        [(0, 0), (297, 0), (297, 210), (0, 210)], close=True,
+        dxfattribs={"layer": "MARCO"})
+    Document(title).save_as(tmp_path / "FormatoA4_horizontal.dwg")
+
+    win = MainWindow()
+    win.new_document("m")
+    win.maybe_save_changes = lambda: True
+    asked = []
+    win.tools._ask_choice = lambda prompt, items, default="": asked.append(items) or items[-1]
+    win.tools.pick_drawing_file = lambda: str(tmp_path / "FormatoA4_horizontal.dwg")
+    try:
+        win._invoke_command("INSERT")
+        win.tools.on_text("10,20")
+        out = tmp_path / "prueba.dwg"
+        win.document.save_as(out)
+    finally:
+        win.document.dirty = False
+        win.close()
+    assert asked and asked[0][-1] == "Browse..."
+    back = load_dwg(out).doc
+    block = back.blocks.get("FormatoA4_horizontal")
+    assert block is not None and [e.dxftype() for e in block] == ["LWPOLYLINE"]
+    assert "MARCO" in back.layers
+    inserts = back.modelspace().query("INSERT")
+    assert [(i.dxf.name, i.dxf.insert.x, i.dxf.insert.y) for i in inserts] \
+        == [("FormatoA4_horizontal", 10, 20)]
+
+
+def test_the_palette_lists_images_and_pdfs_too_and_detaches_them(qapp, tmp_path):
+    # Rafael, review 6 (55:00-58:00): images and PDFs attached fine and
+    # survived save, but the External References palette listed only the
+    # DWG references; AutoCAD's lists them all.
+    from PySide6.QtGui import QColor, QImage
+
+    from core import actions
+    from core.i18n import tr
+    from views.main_window import MainWindow
+
+    _referenced(tmp_path)
+    png = tmp_path / "foto.png"
+    img = QImage(8, 4, QImage.Format_RGB32)
+    img.fill(QColor("red"))
+    img.save(str(png))
+    win = MainWindow()
+    win.maybe_save_changes = lambda: True
+    try:
+        win.open_path(_host(tmp_path))
+        while win._open_thread is not None:
+            qapp.processEvents()
+        win.tools._execute(actions.attach_image(str(png), (8, 4), (0, 0), 1.0))
+        win.tools._execute(actions.attach_image(str(tmp_path / "plano-p1.png"),
+                                                (8, 4), (50, 0), 1.0))
+        panel = win._xrefs_panel
+        panel.refresh()
+        rows = {panel.table.item(r, 0).text(): (panel.table.item(r, 1).text(),
+                                                 panel.table.item(r, 2).text())
+                for r in range(panel.table.rowCount())}
+        assert rows["topo"] == (tr("Loaded"), tr("Attach"))
+        assert rows["foto"] == (tr("Loaded"), tr("Raster image"))
+        assert rows["plano-p1"] == (tr("Not found"), tr("PDF (as image)"))
+        r = next(r for r in range(panel.table.rowCount())
+                 if panel.table.item(r, 0).text() == "foto")
+        panel.table.selectRow(r)
+        assert panel.detach_btn.isEnabled() and not panel.unload_btn.isEnabled()
+        panel.detach_btn.click()
+        names = [panel.table.item(i, 0).text() for i in range(panel.table.rowCount())]
+        assert "foto" not in names
+        assert len(win.document.modelspace().query("IMAGE")) == 1
+        win._cmd_undo()
+        panel.refresh()
+        names = [panel.table.item(i, 0).text() for i in range(panel.table.rowCount())]
+        assert "foto" in names
+        assert len(win.document.modelspace().query("IMAGE")) == 2
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+@pytest.mark.parametrize("answer", ["Y", ""])
+def test_browsing_to_a_block_already_defined_asks_to_redefine(qapp, tmp_path,
+                                                              answer):
+    # Rafael's sixth review: he edited his title block and inserted it
+    # again; IngeCAD silently inserted the old definition. AutoCAD asks
+    # "Redefine it?" -- Yes updates every reference, No (Enter) keeps it.
+    from views.main_window import MainWindow
+
+    def title(path, width):
+        doc = ezdxf.new("R2018")
+        doc.modelspace().add_lwpolyline(
+            [(0, 0), (width, 0), (width, 210), (0, 210)], close=True)
+        doc.saveas(path)
+
+    path = tmp_path / "Formato.dxf"
+    title(path, 297)
+    win = MainWindow()
+    win.new_document("m")
+    win.tools._ask_choice = lambda prompt, items, default="": items[-1]
+    win.tools.pick_drawing_file = lambda: str(path)
+    try:
+        win._invoke_command("INSERT")
+        win.tools.on_text("0,0")
+        title(path, 420)                       # the file is edited
+        win._invoke_command("INSERT")
+        assert "Redefine it?" in win.tools.current_prompt \
+            or "¿Desea redefinirlo?" in win.tools.current_prompt
+        win.tools.on_text(answer)
+        win.tools.on_text("500,0")
+        block = win.document.doc.blocks.get("Formato")
+        widths = [max(x for x, *_ in e.get_points()) for e in block]
+        assert widths == ([420] if answer == "Y" else [297])
+        assert len(win.document.modelspace().query("INSERT")) == 2
+        if answer == "Y":
+            win.history.undo()                 # the second insert
+            win.history.undo()                 # the redefinition
+            block = win.document.doc.blocks.get("Formato")
+            assert [max(x for x, *_ in e.get_points()) for e in block] == [297]
+    finally:
+        win.document.dirty = False
+        win.close()

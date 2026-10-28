@@ -71,9 +71,14 @@ def test_ctrl_s_keeps_the_window_alive_and_holds_input(qapp, window):
     typed = []
 
     def type_during_save():
-        # a key and a close, both halfway through the save
-        QTest.keyClicks(window.viewport, "L")
+        # a key, a shortcut and a close, all halfway through the save, sent
+        # as the system sends them: to the native window, where Qt's own
+        # modality decides (a key sent straight to a widget skips it)
+        handle = window.windowHandle()
+        QTest.keyClick(handle, Qt.Key_L)
+        QTest.keySequence(handle, QKeySequence("Ctrl+Z"))   # would undo the line
         typed.append(window.command_line.input.text())
+        typed.append(len(window.document.modelspace()))
         window.close()
         typed.append(window.isVisible())
 
@@ -89,7 +94,13 @@ def test_ctrl_s_keeps_the_window_alive_and_holds_input(qapp, window):
     gaps = [b - a for a, b in zip(during, during[1:])]
     assert len(during) > SLOW / 0.02 / 2                  # the loop kept turning
     assert max(gaps) < 0.5, f"the window froze {max(gaps):.2f} s"
-    assert typed == ["", True], "input reached the window mid-save"
+    assert typed == ["", 1, True], "input reached the window mid-save"
+    # and once saved, the keyboard is the canvas's again
+    from PySide6.QtWidgets import QApplication
+    QTest.qWait(50)
+    assert QApplication.focusWidget() is window.viewport
+    QTest.keyClick(window.windowHandle(), Qt.Key_L)
+    assert window.command_line.input.text().upper() == "L"
 
 
 def test_a_failed_save_says_so_and_leaves_the_drawing_unsaved(qapp, window, monkeypatch):

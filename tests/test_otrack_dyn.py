@@ -187,3 +187,62 @@ def test_parse_point_knows_the_hash_prefix_and_the_relative_default():
     assert parse_point("10,5", None, relative_default=True).x == 10.0       # no first point: absolute
     assert parse_point("10,5", (100.0, 100.0)).x == 10.0                    # off: absolute
     assert parse_point("@10,5", (100.0, 100.0)).x == 110.0
+
+
+# -- Rafael's seventh review, 06:16-07:02: "C de centro, me desplazo seis" -------
+
+def _rafael_scene(win):
+    """His R10 circle, and a line he had just trimmed below it."""
+    t = win.tools
+    t._execute(actions.add_circle((18.86, 48.92), 10.0))
+    t._execute(actions.add_line((21.52, 10.0), (21.52, 40.0)))
+    t.osnap_on = True
+    t.osnap_modes = {"CEN", "END"}
+    t.otrack_on = True
+    t.polar_on = True
+    return t
+
+
+@pytest.mark.parametrize("command", ["CIRCLE", "ARC"])
+def test_a_distance_typed_on_a_tracking_path_starts_at_its_source(qapp, command):
+    """Pause on the centre, slide right along its path, type 6: the point is
+    6 to the right of the centre -- AutoCAD's way. It was measured from the
+    last point toward the cursor and landed 19 units below."""
+    win = _window(qapp)
+    try:
+        t = _rafael_scene(win)
+        win.dispatcher.submit(command)
+        if command == "ARC":
+            t.on_text("C")
+        t.on_hover(19.16, 49.12, threshold_world=1.0)     # pause on the centre
+        assert t.snap_hit is not None and t.snap_hit.kind == "CEN"
+        t.acquire_now()
+        t.on_hover(23.39, 49.1, threshold_world=1.0)      # slide right
+        assert t.resolved_point(23.39, 49.1) == pytest.approx((23.39, 48.92))
+        assert t.track_hint is not None and "0°" in t.track_hint[2]
+        t.on_text("6")
+        assert t._recent_points[-1] == pytest.approx((24.86, 48.92))
+        assert t.track_points() == [] and t.track_hint is None, (
+            "a typed point did not release the acquired one")
+        t.cancel()
+        win.dispatcher.cancel()
+    finally:
+        _close(win)
+
+
+def test_a_trim_pick_does_not_move_lastpoint(qapp):
+    """LASTPOINT is a point entered at a point prompt; clicking a line to
+    trim it is not one -- and the next direct distance started from there."""
+    win = _window(qapp)
+    try:
+        t = _rafael_scene(win)
+        t.lastpoint = (0.0, 0.0)
+        win.dispatcher.submit("TRIM")
+        t.on_text("")                                     # every edge
+        t.on_hover(21.52, 23.30, threshold_world=0.5)
+        t.on_click(21.52, 23.30)
+        assert t.lastpoint == (0.0, 0.0)
+        t.cancel()
+        win.dispatcher.cancel()
+    finally:
+        _close(win)

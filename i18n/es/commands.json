@@ -29,6 +29,7 @@
   "REVCLOUD":  {"name": "NUBEREV"},
 
   "ERASE":     {"name": "BORRA"},
+  "OOPS":      {"name": "UY"},
   "MOVE":      {"name": "DESPLAZA"},
   "COPY":      {"name": "COPIA"},
   "ROTATE":    {"name": "GIRA"},
@@ -45,7 +46,9 @@
   "BREAK":     {"name": "PARTE"},
   "JOIN":      {"name": "UNIR"},
   "PEDIT":     {"name": "EDITPOL"},
+  "UCS":       {"name": "SCP"},
   "MATCHPROP": {"name": "IGUALARPROP"},
+  "CHPROP":    {"name": "CAMBIAPROP"},
   "DRAWORDER": {"name": "ORDENAOBJETOS"},
 
   "BLOCK":     {"name": "BLOQUE"},

@@ -162,15 +162,29 @@ def test_opening_another_file_drops_the_session(qapp, tmp_path) -> None:
     win._refresh_layout_tabs()
     win.switch_layout("Sheet")           # must NOT be refused
     assert win._active_layout == "Sheet"
+    # the editor was not thrown away: it waits in the first drawing's tab
+    win.step_document(-1)
+    assert win._block_session is not None and win._block_session.name == "SILLA"
 
 
-def test_new_document_drops_the_session(qapp) -> None:
+def test_a_new_drawing_tab_leaves_the_editor_in_its_own_tab(qapp) -> None:
+    """New opens a tab (#71): the Block Editor stays open in the drawing it
+    belongs to, as in AutoCAD, and comes back with it."""
     win = _make(qapp)
     win.dispatcher.submit("BEDIT SILLA")
-    win.document.dirty = False
+    first = win.current_session()
+    editing = win.document
     win.new_document()
     assert win._block_session is None
-    assert win.document.edit_block is None
+    assert win.document is not editing and win.document.edit_block is None
+    assert not win._blockedit_toolbar.isVisibleTo(win)
+    assert win.switch_document(first)
+    assert win.document is editing
+    assert win._block_session is not None and win._block_session.name == "SILLA"
+    assert win.document.edit_block is not None
+    assert win._blockedit_toolbar.isVisibleTo(win)
+    win._end_block_session(save=True)
+    assert win._block_session is None
 
 
 def test_the_block_editor_toolbar_appears_and_goes(qapp) -> None:

@@ -24,6 +24,8 @@ vendor/
 # (private data; the fidelity bench reads them from capturas/ locally)
 capturas/
 *.dwg
+# a synthetic test drawing, written by ODA from our own DXF (no real plan)
+!tests/data/angular_2l_oda.dwg
 *.dxf
 !tests/data/*.dxf
 

@@ -15,8 +15,10 @@ import numpy as np
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 from core import actions
+from core import gc_guard
 from core import layouts as layout_ops
-from core.coords import CoordinateError, parse_point
+from core.coords import (CoordinateError, ParsedPoint, is_direct_distance,
+                         parse_point)
 from core.i18n import tr
 from core.select import GeometryIndex, apply_grip_edit, entity_grips
 from core.snap import SnapEngine, SnapHit
@@ -44,6 +46,8 @@ from tools.leaders import LEADER_TOOL_CLASSES
 from tools.plot_window import PLOT_WINDOW_TOOL_CLASSES   # #52
 from tools.dim_commands import DIMCMD_TOOL_CLASSES   # #39
 from tools.xrefs import XREF_TOOL_CLASSES
+from tools.zoom_window import ZOOM_TOOL_CLASSES   # #80
+from tools.ucs_tool import UCS_TOOL_CLASSES         # #91
 from views.apertures import GRIP_PX, PICKBOX_DEFAULT, SNAP_PX
 
 # Overlay entities beyond this schedule an idle merge into the base scene
@@ -167,7 +171,8 @@ ALL_TOOL_CLASSES = {**TOOL_CLASSES, **EDIT_TOOL_CLASSES, **BLOCK_TOOL_CLASSES,
                     **ANNO_TOOL_CLASSES,
                     **BOUNDARY_TOOL_CLASSES, **DONUT_TOOL_CLASSES,
                     **SCALETEXT_TOOL_CLASSES, **DIMCMD_TOOL_CLASSES,
-                    **XREF_TOOL_CLASSES, **PLOT_WINDOW_TOOL_CLASSES}
+                    **XREF_TOOL_CLASSES, **PLOT_WINDOW_TOOL_CLASSES,
+                    **ZOOM_TOOL_CLASSES, **UCS_TOOL_CLASSES}
 
 
 #: name -> (owner, windows using it). The registry is process-wide and a
@@ -270,6 +275,17 @@ def _align_dim_line(document, entity, wx, wy, threshold):
     return snapped[0], snapped[1], (snapped[0], snapped[1])
 
 
+def _text_carries_line(dim) -> bool:
+    """A linear or aligned dimension whose DIMTMOVE is 0: dragging its text
+    moves its dimension line (DIMTMOVE, Command Reference)."""
+    if int(dim.dxf.get("dimtype", 0)) & 7 not in (0, 1):
+        return False
+    try:
+        return int(dim.override().get("dimtmove", 0) or 0) == 0
+    except Exception:  # noqa: BLE001 -- an odd style: keep the plain move
+        return False
+
+
 def _dim_grip_preview(entity, role, wx, wy):
     """A live preview frame for a dimension grip drag, or None.
 
@@ -286,9 +302,12 @@ def _dim_grip_preview(entity, role, wx, wy):
         measurement = float(entity.get_measurement())
     except Exception:
         pass
+    from core.dim_commands import measurement_text
+
     if role == "dim_text":
         return {"text_at": (wx, wy),
-                "text": f"{measurement:.2f}" if measurement is not None else ""}
+                "text": measurement_text(entity, measurement)
+                if measurement is not None else ""}
     if kind not in (0, 1):
         return None
     p1 = entity.dxf.get("defpoint2", None)
@@ -320,7 +339,7 @@ def _dim_grip_preview(entity, role, wx, wy):
     d1 = (loc[0] + ux * t1, loc[1] + uy * t1)
     d2 = (loc[0] + ux * t2, loc[1] + uy * t2)
     return {"p1": tuple(p1), "p2": tuple(p2), "d1": d1, "d2": d2,
-            "text": f"{length:.2f}"}
+            "text": measurement_text(entity, length)}
 
 
 def _track_label(kind: str) -> str:
@@ -354,6 +373,10 @@ class ToolController(QObject):
         # Shift+right-click menu): the snaps for the NEXT point only, running
         # modes or not. None = no override; an empty set = no snap at all.
         self.osnap_override: Optional[frozenset] = None
+        # The selection filter by type (core.pickfilter): the type names a
+        # pick may add, or None when it is off. Kept across drawings, like
+        # the status-bar toggles.
+        self.pick_filter: Optional[frozenset] = None
         # A point modifier in progress (FROM, M2P): its own points are
         # collected here and ONE point reaches the tool at the end.
         self._modifier: Optional[dict] = None
@@ -392,6 +415,8 @@ class ToolController(QObject):
         # beside the cursor, and bare coordinates relative after a first point
         self.dyn_on = False
         self.current_prompt = ""
+        #: MULTIPLE: the command to start again each time it ends, until Esc
+        self.repeat_name: str | None = None
         self.snap_engine: Optional[SnapEngine] = None
         self.snap_hit: Optional[SnapHit] = None
         self._cursor: Optional[tuple[float, float]] = None
@@ -402,6 +427,10 @@ class ToolController(QObject):
         self._base_handles: set[str] = set()
         self._clipboard = None   # (list[entity copies], base point) for paste
         self._clipboard_src: list = []   # source handles aligned w/ clipboard
+        self._clip_id: Optional[str] = None   # this window's copy on the system clipboard
+        self._foreign_clip: Optional[tuple] = None   # (id, (sources, base)) read back
+        self._clip_writers: set = set()   # ClipWriter threads in flight
+        self._clip_pending: Optional[tuple] = None   # a big copy, not yet out
         self._ghost_on = False   # a drag ghost (MOVE/COPY/PASTE) is showing
         # Ghost tessellation is expensive on big selections: cache it per
         # entity-list identity and build it OFF the UI thread.
@@ -419,6 +448,11 @@ class ToolController(QObject):
         # Selection state (idle noun set, or the set a tool is acquiring).
         self.index: Optional[GeometryIndex] = None
         self.selection: set[str] = set()
+        # typed answers at "Select objects:" (_selection_option)
+        self._sel_remove = False          # Remove(R) mode until Add(A)
+        self._sel_force: Optional[str] = None   # "W"/"C" for the next window
+        self._previous_selection: set[str] = set()   # Previous(P)
+        self._sel_history: list[set[str]] = []       # Undo(U)
         self._selecting_for: Optional[Tool] = None
         # Rectangles a crossing selection covered, for the one command that
         # cares WHERE the selection touched: STRETCH.
@@ -430,6 +464,11 @@ class ToolController(QObject):
         self._pending_render: list = []
         # Grip drag state: (handle, grip_index, role, SnapshotCommand).
         self._grip_drag = None
+        #: Where the hot grip was grabbed: the base point of the grip edit,
+        #: what ORTHO, POLAR and PERpendicular measure from (#60).
+        self._grip_base = None
+        #: The associative dimensions at the grab (History.dimassoc_state)
+        self._grip_dimassoc = None
         self._regen_timer = QTimer(self)
         self._regen_timer.setSingleShot(True)
         self._regen_timer.setInterval(400)
@@ -443,7 +482,10 @@ class ToolController(QObject):
         self._merge_timer.timeout.connect(self._run_deferred_regen)
 
     # -- document lifecycle ----------------------------------------------------
-    def attach_document(self, document, flatten: Optional[float] = None) -> None:
+    def attach_document(self, document, flatten: Optional[float] = None,
+                        keep_history: bool = False) -> None:
+        """Work on ``document`` from now on. ``keep_history``: a drawing tab
+        coming back keeps its undo and redo (#71)."""
         self.snap_engine = SnapEngine(document)
         self._model_snap_engine = None
         self._through_vp = {}
@@ -475,7 +517,8 @@ class ToolController(QObject):
         # the new document.
         self._pending_render = []
         self.window.history.document = document
-        self.window.history.clear()
+        if not keep_history:
+            self.window.history.clear()
         self._refresh_overlay()
 
     def _start_warmer(self, document) -> None:
@@ -484,7 +527,7 @@ class ToolController(QObject):
         warmer = _CacheWarmer(document, self._model_snap_engine is None)
         warmer.done.connect(self._on_caches_warm)
         self._warmers.add(warmer)
-        warmer.start()
+        gc_guard.start(warmer)
 
     def caches_warming(self) -> bool:
         """A warmer is still building the snap cache the cursor would need,
@@ -596,14 +639,54 @@ class ToolController(QObject):
                 # The highlight STAYS while the command runs (AutoCAD keeps
                 # the cutting edges lit during TRIM to guide the picks);
                 # _finish clears it.
-                entities = self._selection_entities()
+                entities = self._unlocked_for(self.tool, self._selection_entities())
+                self._previous_selection = set(self.selection)
                 self.tool.on_selection(entities)
             else:
                 self._selecting_for = self.tool
-                self.window.command_line.echo(self.tool.selection_prompt())
+                self._sel_remove = False
+                self._sel_force = None
+                self._sel_history = []
+                self.window.command_line.echo_prompt(self.tool.selection_prompt())
         self.changed.emit()
 
     # -- services for editing tools (ToolContext.services) ---------------------
+    def zoom_to_window(self, rect) -> None:
+        """ZOOM Window's rectangle, in canvas coordinates (the Model tab or
+        a sheet; inside a viewport ZOOM W stays a drag)."""
+        x0, y0, x1, y1 = rect
+        viewport = self.window.viewport
+        viewport.push_view()
+        viewport.view.zoom_extents(x0, y0, x1, y1, margin=0.0)
+        viewport.update()
+
+    def dimassoc_reference(self, point, hit):
+        """The DIMASSOC reference for a dimension point placed with object
+        snap ``hit`` (None for a typed point, a point reached through a
+        viewport, or a snap no object answers)."""
+        from core import dimassoc
+
+        document = self.window.document
+        if hit is None or document is None or hit.via is not None \
+                or self.index is None:
+            return None
+        reach = self.px_to_space(3) or 1e-6
+        x, y = point
+        handles = self.index.crossing((x - reach, y - reach, x + reach, y + reach))
+        candidates = [e for h in handles
+                      if (e := self.index.entity(h)) is not None and e.is_alive]
+        tolerance = max(reach * 1e-3, 1e-9 * max(1.0, abs(x), abs(y)))
+        if hit.kind == "INT":
+            for i, first in enumerate(candidates):
+                for second in candidates[i + 1:]:
+                    ref = dimassoc.intersection_reference(first, second)
+                    p = dimassoc.where(document.doc, ref, near=(x, y))
+                    if p is not None and math.hypot(p[0] - x, p[1] - y) <= tolerance:
+                        return ref
+            return None
+        return dimassoc.reference_at(document, (x, y), hit.kind, candidates,
+                                     tolerance)
+
     def request_selection(self) -> None:
         """A tool asks for objects in the MIDDLE of its flow (WBLOCK: file,
         block name, base point, THEN "Select objects:"). Same phase the
@@ -611,7 +694,7 @@ class ToolController(QObject):
         if self.tool is None:
             return
         self._selecting_for = self.tool
-        self.window.command_line.echo(self.tool.selection_prompt())
+        self.window.command_line.echo_prompt(self.tool.selection_prompt())
         self.changed.emit()
 
     def ask_save_file(self, caption: str, suggested: str, name_filter: str):
@@ -619,8 +702,10 @@ class ToolController(QObject):
         every file dialog uses (views/file_dialogs.py)."""
         from views import file_dialogs
 
+        document = self.window.document
         filename, _selected = file_dialogs.get_save_file(
-            self.window, caption, suggested, name_filter)
+            self.window, caption, suggested, name_filter,
+            preferred=document.path if document is not None else None)
         return filename or None
 
     @property
@@ -668,7 +753,7 @@ class ToolController(QObject):
             return None
         tolerance = self._pick_tolerance
         if not self.cycling_on:                  # SELECTIONCYCLING off: the first answer, always
-            handles = self.index.pick_all(point, tolerance)
+            handles = self._shown(self.index.pick_all(point, tolerance))
             return handles[0] if handles else None
         cycle = self._cycle
         if cycle is not None:
@@ -681,7 +766,7 @@ class ToolController(QObject):
                 self._cycle = ((px, py), handles, position)
                 self._echo_cycle(handles, position)
                 return handles[position]
-        handles = self.index.pick_all(point, tolerance)
+        handles = self._shown(self.index.pick_all(point, tolerance))
         if not handles:
             self._cycle = None
             return None
@@ -757,29 +842,85 @@ class ToolController(QObject):
         self._sel_entities_cache = (key, out)
         return out
 
+    def _selectable(self, entities, include_off: bool = False,
+                    include_locked: bool = False):
+        """The handles of ``entities`` a pick may take: on a layer that is
+        on, thawed and unlocked, and not isolated away. ``include_off``:
+        the typed ALL, which AutoCAD documents as "except those objects on
+        frozen or on locked layers" -- a layer that is off is still in.
+        ``include_locked``: what a command's own selection takes, a locked
+        layer being refused later, when it would be modified."""
+        document = getattr(self.window, "document", None)
+        if document is None:
+            return []
+        layers = document.doc.layers
+        hidden = getattr(document, "_isolated_hidden", None) or set()
+        refused: dict = {}                    # layer name -> left out?
+        handles = []
+        for entity in entities:
+            handle = entity.dxf.get("handle")
+            if not handle or handle in hidden:
+                continue
+            name = entity.dxf.get("layer", "0")
+            out = refused.get(name)
+            if out is None:
+                layer = layers.get(name) if name in layers else None
+                out = refused[name] = layer is not None and (
+                    (layer.is_off() and not include_off) or layer.is_frozen()
+                    or (layer.is_locked() and not include_locked))
+            if not out:
+                handles.append(handle)
+        return handles
+
+    def _shown(self, handles) -> list:
+        """``handles`` the user can see -- on a layer that is on and thawed,
+        not isolated away -- in their order. A click, a window or a crossing
+        only take what is on screen, as AutoCAD's do; the index holds every
+        entity, and a window over a layer turned off took its objects, which
+        Delete then erased (#97)."""
+        if not handles:
+            return []
+        db = self.window.document.doc.entitydb
+        return self._selectable(
+            [e for h in handles if (e := db.get(h)) is not None],
+            include_locked=True)
+
+    def _unlocked_for(self, tool, entities) -> list:
+        """``entities`` without those on a locked layer when ``tool`` edits
+        what it is handed: "Objects on a locked layer cannot be modified"
+        (LAYER, Command Reference). A window over a locked layer erased and
+        moved its objects as if it were not."""
+        document = getattr(self.window, "document", None)
+        if document is None or (tool is not None
+                                and not getattr(tool, "modifies_selection", True)):
+            return entities
+        layers = document.doc.layers
+        kept = []
+        for entity in entities:
+            name = entity.dxf.get("layer", "0")
+            layer = layers.get(name) if name in layers else None
+            if layer is None or not layer.is_locked():
+                kept.append(entity)
+        locked = len(entities) - len(kept)
+        if locked == 1:
+            self.window.command_line.echo(tr("1 was on a locked layer."))
+        elif locked:
+            self.window.command_line.echo(
+                tr("{n} were on a locked layer.", n=locked))
+        return kept
+
     def select_all(self) -> int:
         """Ctrl+A: every selectable entity of the current space -- what is
         on a layer that is on, thawed and unlocked, and not isolated away."""
         document = getattr(self.window, "document", None)
         if document is None:
             return 0
-        layers = document.doc.layers
-        hidden = getattr(document, "_isolated_hidden", None) or set()
-        handles = set()
-        for entity in document.current_space():
-            handle = entity.dxf.get("handle")
-            if not handle or handle in hidden:
-                continue
-            name = entity.dxf.get("layer", "0")
-            layer = layers.get(name) if name in layers else None
-            if layer is not None and (layer.is_off() or layer.is_frozen() or layer.is_locked()):
-                continue
-            handles.add(handle)
-        self.selection = handles
+        handles = set(self._selectable(document.current_space()))
+        self.selection = self._filtered(handles)
         self._highlight_cache = None
         self._grips_cache = None
         self.changed.emit()
-        return len(handles)
+        return len(self.selection)
 
     def clear_selection(self) -> None:
         self.reset_pick_cycle()
@@ -821,20 +962,141 @@ class ToolController(QObject):
             except Exception:
                 base = (0.0, 0.0)
         self._clipboard = ([e.copy() for e in entities], base)
+        # the entities themselves, for a paste into ANOTHER drawing: only
+        # entities in their drawing's database carry their resources over
+        self._clipboard_originals = list(entities)
         # source handles (aligned with the clipboard) let paste register its
         # copies in the pick index by translating the sources' cached rows
         self._clipboard_src = [e.dxf.handle for e in entities]
+        # and on the system clipboard, for the other IngeCAD windows -- each
+        # one its own process (#75)
+        self._publish_clipboard(entities, base)
         if cut:
             self._execute(actions.EraseCommand(entities))
             self.clear_selection()
         return True
 
+    #: Objects (block contents counted) up to which Ctrl+C puts the copy on
+    #: the system clipboard at once; a few hundredths of a second. A bigger
+    #: copy waits until the user leaves the window: building it cost 1.3 s
+    #: of frozen GUI on a whole 10 000-object plan, and writing it 1.9 s
+    #: more of a worker fighting the next ERASE for the GIL (release bench
+    #: against v0.6.6). Pasting in this window always uses memory.
+    CLIPBOARD_NOW_LIMIT = 600
+
+    def _clip_weight(self, entities) -> int:
+        weight = 0
+        doc = self.window.document.doc if self.window.document else None
+        counts = {}
+        for e in entities:
+            weight += 1
+            if e.dxftype() == "INSERT" and doc is not None:
+                name = e.dxf.get("name", "")
+                if name not in counts:
+                    block = doc.blocks.get(name) if name in doc.blocks else None
+                    counts[name] = len(block) if block is not None else 0
+                weight += counts[name]
+            if weight > self.CLIPBOARD_NOW_LIMIT:
+                break
+        return weight
+
+    def _publish_clipboard(self, entities, base) -> None:
+        from views import clipboard
+
+        self._clip_pending = None
+        if self._clip_weight(entities) > self.CLIPBOARD_NOW_LIMIT:
+            # a big copy: memory now, the system clipboard when the user
+            # goes to another window (_on_application_state)
+            self._clip_id = None
+            self._clip_pending = (list(entities), base)
+            self._watch_application_state()
+            return
+        self._put_on_system_clipboard(entities, base)
+
+    def _watch_application_state(self) -> None:
+        if getattr(self, "_app_state_watched", False):
+            return
+        from PySide6.QtGui import QGuiApplication
+
+        app = QGuiApplication.instance()
+        if app is not None:
+            app.applicationStateChanged.connect(self._on_application_state)
+            self._app_state_watched = True
+
+    def _on_application_state(self, state) -> None:
+        from PySide6.QtCore import Qt
+
+        pending = getattr(self, "_clip_pending", None)
+        if pending is None or state != Qt.ApplicationInactive:
+            return
+        self._clip_pending = None
+        entities = [e for e in pending[0] if e.is_alive]
+        if entities:
+            self._put_on_system_clipboard(entities, pending[1])
+
+    def _put_on_system_clipboard(self, entities, base) -> None:
+        from core import gc_guard
+        from views import clipboard
+
+        built = clipboard.build(entities, base)
+        self._clip_id = built[0] if built is not None else None
+        if built is None:
+            return
+        writer = clipboard.ClipWriter(*built)
+        writer.done.connect(self._on_clip_written)
+        self._clip_writers.add(writer)
+        gc_guard.start(writer)
+
+    def _on_clip_written(self, clip_id, data) -> None:
+        from views import clipboard
+
+        worker = self.sender()
+        if worker in self._clip_writers:
+            worker.wait()   # thread has emitted; joins immediately
+            self._clip_writers.discard(worker)
+        if data and clip_id == self._clip_id:   # not overtaken by a newer copy
+            clipboard.put(clip_id, data)
+
+    def _system_clipboard(self) -> Optional[tuple]:
+        """(sources, base) of an IngeCAD copy made in ANOTHER window, read
+        from the system clipboard's DXF; None when the latest copy is this
+        window's own (pasted from memory) or not IngeCAD's at all."""
+        from views import clipboard
+
+        if self._clip_writers or getattr(self, "_clip_pending", None) is not None:
+            return None             # this window's copy is the latest: memory
+        clip_id = clipboard.current_id()
+        if clip_id is None or clip_id == self._clip_id:
+            return None
+        if self._foreign_clip is not None and self._foreign_clip[0] == clip_id:
+            return self._foreign_clip[1]
+        data = clipboard.current_dxf()
+        try:
+            sources, base = clipboard.read_dxf(data) if data else ([], None)
+        except Exception:
+            sources = []
+        if not sources:
+            return None
+        self._foreign_clip = (clip_id, (sources, base))
+        return self._foreign_clip[1]
+
     def clipboard_data(self):
+        other = self._system_clipboard()
+        if other is not None:
+            return other
         return self._clipboard if self._clipboard else (None, None)
+
+    def clipboard_originals(self) -> list | None:
+        other = self._system_clipboard()
+        if other is not None:
+            # entities of the clipboard drawing: a paste loads them with
+            # everything they name
+            return list(other[0])
+        return getattr(self, "_clipboard_originals", None) if self._clipboard else None
 
     def paste(self) -> None:
         """Ctrl+V: place the clipboard entities from a picked point."""
-        if not self._clipboard:
+        if not self._clipboard and self._system_clipboard() is None:
             self.window.command_line.echo(tr("Clipboard is empty."))
             return
         self.start_tool("PASTECLIP")
@@ -878,8 +1140,11 @@ class ToolController(QObject):
         builds its own command from what was typed."""
         from views.mtext_editor import MTextInPlaceEditor
 
-        top_left = (min(first[0], second[0]), max(first[1], second[1]))
-        width = abs(second[0] - first[0])
+        # the box is square to the UCS (#91): measured there, placed back
+        frame = self.current_ucs()
+        f_u, s_u = frame.to_ucs(*first), frame.to_ucs(*second)
+        top_left = frame.to_world(min(f_u[0], s_u[0]), max(f_u[1], s_u[1]))
+        width = abs(s_u[0] - f_u[0])
         document = self.window.document
         style = ""
         if document is not None:
@@ -892,15 +1157,16 @@ class ToolController(QObject):
                 if new_width:
                     # The ruler's width arrow moved: keep the left edge, put
                     # the right one where it was dragged to.
-                    direction = 1.0 if second[0] >= first[0] else -1.0
-                    box_second = (first[0] + direction * new_width, second[1])
+                    direction = 1.0 if s_u[0] >= f_u[0] else -1.0
+                    box_second = frame.to_world(f_u[0] + direction * new_width,
+                                                s_u[1])
                 self._execute(actions.add_mtext(
                     first, box_second, content, char_height,
                     style=extras.get("style"),
                     attachment=extras.get("attachment") or 1,
                     line_spacing=extras.get("line_spacing"),
                     bg=extras.get("bg"),
-                    columns=extras.get("columns")))
+                    columns=extras.get("columns"), frame=frame))
             self.window.viewport.update()
 
         self._mtext_editor = MTextInPlaceEditor(
@@ -935,8 +1201,7 @@ class ToolController(QObject):
         snap.name = "HATCHEDIT"
         actions.apply_hatch_settings(entity, after)
         snap.commit(document)
-        self.window.history._undo.append(snap)
-        self.window.history._redo.clear()
+        self.window.history.record(snap)
         # its look changed, its geometry did not: redraw that one entity
         # instead of the drawing (the same path a layer's colour takes)
         self.redraw_entities([entity])
@@ -957,6 +1222,19 @@ class ToolController(QObject):
                           finish=lambda: None, services=self)
         return edit_attributes_of(Tool(ctx), entity)
 
+    def edit_attribute_definition(self, attdef) -> bool:
+        """DDEDIT on an attribute definition: the Edit Attribute Definition
+        dialog -- tag, prompt, default (p. 523) -- as one undoable step."""
+        from views.attribute_dialogs import EditAttDefDialog
+
+        dialog = EditAttDefDialog(self.window, attdef)
+        if dialog.exec():
+            command = dialog.command()
+            if command is not None:
+                self._execute(command)
+                self.changed.emit()
+        return True
+
     def open_text_editor_for(self, entity) -> bool:
         """Double-click on a text object: edit it in place. True if handled.
 
@@ -973,6 +1251,8 @@ class ToolController(QObject):
         kind = entity.dxftype()
         if kind not in ("MTEXT", "TEXT", "ATTRIB", "ATTDEF"):
             return False
+        if kind == "ATTDEF":
+            return self.edit_attribute_definition(entity)
         insert = entity.dxf.insert
         if kind == "MTEXT":
             char_height = float(entity.dxf.char_height or 2.5)
@@ -1116,11 +1396,19 @@ class ToolController(QObject):
             if not b.name.startswith("*")
             and not would_recurse(document, b.name, editing))
 
+    def pick_drawing_file(self) -> str:
+        """INSERT ▸ Browse: AutoCAD's Select Drawing File dialog."""
+        from views import file_dialogs
+
+        return file_dialogs.get_open_file(
+            self.window, tr("Select Drawing File"),
+            tr("Drawings (*.dwg *.dxf);;All files (*)"))
+
     def _on_prompt(self, text: str) -> None:
         """A tool's prompt: to the command window, and remembered for the
         dynamic-input tooltip beside the cursor."""
         self.current_prompt = text
-        self.window.command_line.echo(text)
+        self.window.command_line.echo_prompt(text)
 
     def _finish(self) -> None:
         self.tool = None
@@ -1139,8 +1427,20 @@ class ToolController(QObject):
             self.window.viewport.set_ghost_scene(None)
         self._clear_preview()
         self.changed.emit()
+        if self.repeat_name:
+            # MULTIPLE: the command ended by itself -- start it again, once
+            # this one has fully unwound
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(0, self._repeat)
+
+    def _repeat(self) -> None:
+        name = self.repeat_name
+        if name and self.tool is None:
+            self.window.dispatcher.submit(name)
 
     def cancel(self) -> None:
+        self.repeat_name = None          # Esc ends MULTIPLE too
         self.reset_pick_cycle()
         if self._grip_drag is not None and self._grip_drag[0] == _VP_GRIP:
             # Esc mid-drag of a viewport grip: nothing was mutated yet
@@ -1189,7 +1489,9 @@ class ToolController(QObject):
             # renders through the same frontend the base scene uses -- 1035
             # vertices for a plain DIMLINEAR, measured. Nothing about it needs
             # a full regen.
-            return [command.dim] if command.dim is not None else []
+            # DIMASSOC 0 leaves loose pieces instead of the dimension
+            return ([command.dim] if command.dim is not None else []) \
+                + list(getattr(command, "_pieces", None) or [])
         if isinstance(command, (actions.PasteCommand,
                                 actions.CopyEntitiesCommand)):
             return list(command.copies)
@@ -1258,7 +1560,9 @@ class ToolController(QObject):
         if isinstance(command, actions.PasteCommand):
             # PasteCommand copies the source list — compare element-wise
             clip = self._clipboard[0] if self._clipboard else None
-            if (clip is not None and len(clip) == len(command.sources)
+            # (a paste from another drawing: its rows are not in this index)
+            if (clip is not None and not command.foreign
+                    and len(clip) == len(command.sources)
                     and len(self._clipboard_src) == len(added)
                     and all(a is b for a, b in zip(clip, command.sources))):
                 src, offset = self._clipboard_src, (command.dx, command.dy)
@@ -1351,6 +1655,35 @@ class ToolController(QObject):
             return False
 
     def _execute(self, command) -> None:
+        self._execute_command(command)
+        self._show_reacted(command)
+
+    def _show_reacted(self, command) -> None:
+        """The associative dimensions a command re-measured (its follow-up,
+        core/dimassoc): hide their stale copies and draw them through the
+        overlay, the way a dimension grip edit is shown."""
+        followup = getattr(command, "dimassoc_followup", None)
+        if followup is None:
+            return
+        dims = [d for d in followup.entities if d.is_alive]
+        if not dims:
+            return
+        handles = [d.dxf.handle for d in dims]
+        self._drop_conflicting_stamps(handles)
+        self.window.viewport.hide_handles(handles)
+        self._base_handles -= set(handles)
+        for dim in dims:
+            if dim not in self._pending_render:
+                self._pending_render.append(dim)
+        if self.index is not None:
+            self.index.remove_handles(handles)
+            self.index.add_entities(dims)
+        if self.snap_engine is not None:
+            self.snap_engine.remove_handles(handles)
+            self.snap_engine.add_entities(dims)
+        self._refresh_overlay()
+
+    def _execute_command(self, command) -> None:
         # the drawing changed under the candidates: never cycle stale ones
         self.reset_pick_cycle()
         # asked BEFORE the command runs: an ERASE leaves its entities
@@ -1559,6 +1892,8 @@ class ToolController(QObject):
         everything the command touched are hidden surgically and the restored
         or current entities ride the overlay; the full regen stays coalesced.
         """
+        if command is not None:
+            self._show_reacted(command)
         if command is None or getattr(command, "needs_regen", False):
             # unknown scope: only a regen is right;
             # hide what the undo just destroyed so it vanishes NOW (the regen
@@ -1583,6 +1918,7 @@ class ToolController(QObject):
             touched.append(command.entity)
         if getattr(command, "dim", None) is not None:
             touched.append(command.dim)   # AddDimensionCommand, one entity
+        touched.extend(getattr(command, "_pieces", None) or [])  # DIMASSOC 0
         for _orig, parts in (getattr(command, "pieces", None) or []):
             touched.extend(parts)
         if len(touched) > BIG_EDIT:
@@ -1806,11 +2142,8 @@ class ToolController(QObject):
         kinds = self.snap_kinds()
         self.track_hint = None
         if needs_snap and self.snap_engine is not None and kinds:
-            self.snap_hit = self.snap_engine.find(
-                (wx, wy), threshold_world,
-                kinds=kinds,
-                from_point=self.tool.last_point if self.tool else None,
-            )
+            self.snap_hit = self._find_snap(
+                (wx, wy), threshold_world, kinds, self.anchor_point())
             through = self._snap_through_viewport((wx, wy), threshold_world)
             if through is not None and (
                     self.snap_hit is None
@@ -1978,9 +2311,10 @@ class ToolController(QObject):
         angles (Drafting Settings, Polar Tracking tab)."""
         from core import drafting
 
+        base = self.current_ucs().angle      # the UCS's axes, not the world's
         if self.polar_on and drafting.polar_mode() & drafting.POLAR_OTRACK_ALL:
-            return [math.radians(a) for a in self._polar_angles()]
-        return [0.0, math.pi / 2]
+            return [base + math.radians(a) for a in self._polar_angles()]
+        return [base, base + math.pi / 2]
 
     def _polar_angles(self) -> list:
         """POLARANG's multiples plus POLARADDANG when in use, degrees."""
@@ -1992,20 +2326,21 @@ class ToolController(QObject):
             bool(mode & drafting.POLAR_ADDITIONAL))
 
     def _polar_base(self) -> float:
-        """Where polar angles are measured from: 0 (absolute, the UCS) or
-        the direction of the last segment drawn (POLARMODE bit 1) -- the
-        tool's last point and the one before it, as this controller saw
-        them go by."""
+        """Where polar angles are measured from, in world degrees: the UCS's
+        X axis (absolute) or the direction of the last segment drawn
+        (POLARMODE bit 1) -- the tool's last point and the one before it,
+        as this controller saw them go by."""
         from core import drafting
 
+        absolute = self.current_ucs().degrees     # the UCS's X, in the world
         if not (drafting.polar_mode() & drafting.POLAR_RELATIVE):
-            return 0.0
+            return absolute
         points = self._recent_points
         if len(points) >= 2:
             (x0, y0), (x1, y1) = points[-2], points[-1]
             if abs(x1 - x0) > 1e-12 or abs(y1 - y0) > 1e-12:
                 return math.degrees(math.atan2(y1 - y0, x1 - x0))
-        return 0.0
+        return absolute
 
     _recent_points: list = []
     #: AutoCAD's LASTPOINT: the last point entered, in any command. A new
@@ -2057,9 +2392,16 @@ class ToolController(QObject):
             return
         wx, wy = self._cursor
         kinds = self.snap_kinds()
-        self.snap_hit = (self.snap_engine.find(
-            (wx, wy), self.px_to_space(SNAP_PX), kinds=kinds,
-            from_point=self.tool.last_point) if kinds else None)
+        self.snap_hit = (self._find_snap(
+            (wx, wy), self.px_to_space(SNAP_PX), kinds,
+            self.tool.last_point) if kinds else None)
+
+    def _find_snap(self, at, threshold, kinds, from_point):
+        """The object snap at ``at``: the drawing's, and what the running
+        command has drawn but not committed yet (a PLINE's own segments)."""
+        drawn = self.tool.drawn_segments() if self.tool is not None else None
+        return self.snap_engine.find(at, threshold, kinds=kinds,
+                                     from_point=from_point, drawn=drawn)
 
     def _tracked(self, wx: float, wy: float, anchor, ortho: bool):
         """Where the alignment paths put the cursor: on the nearest path
@@ -2100,14 +2442,19 @@ class ToolController(QObject):
                 d = math.hypot(wx - ix, wy - iy)
                 if d <= 2 * tol and (best is None or d < best[0]):
                     best = (d, a[1], a[2], (ix, iy), b[1], b[2])
+        base = self.current_ucs().angle      # labels read in the UCS
+
+        def shown(a):
+            return f"{math.degrees(a - base) % 360.0:.0f}"
+
         if best is not None:
             _d, src, ang, point, other, other_ang = best
-            label = (f"{_track_label(src[2])}: <{math.degrees(ang):.0f}°, "
-                     f"{_track_label(other[2])}: <{math.degrees(other_ang):.0f}°")
+            label = (f"{_track_label(src[2])}: <{shown(ang)}°, "
+                     f"{_track_label(other[2])}: <{shown(other_ang)}°")
             return point, src, label
         near.sort(key=lambda n: n[0])
         _d, src, ang, point = near[0]
-        return point, src, f"{_track_label(src[2])}: <{math.degrees(ang):.0f}°"
+        return point, src, f"{_track_label(src[2])}: <{shown(ang)}°"
 
     # -- the rendered preview of what the next click creates --------------------
     _preview_key = None
@@ -2143,31 +2490,40 @@ class ToolController(QObject):
 
     def _preview_scene_for(self, command):
         """Create the command's entity, picture it, remove it: no revision
-        bump, no dirty flag, no history -- the document is as it was."""
+        bump, no dirty flag, no history -- the document is as it was.
+
+        The entity is built in a scratch anonymous block, never in the
+        drawing's space: the cache warmer and the background regen walk that
+        space from their own threads, and a preview dimension caught there
+        for a moment stayed behind -- pickable but invisible in the pick
+        index, or visible but unpickable in the regen scene. The revision
+        does not change, so both results were adopted as current."""
         from render.backend import build_scene_for_entities
 
         document = self.window.document
         factory = getattr(command, "_factory", None)
         if factory is None:
             return None
-        space = command.space(document)
-        override = factory(space, document)
-        override.render()
-        entity = override.dimension
-        block = entity.dxf.get("geometry", None)
+        blocks = document.doc.blocks
+        scratch = blocks.new_anonymous_block("U")
+        block = None
         try:
+            override = factory(scratch, document)
+            override.render()
+            entity = override.dimension
+            block = entity.dxf.get("geometry", None)
             current = document.doc.header.get("$CLAYER", "0")
             if current in document.doc.layers:
                 entity.dxf.layer = current
             return build_scene_for_entities(document, [entity], self._flatten,
                                             self.canvas_space())
         finally:
-            space.delete_entity(entity)
-            if block and block in document.doc.blocks:
-                try:
-                    document.doc.blocks.delete_block(block, safe=False)
-                except Exception:
-                    pass
+            for name in (block, scratch.name):
+                if name and name in blocks:
+                    try:
+                        blocks.delete_block(name, safe=False)
+                    except Exception:
+                        pass
 
     def _preview_now(self) -> None:
         """Rebuild the rendered preview for the current cursor (a tool step
@@ -2179,9 +2535,11 @@ class ToolController(QObject):
             self._clear_preview()
 
     def _clear_preview(self) -> None:
-        if self._preview_key is not None:
-            self._preview_key = None
-            self.window.viewport.set_preview_scene(None)
+        # Unconditional: _preview_now forgets the key before rebuilding, so
+        # a key check here left the last picture up whenever the new step
+        # had nothing to preview. Clearing an absent preview is free.
+        self._preview_key = None
+        self.window.viewport.set_preview_scene(None)
 
     def _sync_ghost(self, wx: float, wy: float) -> None:
         """MOVE/COPY/PASTE drag preview: the tool exposes ghost_entities +
@@ -2223,7 +2581,7 @@ class ToolController(QObject):
                                   self.canvas_space())
             worker.done.connect(self._on_ghost_done)
             self._ghost_workers.add(worker)
-            worker.start()
+            gc_guard.start(worker)
         return None
 
     def _on_ghost_done(self, ents, scene) -> None:
@@ -2300,14 +2658,14 @@ class ToolController(QObject):
                 ax, ay = self._window_anchor
                 self._window_anchor = None
                 rect = (min(ax, wx), min(ay, wy), max(ax, wx), max(ay, wy))
-                handles = self.index.crossing(rect)
+                handles = self._shown(self.index.crossing(rect))
                 entities = [e for h in handles
                             if (e := self.index.entity(h)) is not None
                             and e.is_alive]
                 self.tool.on_target_entities(entities, rect)
                 self.changed.emit()
                 return
-            if self.index.pick((wx, wy), self._pick_tolerance) is None:
+            if not self._shown(self.index.pick_all((wx, wy), self._pick_tolerance)):
                 # empty click: anchor a target window instead of "nothing"
                 self._window_anchor = (wx, wy)
                 self.changed.emit()
@@ -2339,7 +2697,16 @@ class ToolController(QObject):
             self.changed.emit()
             return
         point = self.resolved_point(wx, wy)
-        self._note_point(point)
+        if not self.tool.entity_picker:
+            # LASTPOINT is a point entered at a point prompt; a click that
+            # picks an object (TRIM, EXTEND) is not one. It was, and the
+            # next direct distance started from a trimmed line's pick.
+            self._note_point(point)
+        # the object snap this point came from: a dimension ties itself to
+        # it (core/dimassoc)
+        snapped = self.snap_hit
+        self.tool.last_snap = (snapped if snapped is not None
+                               and (snapped.x, snapped.y) == tuple(point) else None)
         self.tool.on_point(point)
         self.clear_tracking()          # AutoCAD releases the acquired points with the point
         # The step may have made a preview possible (the second origin of a
@@ -2463,7 +2830,7 @@ class ToolController(QObject):
                                     space=self.window.document.doc.modelspace())
                 self._model_snap_engine = engine
                 self._model_engine_revision = self.window.document.revision
-            anchor = self.tool.last_point if self.tool else None
+            anchor = self.anchor_point()
             if anchor is not None:
                 anchor = layout_ops.paper_to_model(vp, *anchor)
             hit = engine.find(model, threshold / scale,
@@ -2653,20 +3020,37 @@ class ToolController(QObject):
             if self.window.document is None:
                 return
             self.index = GeometryIndex(self.window.document)
+        # Remove(R) at "Select objects": every pick takes away, as Shift does
+        shift = shift or (self._selecting_for is not None
+                          and getattr(self, "_sel_remove", False))
+        force = getattr(self, "_sel_force", None)
+        if self._selecting_for is not None and self._window_anchor is not None:
+            self._sel_history.append(set(self.selection))   # Undo(U) target
+        if force is not None and self._window_anchor is None:
+            # Window(W) / Crossing(C): the first click is a corner even on
+            # an object, as AutoCAD asks "Specify first corner:"
+            self._window_anchor = (wx, wy)
+            self.window.command_line.echo_prompt(tr("Specify opposite corner:"))
+            return
         if self._window_anchor is not None:
             # second corner: apply window (L->R, fully inside) or crossing
             ax, ay = self._window_anchor
             self._window_anchor = None
             rect = (min(ax, wx), min(ay, wy), max(ax, wx), max(ay, wy))
-            crossing = wx < ax
-            hits = self.index.crossing(rect) if crossing else self.index.window(rect)
+            crossing = wx < ax if force is None else force == "C"
+            if force is not None:
+                self._sel_force = None
+            hits = self._shown(self.index.crossing(rect) if crossing
+                               else self.index.window(rect))
             if crossing and not shift:
                 self._crossing_rects.append(rect)
             if shift:
                 self.selection -= self._with_groups(hits)
             else:
-                self.selection |= self._with_groups(hits)
+                self.selection |= self._filtered(self._with_groups(hits))
             self._echo_count()
+            if force is not None and self._selecting_for is not None:
+                self.window.command_line.echo_prompt(self._selection_prompt())
             return
         previous = self._cycle
         if shift:
@@ -2679,6 +3063,8 @@ class ToolController(QObject):
         if handle is None:
             self._window_anchor = (wx, wy)
             return
+        if self._selecting_for is not None:
+            self._sel_history.append(set(self.selection))   # Undo(U) target
         if shift:
             self.reset_pick_cycle()
             self.selection -= self._with_groups([handle])
@@ -2688,8 +3074,119 @@ class ToolController(QObject):
                 # cycled: swap the previous candidate out instead of adding
                 # the second one -- "I meant the other object", not "both".
                 self.selection -= self._with_groups([previous[1][previous[2]]])
-            self.selection |= self._with_groups([handle])
+            self.selection |= self._filtered(self._with_groups([handle]))
         self._echo_count()
+
+    # -- typed answers at "Select objects:" (AutoCAD's SELECT options) ---------
+    _SELECT_OPTIONS = {
+        "ALL": "ALL", "TODO": "ALL", "L": "L", "LAST": "L",
+        "ULTIMO": "L", "ÚLTIMO": "L", "U": "U", "UNDO": "U", "P": "P", "PREVIOUS": "P", "PREVIO": "P",
+        "W": "W", "WINDOW": "W", "V": "W", "VENTANA": "W", "C": "C",
+        "CROSSING": "C", "CAPTURA": "C", "R": "R", "REMOVE": "R",
+        "E": "R", "ELIMINAR": "R", "A": "A", "ADD": "A", "AÑADIR": "A",
+    }
+
+    def _selection_prompt(self) -> str:
+        if getattr(self, "_sel_remove", False):
+            return tr("Remove objects:")
+        return self._selecting_for.selection_prompt()
+
+    def _selection_option(self, text: str) -> None:
+        """ALL, Last, Previous, Window, Crossing, Remove and Add, typed at a
+        Select Objects prompt (SELECT, Command Reference): the English
+        letters, and the Spanish names as an extra. Coordinates answer a
+        Window/Crossing corner."""
+        echo = self.window.command_line.echo
+        option = self._SELECT_OPTIONS.get(text.upper().lstrip("_"))
+        document = self.window.document
+        if option is None and getattr(self, "_sel_force", None) is not None:
+            try:
+                point = parse_point(text, None)
+            except CoordinateError:
+                point = None
+            if point is not None:
+                x, y = self.current_ucs().to_world(point.x, point.y)
+                self._selection_click(x, y, False)
+                return
+        if option is None or document is None:
+            echo(tr("*Invalid selection*"))
+            echo(tr("Expects a point or Window/Last/Crossing/ALL/Previous/Undo/Add/Remove"))
+            self.window.command_line.echo_prompt(self._selection_prompt())
+            return
+        if option in ("W", "C"):
+            self._sel_force = option
+            self._window_anchor = None
+            self.window.command_line.echo_prompt(tr("Specify first corner:"))
+            return
+        if option == "U":
+            if self._sel_history:
+                self.selection = self._sel_history.pop()
+                self._highlight_cache = None
+                self._grips_cache = None
+            else:
+                echo(tr("Everything has been undone"))
+            self._echo_count()
+        elif option == "R":
+            self._sel_remove = True
+        elif option == "A":
+            self._sel_remove = False
+        else:
+            if option == "ALL":
+                found = set(self._selectable(document.current_space(),
+                                             include_off=True))
+            elif option == "L":
+                found = set()
+                for entity in reversed(list(document.current_space())):
+                    if self._selectable([entity]):
+                        found = {entity.dxf.handle}
+                        break
+            else:                                    # Previous
+                db = document.doc.entitydb
+                found = {h for h in getattr(self, "_previous_selection", set())
+                         if (e := db.get(h)) is not None and e.is_alive}
+            echo(tr("{count} found", count=len(found)))
+            self._sel_history.append(set(self.selection))
+            if getattr(self, "_sel_remove", False):
+                self.selection -= found
+            else:
+                self.selection |= self._filtered(self._with_groups(found))
+            self._highlight_cache = None
+            self._grips_cache = None
+            self._echo_count()
+        self.window.command_line.echo_prompt(self._selection_prompt())
+
+    def _filtered(self, handles) -> set:
+        """What the selection filter lets in; says how many it kept out,
+        so a filter left on never looks like a pick that failed. With no
+        command running (pickfirst) objects on a locked layer stay out too:
+        Delete, Ctrl+X, grips and the properties panel all act on that set,
+        and none of them may change a locked layer."""
+        if self._selecting_for is None and self.tool is None:
+            document = self.window.document
+            if document is not None:
+                db = document.doc.entitydb
+                entities = [e for h in handles if (e := db.get(h)) is not None]
+                handles = {e.dxf.handle
+                           for e in self._unlocked_for(None, entities)}
+        if self.pick_filter is None:
+            return set(handles)
+        from core import pickfilter
+
+        handles = set(handles)
+        document = self.window.document
+        entity_of = (document.doc.entitydb.get if document is not None
+                     else (lambda _h: None))
+        kept = pickfilter.keep(handles, entity_of, self.pick_filter)
+        if len(kept) < len(handles):
+            self.window.command_line.echo(
+                tr("{n} object(s) left out by the selection filter.",
+                   n=len(handles) - len(kept)))
+        return kept
+
+    def set_pick_filter(self, allowed) -> None:
+        """Switch the filter: a set of type names, or None for off."""
+        self.pick_filter = None if allowed is None else frozenset(allowed)
+        self.changed.emit()
 
     def _with_groups(self, handles) -> set:
         """Picking one member of a selectable group takes the whole group —
@@ -2746,6 +3243,10 @@ class ToolController(QObject):
         self._selecting_for = None
         entities = self._selection_entities()
         self._window_anchor = None
+        self._sel_remove = False
+        self._sel_force = None
+        self._previous_selection = set(self.selection)
+        entities = self._unlocked_for(tool, entities)
         # keep the highlight while the command runs (AutoCAD behavior)
         tool.on_selection(entities)
         self.changed.emit()
@@ -2781,12 +3282,18 @@ class ToolController(QObject):
             self._remember_through(self.snap_hit)
             return (self.snap_hit.x, self.snap_hit.y)
         self.track_hint = None
+        frame = self.current_ucs()
         if self.snap_on:
             step = self.snap_spacing()
             if step:
-                wx, wy = round(wx / step) * step, round(wy / step) * step
+                # the snap grid is the UCS's, as the grid on screen is
+                ux, uy = frame.to_ucs(wx, wy)
+                wx, wy = frame.to_world(round(ux / step) * step,
+                                        round(uy / step) * step)
         ortho = self.ortho_on != self.shift_held
-        anchor = self.tool.last_point if self.tool else None
+        if ortho and self.tool is not None and not self.tool.ortho_applies():
+            ortho = False
+        anchor = self.anchor_point()
         if self.otrack_on and self._track_points:
             tracked = self._tracked(wx, wy, anchor, ortho)
             if tracked is not None:
@@ -2794,10 +3301,13 @@ class ToolController(QObject):
                 self.track_hint = ((source[0], source[1]), point, label)
                 return point
         if anchor is not None and ortho:
+            # along the UCS's X or Y through the anchor
+            c, s = math.cos(frame.angle), math.sin(frame.angle)
             dx, dy = wx - anchor[0], wy - anchor[1]
-            if abs(dx) >= abs(dy):
-                return (wx, anchor[1])
-            return (anchor[0], wy)
+            along_x, along_y = dx * c + dy * s, -dx * s + dy * c
+            if abs(along_x) >= abs(along_y):
+                return (anchor[0] + along_x * c, anchor[1] + along_x * s)
+            return (anchor[0] - along_y * s, anchor[1] + along_y * c)
         if anchor is not None and self.polar_on:
             # Polar tracking, as AutoCAD's: the cursor is caught by an
             # alignment path only when it comes within the aperture of one,
@@ -2812,8 +3322,9 @@ class ToolController(QObject):
                                          tol, self._polar_base())
             if locked is not None:
                 point, direction = locked
+                shown = round((direction - frame.degrees) % 360.0, 9)
                 self.track_hint = ((anchor[0], anchor[1]), point,
-                                   f"{_track_label('polar')}: <{direction:g}°")
+                                   f"{_track_label('polar')}: <{shown:g}°")
                 return point
         return (wx, wy)
 
@@ -2841,15 +3352,19 @@ class ToolController(QObject):
         units = getattr(self.window, "display_units", None)
         units = units() if callable(units) else None
         x, y = self.resolved_point(*self._cursor)
-        anchor = self.tool.last_point if self.tool else None
+        anchor = self.anchor_point()
+        frame = self.current_ucs()
         if anchor is not None:
             d = math.hypot(x - anchor[0], y - anchor[1])
-            ang = math.degrees(math.atan2(y - anchor[1], x - anchor[0])) % 360.0
+            ang = (math.degrees(math.atan2(y - anchor[1], x - anchor[0]))
+                   - frame.degrees) % 360.0
             if units is not None:
                 lines.append(f"{units.length(d)} < {units.angle(ang)}")
             else:
                 lines.append(f"{d:.4f} < {ang:.0f}")
-        elif units is not None:
+            return lines
+        x, y = frame.to_ucs(x, y)
+        if units is not None:
             lines.append(f"{units.length(x)}, {units.length(y)}")
         else:
             lines.append(f"{x:.4f}, {y:.4f}")
@@ -2862,7 +3377,8 @@ class ToolController(QObject):
             if not text.strip():
                 self.finish_selection()
                 return True
-            self.window.command_line.echo(self._selecting_for.selection_prompt())
+            self._selection_option(text.strip())
+            self.changed.emit()
             return True
         if self.tool is None:
             return False
@@ -2910,13 +3426,32 @@ class ToolController(QObject):
             constrained = self.resolved_point(*self._cursor)
             direction = math.atan2(constrained[1] - anchor[1],
                                    constrained[0] - anchor[0])
+            if self.track_hint is not None and offset_from is None \
+                    and is_direct_distance(stripped):
+                # On an alignment path -- object snap tracking from an
+                # acquired point, an extension, polar -- a typed distance is
+                # measured from the path's source along it: AutoCAD's "hover
+                # the centre, slide right, type 6". It went from the last
+                # point instead, toward the cursor, and the centre landed
+                # 19 units below (Rafael's seventh review, 06:16-07:02).
+                (sx, sy), (px, py), _label = self.track_hint
+                if math.hypot(px - sx, py - sy) > 1e-12:
+                    anchor = (sx, sy)
+                    direction = math.atan2(py - sy, px - sx)
         else:
-            direction = 0.0     # no pointer yet: along +X, as AutoCAD
+            # no pointer yet: along the UCS's +X, as AutoCAD
+            direction = self.current_ucs().angle
         try:
             # dynamic input's relative default is for the SECOND point on:
             # the first is absolute (DYNPICOORDS), LASTPOINT or not
-            point = parse_point(stripped, anchor, direction,
+            # typed in the user's coordinates: anchor and pointer direction
+            # go into the UCS, the answer comes back to the world
+            frame = self.current_ucs()
+            point = parse_point(stripped, frame.to_ucs(*anchor),
+                                direction - frame.angle,
                                 relative_default=self.dyn_on and not first_point)
+            if point is not None and not frame.is_world:
+                point = ParsedPoint(*frame.to_world(point.x, point.y))
         except CoordinateError as exc:
             self.window.command_line.echo(tr("Invalid point: {error}",
                                              error=str(exc)))
@@ -2925,6 +3460,8 @@ class ToolController(QObject):
             self.window.command_line.echo(tr("Invalid input."))
             return True
         self._note_point((point.x, point.y))
+        # a typed point releases the acquired points, as a picked one does
+        self.clear_tracking()
         if self._modifier is not None:
             final = self._modifier_take((point.x, point.y))
             if final is None:
@@ -2933,6 +3470,7 @@ class ToolController(QObject):
             self.tool.on_point(final)
             self.changed.emit()
             return True
+        self.tool.last_snap = None       # a typed point is tied to nothing
         self.tool.on_point((point.x, point.y))
         self.changed.emit()
         return True
@@ -3050,7 +3588,10 @@ class ToolController(QObject):
         if entity is None:
             return
         snap = SnapshotCommand([entity])   # captures the pre-grab state
+        # and the associative dimensions' (core.dimassoc), for the drop
+        self._grip_dimassoc = self.window.history.dimassoc_state()
         self._grip_drag = (handle, index, role, snap)
+        self._grip_base = (gx, gy)
         # Hide the base-scene copy ONCE (a full-scene re-upload); from here
         # the live entity rides the cheap 1-entity overlay each frame.
         self.window.viewport.hide_handles([handle])
@@ -3060,12 +3601,29 @@ class ToolController(QObject):
             self.window.viewport.show_image(handle)
         self._refresh_overlay()
 
+    def current_ucs(self):
+        """The UCS typed points, the readout, ORTHO, POLAR and the grid
+        follow (core/ucs.py): the model's, the world elsewhere."""
+        from core import ucs
+
+        return ucs.current(self.window.document)
+
+    def anchor_point(self):
+        """The point ORTHO, POLAR, tracking and PERpendicular measure from:
+        the command's last point, or -- dragging a hot grip, when no command
+        runs -- where the grip was grabbed, as AutoCAD's grip STRETCH/MOVE
+        take it. Without it a grip ignored ORTHO (#60)."""
+        if self.tool is not None:
+            return self.tool.last_point
+        drag = self._grip_drag
+        if drag is not None and drag[0] != _VP_GRIP:
+            return self._grip_base
+        return None
+
     def grip_target(self, wx: float, wy: float) -> tuple[float, float]:
-        """Where the hot grip should sit: snap wins, then ortho/polar."""
-        wx, wy = self.to_space(wx, wy)
-        if self.snap_hit is not None:
-            return (self.snap_hit.x, self.snap_hit.y)
-        return (wx, wy)
+        """Where the hot grip should sit: the same order a command's point
+        takes -- object snap, grid snap, ortho, tracking, polar."""
+        return self.resolved_point(*self.to_space(wx, wy))
 
     def update_grip_drag(self, wx: float, wy: float) -> None:
         if self._grip_drag is None:
@@ -3138,7 +3696,18 @@ class ToolController(QObject):
             # Route through the dedicated command: it re-renders the block
             # and drops the old one, which the generic snapshot cannot undo.
             self.window.viewport.unhide_handles([handle])
-            if role == "dim_text":
+            radial = int(entity.dxf.get("dimtype", 0)) & 7 in (3, 4)
+            if role == "dim_text" and radial:
+                # A radius or diameter is laid out FROM its text: the line
+                # turns to follow it and the arrow walks around the circle,
+                # as AutoCAD draws it. Moving the number alone left them
+                # pointing at nothing (Rafael's sixth review, #67).
+                command = actions.DimTextEditCommand(
+                    entity, location=(wx, wy), turn=True)
+            elif role == "dim_text" and _text_carries_line(entity):
+                # DIMTMOVE 0, AutoCAD's default: the line goes with the text
+                command = actions.DimTextWithLineCommand(entity, (wx, wy))
+            elif role == "dim_text":
                 # Pure translation: a foreign dimension keeps its author's
                 # block stroke for stroke (DIMTEDIT still offers the full
                 # re-rendering options when asked for them).
@@ -3152,8 +3721,9 @@ class ToolController(QObject):
         if entity is not None:
             apply_grip_edit(entity, index, role, (wx, wy))
             snap.commit(self.window.document)
-            self.window.history._undo.append(snap)
-            self.window.history._redo.clear()
+            self.window.history.record(snap, self._grip_dimassoc)
+            self._grip_dimassoc = None
+            self._show_reacted(snap)
             # grips/snap see the new shape; both caches are patched, not
             # rebuilt (a full rebuild froze the next pick on big files)
             self._drop_conflicting_stamps([handle])
@@ -3253,8 +3823,6 @@ class ToolController(QObject):
                 return cached[1]
             empty = np.empty((0, 4))
             return empty, empty, empty
-        result = (self.index.segments_of(self.selection),
-                  self.index.circles_of(self.selection),
-                  self.index.boxes_of(self.selection))
+        result = self.index.highlight_of(self.selection)
         self._highlight_cache = (key, result)
         return result

@@ -87,7 +87,7 @@ class ObjectScaleTool(Tool):
                 self.ctx.echo(tr("Named scales: {names}", names=", ".join(names)))
                 self._scale_prompt()
                 return True
-            scale = annotative.find_scale(document.doc, stripped)
+            scale = annotative.standard_scale(document.doc, stripped)
             if scale is None:
                 self.ctx.echo(tr("Scale \"{name}\" is not in the drawing's "
                                  "scale list.", name=stripped))
@@ -96,17 +96,68 @@ class ObjectScaleTool(Tool):
             command = annotative.ObjectScaleCommand(
                 self._entities, scale.name, add=self._add)
             self.ctx.execute(command)
-            done = len(command.entities) - command.skipped
-            if self._add:
-                self.ctx.echo(tr("{n} object(s) now support {scale}.",
-                                 n=done, scale=scale.name))
-            else:
-                self.ctx.echo(tr("{scale} removed from {n} object(s).",
-                                 n=done, scale=scale.name))
+            report_scale_change(self.ctx.echo, command, scale.name,
+                                self._add)
             self.ctx.finish()
             return True
         return False
 
 
+def report_scale_change(echo, command, scale: str, add: bool) -> None:
+    """What OBJECTSCALE / Add or Delete Current Scale did: how many objects
+    changed, and how many already were as asked."""
+    done = len(command.entities) - command.unchanged
+    if add:
+        echo(tr("{n} object(s) now support {scale}.", n=done, scale=scale))
+        if command.unchanged:
+            echo(tr("{n} object(s) already supported {scale}.",
+                    n=command.unchanged, scale=scale))
+    else:
+        echo(tr("{scale} removed from {n} object(s).", n=done, scale=scale))
+
+
+class CurrentScaleTool(Tool):
+    """AIOBJECTSCALEADD / AIOBJECTSCALEREMOVE: Modify > Annotative Object
+    Scale > Add Current Scale / Delete Current Scale. One click for the
+    usual case of OBJECTSCALE: the current annotation scale (CANNOSCALE),
+    added to or taken from the selected annotative objects (Rafael's
+    review 6: OpenCAD Studio's "Add Current Scale" button, which IngeCAD
+    lacked)."""
+
+    wants_selection = True
+    add = True
+
+    def start(self) -> None:
+        self.name = "AIOBJECTSCALEADD" if self.add else "AIOBJECTSCALEREMOVE"
+
+    def selection_prompt(self) -> str:
+        return tr("Select annotative objects:")
+
+    def on_selection(self, entities: list) -> None:
+        services = self.ctx.services
+        document = getattr(getattr(services, "window", None), "document", None)
+        chosen = [e for e in entities if annotative.is_annotative(e)]
+        if document is None or not chosen:
+            self.ctx.echo(tr("No annotative objects selected."))
+            if entities:
+                # the step Rafael could not find (review 6, 44:00-47:00): a
+                # style made annotative does not change what is already drawn
+                self.ctx.echo(tr("To make them annotative: Properties > "
+                                 "Annotative > Yes."))
+            self.ctx.finish()
+            return
+        scale = annotative.scale_or_default(document.doc)
+        command = annotative.ObjectScaleCommand(chosen, scale.name, add=self.add)
+        self.ctx.execute(command)
+        report_scale_change(self.ctx.echo, command, scale.name, self.add)
+        self.ctx.finish()
+
+
+class RemoveCurrentScaleTool(CurrentScaleTool):
+    add = False
+
+
 ANNO_TOOL_CLASSES = {"OBJECTSCALE": ObjectScaleTool,
-                     "-OBJECTSCALE": ObjectScaleTool}
+                     "-OBJECTSCALE": ObjectScaleTool,
+                     "AIOBJECTSCALEADD": CurrentScaleTool,
+                     "AIOBJECTSCALEREMOVE": RemoveCurrentScaleTool}

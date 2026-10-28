@@ -678,3 +678,58 @@ def test_matchprop_dimension_copies_style_overrides_and_rerenders():
     assert dst.dxf.dimstyle == "ISO-25"
     assert text_height(dst) == 2.5          # look restored too
     assert dst.dxf.geometry in doc.doc.blocks
+
+
+# -- STRETCH a dimension with its part (Rafael's seventh review, 28:40) ------------
+
+def _part_and_dimension(h):
+    from core import actions
+
+    line = h.msp.add_line((0, 0), (34, 0))
+    actions.dim_linear((0, 0), (34, 0), (17, -8)).do(h.document)
+    dim = [e for e in h.msp if e.dxftype() == "DIMENSION"][-1]
+    return line, dim
+
+
+def _drawn_text(dim) -> str:
+    return next(t.dxf.text for t in dim.virtual_entities()
+                if t.dxftype() in ("MTEXT", "TEXT"))
+
+
+def test_stretching_the_part_and_its_dimension_re_measures_it():
+    """A crossing window over the line's end and the dimension's second
+    origin: the line grows to 48 and the dimension follows -- AutoCAD's
+    STRETCH on a dimension that is not associative. It stayed at 34."""
+    h = Harness(rects=[(30.0, -12.0, 40.0, 2.0)])
+    line, dim = _part_and_dimension(h)
+    before = _drawn_text(dim)
+    tool = StretchTool(h.ctx)
+    tool.start()
+    tool.on_selection([line, dim])
+    tool.on_point((34.0, 0.0))
+    tool.on_point((48.0, 0.0))
+    assert line.dxf.end.x == pytest.approx(48.0)
+    assert dim.get_measurement() == pytest.approx(48.0)
+    assert dim.dxf.defpoint2.x == pytest.approx(0.0), "the far origin stayed"
+    assert _drawn_text(dim) != before
+    h.history.undo()
+    assert dim.get_measurement() == pytest.approx(34.0)
+    assert _drawn_text(dim) == before
+    assert dim.dxf.geometry in h.document.doc.blocks
+
+
+def test_a_dimension_caught_whole_moves_whole():
+    h = Harness(rects=[(-5.0, -12.0, 40.0, 2.0)])
+    _line, dim = _part_and_dimension(h)
+    tool = StretchTool(h.ctx)
+    tool.start()
+    text_before = next(t for t in dim.virtual_entities()
+                       if t.dxftype() in ("MTEXT", "TEXT")).dxf.insert.y
+    tool.on_selection([dim])
+    tool.on_point((0.0, 0.0))
+    tool.on_point((0.0, 5.0))
+    assert dim.get_measurement() == pytest.approx(34.0)
+    assert dim.dxf.defpoint2.y == pytest.approx(5.0)
+    text_after = next(t for t in dim.virtual_entities()
+                      if t.dxftype() in ("MTEXT", "TEXT")).dxf.insert.y
+    assert text_after == pytest.approx(text_before + 5.0), "the drawing stayed"

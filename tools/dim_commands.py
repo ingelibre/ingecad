@@ -226,6 +226,7 @@ class QDimTool(Tool):
     """QDIM: a series of dimensions from a selection, one undo step."""
 
     wants_selection = True
+    modifies_selection = False   # reads the set; locked layers count
 
     _PROMPT = ("Specify dimension line position, or "
                "[Continuous/Staggered/Baseline/Ordinate/Radius/Diameter/"

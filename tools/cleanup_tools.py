@@ -144,14 +144,25 @@ class WblockTool(Tool):
         self._stage = "name"
         services = self.ctx.services
         ask = getattr(services, "ask_save_file", None)
-        chosen = ask(tr("Write Block"), "block.dxf",
-                     tr("DXF drawing (*.dxf);;DWG drawing (*.dwg)")) if ask else None
+        # AutoCAD's Write Block proposes "new block.dwg": a DWG, since
+        # that is what the colleague's INSERT > Browse expects
+        chosen = ask(tr("Write Block"), tr("new block") + ".dwg",
+                     tr("DWG drawing (*.dwg);;DXF drawing (*.dxf)")) if ask else None
         if not chosen:
             self.ctx.echo(tr("*Cancel*"))
             self.ctx.finish()
             return
         self._path = Path(chosen)
         self.prompt(cleanup.WBLOCK_PROMPT)
+
+    def on_cancel(self) -> None:
+        # The file was named in a dialog before the prompts, so leaving now
+        # must say that nothing reached it (Rafael's review 6: he took the
+        # closed dialog for a saved block).
+        if self._path is not None and self._stage in ("name", "base", "select"):
+            self.ctx.echo(tr("*Cancel* -- nothing was written to {path}.",
+                             path=str(self._path)))
+        self.ctx.finish()
 
     def _document(self):
         return self.ctx.services.document if hasattr(self.ctx.services, "document") \

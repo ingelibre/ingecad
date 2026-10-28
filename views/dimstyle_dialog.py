@@ -33,7 +33,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
-    QSpinBox,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -94,14 +93,16 @@ def _preview_arrow(value: str):
 _PREVIEW_TEXT_HEIGHTS = 20.0
 
 
-def _preview_scale(attribs: dict) -> float:
+def _preview_scale(attribs: dict, fixed: float = 0.0) -> float:
     """How much to scale the 40-unit sample so this style reads.
 
-    Driven by the style's effective text height (``dimtxt`` × ``dimscale``),
-    with the arrow size as a fallback for a style that draws no text.
+    Driven by the style's effective text height (``dimtxt`` × ``dimscale``,
+    or the text style's fixed height, which DIMSCALE does not touch), with
+    the arrow size as a fallback for a style that draws no text.
     """
     scale = attribs.get("dimscale") or 1.0
-    height = (attribs.get("dimtxt") or 0.0) * scale
+    height = fixed if fixed and fixed > 0 else \
+        (attribs.get("dimtxt") or 0.0) * scale
     if height <= 0:
         height = (attribs.get("dimasz") or 0.0) * scale * 2.0
     if height <= 0:
@@ -109,8 +110,13 @@ def _preview_scale(attribs: dict) -> float:
     return (height * _PREVIEW_TEXT_HEIGHTS) / 40.0
 
 
-def render_dim_preview(attribs: dict, w: int = 300, h: int = 190) -> QPixmap:
-    """A real sample render of the style: linear + angular + radius dims."""
+def render_dim_preview(attribs: dict, w: int = 300, h: int = 190,
+                       fixed_heights: dict | None = None) -> QPixmap:
+    """A real sample render of the style: linear + angular + radius dims.
+
+    ``fixed_heights`` maps the drawing's text styles to their fixed height,
+    so a style whose text style fixes it previews at that height -- as the
+    drawing draws it -- instead of at DIMTXT."""
     import ezdxf
     from ezdxf.addons.drawing import RenderContext
     from ezdxf.addons.drawing.pyqt import PyQtBackend
@@ -128,6 +134,9 @@ def render_dim_preview(attribs: dict, w: int = 300, h: int = 190) -> QPixmap:
                 doc.styles.add(txsty, font="txt")
             except Exception:
                 txsty = "Standard"
+        fixed = (fixed_heights or {}).get(attribs.get("dimtxsty") or "Standard", 0.0)
+        if fixed and txsty in doc.styles:
+            doc.styles.get(txsty).dxf.height = float(fixed)
         style = doc.dimstyles.new("PREV")
         for key, value in attribs.items():
             if key in ("name", "handle", "owner") or value is None:
@@ -147,7 +156,7 @@ def render_dim_preview(attribs: dict, w: int = 300, h: int = 190) -> QPixmap:
         # 40 units wide its text is a quarter of one per cent of the preview:
         # invisible. Twenty text heights across is what makes every style
         # legible while keeping its own text/arrow proportions intact.
-        s = _preview_scale(attribs)
+        s = _preview_scale(attribs, fixed)
         p = lambda x, y: (x * s, y * s)          # noqa: E731 - local shorthand
         msp.add_line(p(0, 0), p(40, 0), dxfattribs=white)
         msp.add_line(p(0, 0), p(14, 18), dxfattribs=white)
@@ -200,8 +209,76 @@ def _combo(pairs, value, translate: bool = True) -> QComboBox:
     return box
 
 
-def _dspin(value, lo=0.0, hi=1e6, dec=3, step=0.1) -> QDoubleSpinBox:
-    s = QDoubleSpinBox()
+def precision_samples(kind: str) -> list:
+    """AutoCAD's precision list: (sample, DIMDEC/DIMADEC value).
+
+    ``kind`` is "decimal", or an angular format: "deg", "dms", "grad",
+    "rad". Degrees/minutes/seconds skip values: 0 shows degrees, 2
+    minutes, 4 seconds, 5 to 8 seconds with decimals (the numbers between
+    show what the row below them shows)."""
+    if kind == "dms":
+        return [("0°", 0), ("0°00'", 2), ("0°00'00\"", 4),
+                ("0°00'00.0\"", 5), ("0°00'00.00\"", 6),
+                ("0°00'00.000\"", 7), ("0°00'00.0000\"", 8)]
+    suffix = {"deg": "°", "grad": "g", "rad": "r"}.get(kind, "")
+    return [("0" + ("." + "0" * n if n else "") + suffix, n) for n in range(9)]
+
+
+class PrecisionCombo(QComboBox):
+    """A precision picked from AutoCAD's sample list ("0.00", "0°00'"),
+    keeping a spin box's value()/setValue(). A stored value the list does
+    not show (DIMADEC 3 under degrees/minutes/seconds) is kept as it is
+    until the user picks a row."""
+
+    def __init__(self, value: int, kind: str = "decimal") -> None:
+        super().__init__()
+        self._value = max(0, int(value))
+        self._loading = False
+        self.set_kind(kind)
+        self.currentIndexChanged.connect(self._picked)
+
+    def set_kind(self, kind: str) -> None:
+        self._kind = kind
+        self._loading = True
+        try:
+            self.clear()
+            for sample, code in precision_samples(kind):
+                self.addItem(sample, code)
+            rows = [i for i in range(self.count())
+                    if self.itemData(i) <= self._value]
+            self.setCurrentIndex(rows[-1] if rows else 0)
+        finally:
+            self._loading = False
+
+    def _picked(self, index: int) -> None:
+        if not self._loading and index >= 0:
+            self._value = int(self.itemData(index))
+
+    def value(self) -> int:
+        return self._value
+
+    def setValue(self, value: int) -> None:
+        self._value = max(0, int(value))
+        self.set_kind(self._kind)
+
+
+_ANG_KIND = {0: "deg", 1: "dms", 2: "grad", 3: "rad"}
+
+
+class _TrimmedSpin(QDoubleSpinBox):
+    """Six decimals -- a drawing in metres needs 0.0025 -- shown without
+    trailing zeros, so a millimetre style still reads 2.5, not 2.500000."""
+
+    def textFromValue(self, value: float) -> str:
+        text = self.locale().toString(float(value), "f", self.decimals())
+        point = self.locale().decimalPoint()
+        if point in text:
+            text = text.rstrip("0").rstrip(point)
+        return text
+
+
+def _dspin(value, lo=0.0, hi=1e6, dec=6, step=0.1) -> QDoubleSpinBox:
+    s = _TrimmedSpin()
     s.setRange(lo, hi)
     s.setDecimals(dec)
     s.setSingleStep(step)
@@ -209,14 +286,69 @@ def _dspin(value, lo=0.0, hi=1e6, dec=3, step=0.1) -> QDoubleSpinBox:
     return s
 
 
+#: The Description's names for the variables a style sets (AutoCAD's
+#: manager writes "Arrow size = 2", not "dimasz = 2.0"); anything else
+#: shows as its system variable, DIMxxx.
+DESCRIPTION_LABELS = {
+    "annotative": "Annotative",
+    "dimadec": "Angular precision",
+    "dimasz": "Arrow size",
+    "dimaunit": "Angular unit format",
+    "dimblk": "Arrowhead",
+    "dimblk1": "First arrowhead",
+    "dimblk2": "Second arrowhead",
+    "dimcen": "Center mark size",
+    "dimclrd": "Dimension line color",
+    "dimclre": "Extension line color",
+    "dimclrt": "Text color",
+    "dimdec": "Precision",
+    "dimdle": "Extend beyond ticks",
+    "dimdli": "Baseline spacing",
+    "dimdsep": "Decimal separator",
+    "dimexe": "Extend beyond dim lines",
+    "dimexo": "Offset from origin",
+    "dimfxl": "Fixed extension line length",
+    "dimfxlon": "Fixed length extension lines",
+    "dimgap": "Offset from dim line",
+    "dimjust": "Text horizontal position",
+    "dimldrblk": "Leader arrowhead",
+    "dimlfac": "Measurement scale factor",
+    "dimlunit": "Unit format",
+    "dimrnd": "Round off",
+    "dimscale": "Overall scale",
+    "dimsd1": "Suppress dim line 1",
+    "dimsd2": "Suppress dim line 2",
+    "dimse1": "Suppress ext line 1",
+    "dimse2": "Suppress ext line 2",
+    "dimtad": "Text vertical position",
+    "dimtix": "Always keep text between ext lines",
+    "dimtofl": "Draw dim line between ext lines",
+    "dimtxsty": "Text style",
+    "dimtxt": "Text height",
+    "dimupt": "Place text manually",
+}
+
+
+def _description_value(value) -> str:
+    """A value as the Description shows it: numbers without trailing
+    zeros, on/off for switches."""
+    if isinstance(value, bool):
+        return tr("On") if value else tr("Off")
+    if isinstance(value, float):
+        return f"{value:.4f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
 class DimStyleEditorDialog(QDialog):
     """The New/Modify Dimension Style dialog: 5 tabs + live preview."""
 
     def __init__(self, parent, title: str, attribs: dict,
-                 text_styles: list[str]) -> None:
+                 text_styles: list[str],
+                 fixed_heights: dict | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self._attribs = dict(attribs)
+        self._fixed_heights = dict(fixed_heights or {})
         a = self._attribs.get
 
         root = QVBoxLayout(self)
@@ -335,7 +467,7 @@ class DimStyleEditorDialog(QDialog):
         f.addRow(tr("Text style"), self.dimtxsty)
         self.dimclrt = _combo(_ACI, a("dimclrt", 0))
         f.addRow(tr("Text color"), self.dimclrt)
-        self.dimtxt = _dspin(a("dimtxt", 2.5), lo=0.01)
+        self.dimtxt = _dspin(a("dimtxt", 2.5), lo=1e-6)   # 0.0025 m text
         f.addRow(tr("Text height"), self.dimtxt)
         gap = float(a("dimgap", 0.625))
         self.frame_text = QCheckBox(tr("Draw frame around text"))
@@ -426,9 +558,7 @@ class DimStyleEditorDialog(QDialog):
         f = QFormLayout(lin_group)
         self.dimlunit = _combo(_UNIT_FORMATS, int(a("dimlunit", 2)))
         f.addRow(tr("Unit format"), self.dimlunit)
-        self.dimdec = QSpinBox()
-        self.dimdec.setRange(0, 8)
-        self.dimdec.setValue(int(a("dimdec", 2)))
+        self.dimdec = PrecisionCombo(int(a("dimdec", 2)))
         f.addRow(tr("Precision"), self.dimdec)
         dsep = a("dimdsep", ord(","))
         dsep = chr(dsep) if isinstance(dsep, int) and dsep else str(dsep or ",")
@@ -461,9 +591,13 @@ class DimStyleEditorDialog(QDialog):
         f = QFormLayout(ang_group)
         self.dimaunit = _combo(_ANG_FORMATS, int(a("dimaunit", 0)))
         f.addRow(tr("Units format"), self.dimaunit)
-        self.dimadec = QSpinBox()
-        self.dimadec.setRange(0, 8)
-        self.dimadec.setValue(max(0, int(a("dimadec", 0))))
+        # AutoCAD's list, by the format chosen above (0°00'00" for DMS)
+        self.dimadec = PrecisionCombo(
+            max(0, int(a("dimadec", 0))),
+            _ANG_KIND.get(self.dimaunit.currentData(), "deg"))
+        self.dimaunit.currentIndexChanged.connect(
+            lambda _i: self.dimadec.set_kind(
+                _ANG_KIND.get(self.dimaunit.currentData(), "deg")))
         f.addRow(tr("Precision"), self.dimadec)
         azin = int(a("dimazin", 0))
         zsup = QHBoxLayout()
@@ -477,6 +611,10 @@ class DimStyleEditorDialog(QDialog):
         uv.addWidget(ang_group)
         uv.addStretch(1)
         self.tabs.addTab(units, tr("Primary Units"))
+        # every tab title in sight, as AutoCAD's dialog shows them: the
+        # pane was narrower than its tab bar and hid Primary Units behind
+        # scroll arrows (longer still in Spanish)
+        self.tabs.setMinimumWidth(self.tabs.tabBar().sizeHint().width() + 8)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
@@ -499,9 +637,21 @@ class DimStyleEditorDialog(QDialog):
                     except Exception:
                         pass
         self._render_preview()
+        #: What the widgets showed on opening: OK writes only what the user
+        #: changed. Writing everything rounded each value to the field's
+        #: decimals and wrote defaults the style never had -- opening ISO-25
+        #: and pressing OK turned 0.0025 m text into 0.01 (four times
+        #: taller) and gave it a 3.75 m baseline spacing.
+        self._initial = self.result_props()
+
+    def changed_props(self) -> dict:
+        """The DIMVARS the user actually changed in this dialog."""
+        props = self.result_props()
+        return {k: v for k, v in props.items() if self._initial.get(k) != v}
 
     def _render_preview(self) -> None:
-        self.preview.setPixmap(render_dim_preview(self.result_props()))
+        self.preview.setPixmap(render_dim_preview(
+            self.result_props(), fixed_heights=self._fixed_heights))
 
     def result_props(self) -> dict:
         """The DIMVARS the dialog controls, as one dict."""
@@ -670,11 +820,12 @@ class DimStyleManagerDialog(QDialog):
         return self.window.document
 
     def _styles_in_use(self) -> set[str]:
-        used = set()
-        for e in self.document.doc.entitydb.values():
-            if e.is_alive and e.dxftype() in ("DIMENSION", "ARC_DIMENSION"):
-                used.add(e.dxf.get("dimstyle", ""))
-        return used
+        from core.layers import placed_entities
+
+        # Not the entity database: ERASEd dimensions stay alive there for
+        # the undo and would keep their style "in use" (#64).
+        return {e.dxf.get("dimstyle", "") for e in placed_entities(self.document)
+                if e.dxftype() in ("DIMENSION", "ARC_DIMENSION")}
 
     def selected(self) -> str | None:
         item = self.list.currentItem()
@@ -715,15 +866,17 @@ class DimStyleManagerDialog(QDialog):
             return
         self.preview_label.setText(tr("Preview of: {name}", name=name))
         attribs = style_ops.dim_style_attribs(self.document, name)
-        self.preview.setPixmap(render_dim_preview(attribs))
+        self.preview.setPixmap(render_dim_preview(
+            attribs, fixed_heights=style_ops.fixed_text_heights(self.document)))
         current = style_ops.current_dim_style(self.document)
         if name == current:
             self.description.setText(name)
         else:
-            cur = style_ops.dim_style_attribs(self.document, current)
-            diffs = [f"{k} = {v}" for k, v in sorted(attribs.items())
-                     if cur.get(k) != v]
-            text = current + (" + " + ", ".join(diffs[:12]) if diffs else "")
+            diffs = [f"{tr(DESCRIPTION_LABELS.get(k, k.upper()))} = "
+                     f"{_description_value(v)}"
+                     for k, v in style_ops.dim_style_differences(
+                         self.document, name, current)]
+            text = current + (" + " + ", ".join(diffs) if diffs else "")
             self.description.setText(text)
 
     # -- actions ---------------------------------------------------------------
@@ -753,10 +906,11 @@ class DimStyleManagerDialog(QDialog):
             self.document, dlg.start_with.currentText())
         editor = DimStyleEditorDialog(
             self, tr("New Dimension Style: {name}", name=name), attribs,
-            style_ops.text_style_names(self.document))
+            style_ops.text_style_names(self.document),
+            style_ops.fixed_text_heights(self.document))
         if not editor.exec():
             return
-        attribs.update(editor.result_props())
+        attribs.update(editor.changed_props())
         self.window.history.execute(
             style_ops.NewDimStyleCommand(name, attribs))
         self.window.after_style_change()
@@ -769,11 +923,11 @@ class DimStyleManagerDialog(QDialog):
         attribs = style_ops.dim_style_attribs(self.document, name)
         editor = DimStyleEditorDialog(
             self, tr("Modify Dimension Style: {name}", name=name), attribs,
-            style_ops.text_style_names(self.document))
+            style_ops.text_style_names(self.document),
+            style_ops.fixed_text_heights(self.document))
         if not editor.exec():
             return
-        props = editor.result_props()
-        changed = {k: v for k, v in props.items() if attribs.get(k) != v}
+        changed = editor.changed_props()
         if changed:
             self.window.history.execute(
                 style_ops.SetDimStylePropsCommand(name, changed))

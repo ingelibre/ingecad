@@ -9,6 +9,8 @@ PDF, every page the size of its sheet at 1:1.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFormLayout,
                                QListWidget, QListWidgetItem, QPushButton)
@@ -68,7 +70,7 @@ class PublishDialog(QDialog):
             return
         document = self.window.document
         path, _f = file_dialogs.get_save_file(
-            self, tr("Publish to PDF"), f"{document.name}.pdf", "PDF (*.pdf)",
+            self, tr("Publish to PDF"), f"{Path(document.name).stem}.pdf", "PDF (*.pdf)",
             preferred=document.path)
         if not path:
             return

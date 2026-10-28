@@ -1,16 +1,226 @@
 # Changelog
 
+## v0.6.8.2 — 2026-10-21
+
+- **Plot opens again in a layout whose page setup has a scale outside
+  the list** (1:37, a custom ratio from another program...). The dialog
+  failed while it was being built and nothing appeared; it now opens on
+  Custom with that page setup's ratio.
+
+## v0.6.8.1 — 2026-10-20
+
+- **A drawing opened from the file manager while IngeCAD runs becomes a
+  tab of its window**, instead of a second IngeCAD with a window of its
+  own. Several drawings opened together arrive as a tab each; IngeCAD
+  started from the menu with nothing to open still gets its own window.
+
+## v0.6.8 — 2026-10-20
+
+What testers found while recording tutorials, fixed first; data that
+Save as DWG lost, kept; and two tools a drafter reaches for every
+day: PEDIT Join and the UCS.
+
+### Two tools of the daily flow
+- **PEDIT Join** (#89): lines, arcs and open polylines that touch become
+  one polyline, closed when the contour closes, so AREA and HATCH take
+  it. It keeps the properties of the object picked first.
+- **UCS** (#91): a moved and turned origin, three points, Named
+  (Restore/Save/Delete/?), Object, Previous, View, World and Z, plus
+  Tools ▸ New UCS. Typed coordinates, the coordinate readout, snap,
+  ORTHO, POLAR, tracking, the grid and the cursor follow it, and so do
+  RECTANG, POLYGON, XLINE, ARRAY, INSERT, TEXT, MTEXT, the hatch angle,
+  DIMLINEAR, DIMORDINATE, ID and DIST. It travels in the DXF and the DWG.
+  A plan UCS only; sheets and the block editor stay in world coordinates.
+
+### What testers ran into
+- **A dimension too narrow for its text sets the text beside it**, as
+  ISO 129 does (#102).
+- **The status-bar toggles come back as you left them** (#103).
+- **Annotative text styles scale dimension text** with the annotation
+  scale (#85); **associative dimensions follow grip and Properties
+  edits** (#90).
+- **A hatch's scale and angle set in Properties redraw its pattern** (#86).
+- **The dots of DASHDOT, CENTER and PHANTOM are drawn**, on screen and
+  on paper (#87).
+- **An attribute definition can be edited, and BLOCK keeps its
+  attributes** (#88).
+- **Zoom Extents frames what was just drawn** (#96).
+- **A click, window or crossing no longer takes objects on hidden
+  layers** (#97).
+- **Construction lines look infinite** and stay out of the extents (#98).
+- **The Layers panel's state icons** are painted, not font glyphs (#100).
+
+### Data kept
+- **Justified text no longer jumps to 0,0 after Save as DWG** (#95; fixed
+  in LibreDWG, upstream #1463).
+- **Save as DWG no longer warns about every recent plan** (LibreDWG,
+  upstream #1464 and #1465).
+
+### Screen and paper
+- **A large text is no longer hidden** with its layer's small ones.
+- **Polylines with a lineweight close their corners.**
+- **Plotted TrueType text and solid hatches** get no outline.
+- **PLOT in a layout starts from that layout's page setup**, in its units.
+- **Typed DRAWORDER** and its undo redraw at once.
+
+### For plugin authors
+- A plugin's toolbar takes separators; a plugin tags XDATA under its own
+  APPID (`docs/plugins.md`).
+
+## v0.6.7 — 2026-10-11
+
+The colleague's drawing, edited as its author would: every dimension of a
+1576-plan corpus redrawn in place and compared with what the author's CAD
+drew, a whole staircase plan drawn again from scratch, and what testers
+ran into. Plus drawing tabs and associative dimensions.
+
+### Several drawings, one window
+- **Drawing tabs** (#71): several drawings open in one window, each with
+  its own view; a drawing opens where its author left it.
+- **Copy in one IngeCAD window and paste in another** (#75).
+
+### Dimensions as their author drew them
+- **Associative dimensions** (DIMASSOC 2): a dimension follows the object
+  it measures, and the tie survives opening and saving DWG.
+- **Editing a colleague's dimension keeps it as it was drawn**: its text
+  height (a fixed-height text style no longer grows 305 times), its
+  number (aligned dimensions read 0, zeros and decimals changed, a
+  negative DIMLFAC read negative, halves rounded down, near-vertical
+  dimensions at UTM coordinates rounded to whole units), hand-placed text
+  where the author put it, suppressed arrows suppressed, angular
+  dimensions on the right side and with the right points (also fixed in
+  LibreDWG, upstream #1438), arc lengths without a stray "( ".
+  99.5 % of the corpus's linear dimensions now redraw identical.
+- **ROTATE, SCALE and MIRROR redraw a dimension** instead of turning its
+  picture: readable text, the new length, copies where they belong.
+- **Dragging a dimension's text carries its line** (DIMTMOVE 0).
+- **DIMANGULAR, complete**: live, on polylines, with extension
+  lines and degrees/minutes/seconds.
+- The **dimension style editor** writes only what you changed (OK no
+  longer turned 0.0025 m text into 0.01), takes metric sizes, and shows
+  every tab.
+
+### Commands with their usual options
+- **MOVE, COPY, STRETCH**: Displacement, and Enter takes the first point
+  as the displacement; **COPY** Exit and Undo; **ROTATE, SCALE** Copy;
+  **UNDO** takes a count; **OOPS**; **TRIM, EXTEND** Fence, Crossing, Undo,
+  Quick and Standard modes, arcs extended along their circle; **FILLET**
+  and **CHAMFER** on polylines with all their options; **MULTIPLE**;
+  typed answers at "Select objects" (ALL, Last, Previous, Window…).
+- **ARRAY** asks only the spacings it needs; **OFFSET** starts at Through;
+  **TEXT** ends on an empty line; **EXPLODE** shows a block's attribute
+  definitions.
+- **DIMASSOC, CELTSCALE, DIMSCALE, LWEIGHT, LWDISPLAY, ZOOMFACTOR, SETVAR,
+  PROPERTIES, REDRAW, TEXTEDIT** and their usual short aliases (R, CH,
+  PR, ED…), which used to run other commands.
+- **Objects on a locked layer can no longer be erased or moved.**
+- **Undo gives back the whole object**: dimension blocks, polyline
+  vertices, block attributes, hatch patterns.
+- **TRIM, EXTEND, BREAK, OFFSET and JOIN keep a contour's height and
+  width**, and PEDIT Reverse its widths.
+- **Linetypes**: a Linetype Manager, -LINETYPE, the ISO linetypes in
+  metric drawings, CELTSCALE and PSLTSCALE.
+
+### Drawings in metres, on screen and on paper
+- **Dashes and dots show** at the linetype scale a drawing in metres needs.
+- **A Model-tab plot carries the layers' lineweights**; Plot gets a
+  custom scale ("1000 mm = 25 units"), "Plot object lineweights" and a
+  preview.
+- **TEXT, MTEXT and MLEADER start at a paper size** in the drawing's
+  units, not 2.5 m.
+- **Polyline widths survive Save as DWG and opening a DWG** (LibreDWG,
+  upstream #1437): 962 polylines in 44 of 197 corpus plans opened thin.
+
+### Smaller
+- Object snaps reach inside block inserts; ZOOM Window with snaps (#80);
+  BOUNDARY keeps curves (#83); Intersection finds crossing curves (#82);
+  the Properties panel takes a decimal comma; the rest of what testers
+  reported.
+
+## v0.6.6 — 2026-10-09
+
+The colleague's drawing, without scares: what stopped the people already
+working with IngeCAD -- Rafael, Arthur, Riccardo -- fixed before anything
+new is opened. And the first IngeCAD for **Windows**.
+
+### Windows
+- **IngeCAD for Windows** (#28): an installer (Start menu, "Open with" for
+  `.dwg` and `.dxf`, a clean uninstaller) and a portable zip, with the same
+  patched LibreDWG as on Linux. Not signed yet: Windows SmartScreen warns
+  the first time -- *More info* ▸ *Run anyway*.
+
+### Fixes that stopped work
+- **External references survive Save as DWG** (#66): the attached drawing
+  is still there after saving and reopening, with no "-2" suffix, and a
+  file chosen through the Flatpak portal keeps its real path. (The
+  LibreDWG half went upstream as LibreDWG #1431.)
+- **INSERT ▸ Browse…** inserts another drawing as a block (#70).
+- **Copy in one drawing, paste in another** brings its blocks, text and
+  dimension styles and layers along (#75).
+- **A model-space plot comes out on white paper** with dark lines, not on
+  the dark canvas (#62).
+- **A layer or dimension style emptied by ERASE can be deleted** (#64).
+- **Page Setup** shows its margins on their own sides of a picture of the
+  sheet (#61).
+- **Save as DWG no longer freezes the window for a second**: the
+  "Saving…" window keeps moving, keyboard and mouse are held until it
+  ends, and opening a drawing got faster too (worst pause 0.6 → 0.35 s).
+- **A polyline being drawn snaps to its own points**: close
+  it on its start point by Endpoint, or snap the midpoint of a segment
+  already drawn.
+
+### Drawing to the standard
+- **Plot model space at 1:1, 1:2, 1:5, 2:1, 5:1…** in the drawing's own
+  unit (#68).
+- **Radius and diameter dimensions** with the text outside put the arrows
+  outside, pointing at the centre; a diameter with its text inside spans
+  the whole circle (#67).
+- **Annotative scaling the way drafters use it** (#73): Properties ▸
+  *Annotative* for existing texts and dimensions, **Add / Delete Current
+  Scale** (also the + on the status bar), and the viewport follows.
+- **Point style** (#69): DDPTYPE, PDMODE and PDSIZE, sizes relative to the
+  screen kept at each regeneration, and the Node snap on the point itself.
+
+### Everyday editing
+- **Grips obey ORTHO, POLAR and Perpendicular** from where they were
+  grabbed (#60); Perpendicular lights with the cursor over the object.
+- **Several texts at once** in Properties: style and justification (#57,
+  #77).
+- **OFFSET** trims the loops a large offset makes and simplifies the shape
+  (#58).
+- **TEXT takes its height and angle from the mouse** as well as typed, with
+  a rubber band from the start point, and is typed inside a shaded box that
+  reads on the dark model and on the white sheet.
+- **A selection filter by object type** (FILTER on the status bar): select
+  only dimensions, only text…
+- IngeCAD **reopens at the size and place it was closed at** (#72).
+
+### Layouts, references, interface
+- The **External References** palette lists images and PDFs too, with
+  *Attach DWG / Image / PDF*.
+- A new drawing comes with **Layout1 and its viewport**; **PAGESETUP** works
+  on the Model tab; PLOT remembers its last setup; WBLOCK proposes DWG.
+- **A live language switch translates the whole window** (#74), not only
+  the menus. French joins as a community language pack.
+- **Help ▸ About IngeCAD** names the people whose work is in it.
+
+### Under the hood
+- A closed window is destroyed instead of hidden for the rest of the
+  session (it leaked memory; the test suite went from an hour to a minute).
+- The open, save and regeneration workers each have one owner, and the
+  garbage collector never runs on a worker thread.
+
 ## v0.6.5 — 2026-09-28
 
-The AutoCAD commands a colleague's drawing asks for: external references,
+The commands a colleague's drawing asks for: external references,
 block attributes, leaders, the dimension family, cleanup, plot style tables
-and a multi-page PUBLISH -- each with AutoCAD's own prompts, in its order.
+and a multi-page PUBLISH -- each with its standard prompts, in their usual order.
 Viewports became fast to enter and to switch between, and the model
 regenerates on several cores.
 
-### AutoCAD commands
+### CAD commands
 - **External references** (#33). A drawing that references others now shows
-  them where they belong, found the way AutoCAD looks for them (the saved
+  them where they belong, found the standard way (the saved
   path, then next to the drawing), each file read once. **XATTACH** (XA)
   attaches a DWG or DXF, **-XREF** lists, detaches, reloads, unloads,
   re-paths and overlays, and the new **Xrefs** tab of the sidebar does the
@@ -28,7 +238,7 @@ regenerates on several cores.
   what you point at; **QDIM** series (continuous, staggered, baseline,
   ordinate, radius, diameter); **DIMBREAK**, **DIMJOGGED** (JOG) and
   **DIMSPACE**.
-- **Cleanup** (#37): **PURGE** (dialog) and **-PURGE** with AutoCAD's three
+- **Cleanup** (#37): **PURGE** (dialog) and **-PURGE** with its three
   prompts -- never layer 0, the current layer or a block still in use --
   **OVERKILL** for duplicate and overlapping lines and arcs, and **WBLOCK**
   (W) to write a block or a selection to its own drawing.
@@ -39,25 +249,25 @@ regenerates on several cores.
   born at the current annotation scale, the scale of the view on the status
   bar (the Model tab's CANNOSCALE, or the active viewport's), ANNOAUTOSCALE,
   ANNOALLVISIBLE and **OBJECTSCALE**.
-- **Dynamic blocks** from AutoCAD show their current state and keep every
+- **Dynamic blocks** show their current state and keep every
   parameter on save (#36; changing the state from its grips comes later).
 
 ### Plotting
 - **Plot style tables** (#41): PLOT and Page Setup offer the `.ctb` tables
-  (acad, monochrome, Grayscale, Screening 50%, and any a colleague sends,
+  (the default, monochrome, Grayscale, Screening 50%, and any a colleague sends,
   dropped in `~/.config/IngeCAD/PlotStyles`); a layout plots with its own
   table unless you choose another.
 - **PUBLISH** (File ▸ Publish): the layouts you tick, in one PDF, each page
   the size of its sheet at 1:1.
 - **Plot area Window** (#52): *Window <* asks the two corners on the drawing
-  with a rectangle following the cursor, as AutoCAD does, and the dialog
+  with a rectangle following the cursor, and the dialog
   comes back with everything as you left it.
 - **File ▸ Export ▸ DXF** and **DXFOUT** (#51): a DXF copy for Blender or
   QGIS that leaves the open file as it was.
 
 ### Scripts
 - **APPLOAD** (AP) runs a Python file over IngeCAD's commands -- everything
-  it draws is one undo step -- and **SCRIPT** (SCR) runs an AutoCAD `.scr`
+  it draws is one undo step -- and **SCRIPT** (SCR) runs a `.scr`
   (#44). `docs/plugins.md` has worked examples.
 
 ### Viewports
@@ -76,7 +286,7 @@ regenerates on several cores.
   the phase (converting the DWG, reading, regenerating), the time, and
   Cancel. It also shows during a long regeneration and Save as DWG.
 - **The status bar is yours to arrange**: right-click it, or press the ≡
-  button at its end, and tick what it shows -- as in AutoCAD and BricsCAD.
+  button at its end, and tick what it shows -- as in other CAD programs.
   Out of the box it shows the classic SNAP, GRID, ORTHO, POLAR and OSNAP;
   tracking, dynamic input and lineweight are one tick away, and F11/F12
   work either way. The layout tabs no longer shrink to "...".
@@ -91,12 +301,12 @@ regenerates on several cores.
 - **The Layers panel starts without the Description column**: almost nobody
   fills it in, and in the sidebar it took the room the values need.
   Right-click the column headers to bring it back; the choice is kept.
-- **A new PAN icon** (#32): AutoCAD's open hand in outline, like the rest
+- **A new PAN icon** (#32): the familiar open hand in outline, like the rest
   of the toolbar, instead of a box with four lines. The cursor while
   panning is the same hand -- open to hover, a fist while dragging -- with
   a light outline over a dark fill, so it reads on the dark model, the
   white sheet and a satellite image alike.
-- **LAYFRZ, LAYTHW, LAYLCK, LAYULK** (#40), with AutoCAD's prompts and in
+- **LAYFRZ, LAYTHW, LAYLCK, LAYULK** (#40), with their standard prompts and in
   Format ▸ Layer Tools: freeze the layer of each object you pick (Undo
   takes back the last one; the current layer is refused), thaw every
   layer in one undo step, and lock or unlock a layer by picking one of
@@ -117,7 +327,7 @@ regenerates on several cores.
   again for every reference; now, per regen of the model, each block is
   recorded once and every reference replays it rotated and moved. Casa
   Peregrinos' model 1.6 s → 1.0 s, Planos Constructivos' 5.4 s → 4.4 s.
-  It also fixes AutoCAD's filled dots (a donut wider than its diameter)
+  It also fixes filled dots (a donut wider than its diameter)
   that came out with a notch.
 
 ### Georeferencing
@@ -162,7 +372,7 @@ regenerates on several cores.
   goes up through the live matrix, like a pan, while the sheet re-bakes
   behind it.
 - **Inside a viewport, the pointer is an arrow over the rest of the
-  sheet**, as in AutoCAD: the crosshair stays clipped to the active
+  sheet**: the crosshair stays clipped to the active
   viewport, and the ordinary arrow shows where a double-click on the paper
   would take you back to paper space. It used to vanish out there.
 - **Lineweights inside a viewport were drawn at the paper's scale while
@@ -185,7 +395,7 @@ regenerates on several cores.
 - **Ctrl+S on a big plan no longer freezes the window.** Save as DWG ran on
   the interface thread: on Plaza Yanque (10 000 objects) the window froze
   for 10 s. The save now runs in the background while the window keeps
-  drawing (keyboard and mouse wait, as in AutoCAD), and its check reads the
+  drawing (keyboard and mouse wait), and its check reads the
   file as a stream instead of loading the plan twice: 14 s → 7.7 s, and the
   longest pause during the save is 0.02 s. Found by the new release bench.
 - **The grid no longer flickers when zooming or panning.** The frame that
@@ -197,16 +407,15 @@ regenerates on several cores.
 ## v0.6.4 — 2026-09-27
 
 Save as DWG that holds on real drawings, the drafting commands made to
-follow AutoCAD's own flow prompt by prompt, and the multi-second freezes a
+follow the standard CAD flow prompt by prompt, and the multi-second freezes a
 performance audit found before this release. LibreDWG is now IngeCAD's
-only DWG engine: Open CAD Studio is no longer used, and with it goes the
-"DWG 2018 — Open CAD Studio" entry of Save As.
+only DWG engine, and the optional DWG 2018 converter entry of Save As is gone.
 
 ### Save as DWG
 - **213 real drawings saved and reopened: 116 → 185 open cleanly in ODA
   and IngeCAD**; the save itself failing went 55 → 7, and no drawing loses
   entities any more. Fixed in LibreDWG (vendored, re-based on 0.14.8597):
-  Civil 3D proxies keep their graphics and their class, a proxy newer than
+  Proxy objects from other programs keep their graphics and their class, a proxy newer than
   the target format is written as the target's, a large proxy graphic no
   longer corrupts every object after it, FIELD lists keep their fields,
   accents survive in pre-2007 dictionary keys, 3-point angular dimensions
@@ -214,21 +423,21 @@ only DWG engine: Open CAD Studio is no longer used, and with it goes the
   it on every save, DXF too), FIELD objects and binary blobs no longer stop
   the save.
 
-### Drawing like in AutoCAD
-- **FILLET** with AutoCAD's flow: `Current settings: Mode = TRIM, Radius =`,
+### Drawing as drafters expect
+- **FILLET** with the standard flow: `Current settings: Mode = TRIM, Radius =`,
   `[Undo/Polyline/Radius/Trim/Multiple]`, Shift on the second pick for a
   sharp corner, Trim / No trim shared with CHAMFER (TRIMMODE); fillets
   between lines, arcs and circles (circles are not trimmed), and two
   parallel lines joined by a semicircle.
 - **One-shot object snaps**: type END, MID, CEN, TAN, PER, INT, NEA, QUA,
   NOD, INS or NONE at a point prompt (answered with "of"/"to"), or pick one
-  from the Shift + right-click menu, now in AutoCAD's order; the **FROM**
+  from the Shift + right-click menu, now in the standard order; the **FROM**
   and **M2P** point modifiers.
-- **Deferred tangent**: a line tangent to two circles, as in AutoCAD.
-- **Extension and Parallel** object snaps, tracked as in AutoCAD.
+- **Deferred tangent**: a line tangent to two circles.
+- **Extension and Parallel** object snaps, with tracking.
 - **Draw ▸ Circle** is the classic submenu, with **Tan, Tan, Tan** — CIRCLE
   3P with a tangent on each point, typed or from the menu.
-- **MIRROR keeps text readable** (MIRRTEXT = 0, AutoCAD's default; new
+- **MIRROR keeps text readable** (MIRRTEXT = 0, the default; new
   drawings start there, and MIRRTEXT is a system variable).
 - **CLAYER** sets the current layer by name.
 - **LAYOUT ▸ Copy** and the tab menu's **Move or Copy...**.
@@ -238,13 +447,12 @@ only DWG engine: Open CAD Studio is no longer used, and with it goes the
   an arc outside it.
 
 ### Spanish and classrooms
-- A **Spanish AutoCAD acad.pgp works** as it is (DE, *DESPLAZA), read in
-  ANSI or UTF-8; *Tools ▸ Customize ▸ Edit Program Parameters (acad.pgp)*
-  opens it. The Spanish command names were checked against Autodesk's
-  Spanish help: DESCOMP, ACOANGULAR, ACOESTIL, GUARDAR, GUARDARCOMO
+- A **Spanish alias file (.pgp) works** as it is (DE, *DESPLAZA), read in
+  ANSI or UTF-8; *Tools ▸ Customize ▸ Edit Program Parameters (.pgp)*
+  opens it. The Spanish command names were checked against the standard Spanish names: DESCOMP, ACOANGULAR, ACOESTIL, GUARDAR, GUARDARCOMO
   corrected; GUARDARR, REINICIA, EDITPOL, CALCURAPIDA and more added.
 - **Classroom and office defaults**: one folder, `/etc/ingecad/`, with a
-  `defaults.ini` and an `acad.pgp` for every account on a machine; each
+  `defaults.ini` and an alias file (`.pgp`) for every account on a machine; each
   user's own settings still win. The README has a classroom example.
 
 ### Performance
@@ -255,7 +463,7 @@ Ctrl+C/X/V, ERASE, COPY, each undone, and Save as DWG:
   now under one second, the redraw finishing in the background.
 - The first mouse move on a big plan right after opening no longer stalls.
 - MOVE, COPY, ROTATE, SCALE, MIRROR, paste, array and stretch over a
-  selection with a Civil 3D proxy or an OLE object no longer fail half-way
+  selection with a proxy object or an OLE object no longer fail half-way
   (and leave no undo): those objects stay put and the command says so.
 - Everything else measured the same as 0.6.3.
 
@@ -292,11 +500,11 @@ user manual at ingecad.org/manual-topografia.
   (a user: "al dibujar el HATCH no detecta las islas"). Pick-internal-point
   only knew closed objects -- a closed polyline, a circle -- so a room
   drawn as four lines, or an island drawn as four lines, answered "No
-  closed boundary found" where AutoCAD fills. The region is now traced the
+  closed boundary found" where a hatch should fill. The region is now traced the
   way BPOLY does: every curve in view is cut where it crosses another,
   dead ends fall away, the smallest face around the point is the
   boundary and whatever lies inside it (loops of lines, circles, text) is
-  an island. The boundary set is what the canvas shows, as AutoCAD's
+  an island. The boundary set is what the canvas shows, the classic
   "current viewport"; on a colleague's 10 000-entity plan a pick answers
   in 0.2-0.6 s.
 - **PIMPORT died before importing anything** (a user: "he intentado
@@ -314,7 +522,7 @@ user manual at ingecad.org/manual-topografia.
 - **A linear dimension picked right-to-left drew mirrored**: the text
   under the line, the dimension line overshooting the extension lines,
   the arrowheads outside pointing in (a tester's report on 0.6.2). ezdxf
-  takes the line's direction from the pick order where AutoCAD follows
+  takes the line's direction from the pick order where it should follow
   the dimension's angle; the renderer now receives the origins in
   reading order -- text from the bottom or the right of the sheet -- so
   DIMLINEAR and DIMALIGNED draw the same whichever corner is clicked
@@ -322,12 +530,12 @@ user manual at ingecad.org/manual-topografia.
   DIMBASELINE chain from it).
 - **Dimensions moved to a coloured layer stayed white** (the same
   report: a red layer "cotas", the dimensions on it, no change). A
-  dimension's block is a block reference in all but name, and AutoCAD
+  dimension's block is a block reference in all but name, and a CAD
   resolves its ByBlock strokes and layer-0 content against the
   dimension; the canvas and the plot now do the same, ISO-25 colours its
-  lines, arrows and text ByBlock as acadiso does (so a colour set on the
+  lines, arrows and text ByBlock as the ISO template does (so a colour set on the
   dimension itself shows too), and the block content follows the
-  dimension onto its new layer in the file, as AutoCAD writes it
+  dimension onto its new layer in the file, as DWG files write it
   (measured: 3991 of 3991 block entities in three colleagues' plans). A
   style whose colours were set ByLayer used to re-render with its lines
   left on layer 0 -- red text and arrows, white lines -- for the same
@@ -337,7 +545,7 @@ user manual at ingecad.org/manual-topografia.
 - **Czech interface**, a community translation by Michal Josef Špaček
   (PR #2): 817 of the interface's strings, under Tools ▸ Language. The
   prompt options keep their English keys (`Uzavřít(C)`), so what you type
-  is what AutoCAD types; the strings that arrived after the translation
+  is what every CAD user types; the strings that arrived after the translation
   show in English until someone fills them in.
 - **Store page and desktop integration**: the Flatpak's page in GNOME
   Software shows seven screenshots (it showed none), the running window is
@@ -364,7 +572,7 @@ on white).
 - **Diameter dimensions off the norm.** The two arrowheads came out one
   inside pointing out and one outside pointing in, and the text landed
   across the circle from where you clicked. Now, as ISO 129-1 and
-  AutoCAD's ISO-25 have it: the dimension line runs across the circle
+  the ISO-25 style have it: the dimension line runs across the circle
   with both arrowheads inside, tips on the circle pointing outward, and
   the text outside on an extension of the line where you put it; a
   circle too small for the arrowheads gets them outside pointing in.
@@ -399,20 +607,20 @@ on white).
   whatever row index had been current before the list re-sorted — often
   Defpoints, which does not plot, and whose crossed-out printer read as
   the new layer's. The new layer is now the selected row with its name
-  open for typing, as AutoCAD's Layer Properties Manager does. (Every
+  open for typing, as a layer manager should. (Every
   new layer did plot; the file was never wrong.)
 - **The grid jumped when zooming.** The 1-2-5 ladder re-flowed the whole
   lattice at each step (going from 1 to 2 drops the major line at 15).
-  The grid is now AutoCAD's nested adaptive grid: GRIDUNIT times a power
+  The grid is now a nested adaptive grid: GRIDUNIT times a power
   of GRIDMAJOR, so zooming adds or drops lines and never moves one, with
   a band around each threshold so a wheel notch at the boundary does not
   flip it back and forth. GRIDUNIT, SNAPUNIT and GRIDMAJOR are read from
-  and saved into the drawing (its *Active VPORT), as AutoCAD does — a
+  and saved into the drawing (its *Active VPORT) — a
   colleague's plan brings its own grid.
 - **Polar tracking rounded every point.** With POLAR on the cursor was
   forced to the nearest 45°, so a 30° line could not be drawn; the 45°
   could not be changed. It now locks only near an alignment path, as
-  AutoCAD's polar tracking does, and shows the path with its angle.
+  classic polar tracking does, and shows the path with its angle.
 
 ### Added
 - **Origin as an object snap.** No CAD has it and a tester insisted it is
@@ -420,13 +628,13 @@ on white).
   of the current space snaps like a node, with a marker of its own
   (a circle with a +). Off by default; it lives in your settings, never in
   a drawing's $OSMODE.
-- **`0` and Enter at the first point is the origin**, as in AutoCAD: a
+- **`0` and Enter at the first point is the origin**: a
   direct distance or a relative `@` entered before a command has a point
   of its own is measured from the last point entered (LASTPOINT), which a
   new drawing starts at (0, 0). `5` puts the point five units from it
   toward the cursor.
 - **Drafting Settings** (Tools ▸ Drafting Settings…, DSETTINGS / DS, and
-  Settings… on the right-click of the status-bar toggles), AutoCAD's
+  Settings… on the right-click of the status-bar toggles), the classic
   dialog with its Snap and Grid, Polar Tracking and Object Snap tabs:
   the increment angle (90, 45, 30, 22.5, 18, 15, 10, 5 or typed), the
   additional angles, absolute or relative-to-last-segment measurement,
@@ -440,11 +648,11 @@ on white).
   to the model geometry it shows (endpoints, midpoints, centres…), and a
   dimension whose points all came through the same viewport carries
   DIMLFAC = 1/scale, so it reads 100 for a 100-unit wall drawn 20 mm wide
-  on the sheet — the way AutoCAD's paper-space dimensions of model
+  on the sheet — the way paper-space dimensions of model
   geometry read. Undo/redo keep it; any CAD honours it.
 - **CENTERMARK and CENTERLINE** (menu Dimension), the norm's centre marks:
   chain-line (`CENTER2`) axes running past the circle with a central
-  cross and a gap, and the centreline between two lines, as AutoCAD 2017
+  cross and a gap, and the centreline between two lines, as modern CAD
   draws them — but as plain lines, so the plan opens anywhere. Ruled by
   the typed variables CENTEREXE (millimetres of sheet past the circle,
   3.5), CENTERLTYPE, CENTERCROSSSIZE (`0.1x` of the diameter),
@@ -474,9 +682,9 @@ where IngeCAD — and IngeTrazo beside it — did not open at all.
 
 The release the plan called v0.5 and v0.6 together: the first two
 discipline plugins, on the plugin contract that makes them possible, plus
-AutoCAD's keyboard and a crash in the core that the work uncovered.
+the classic CAD keyboard and a crash in the core that the work uncovered.
 
-### Added — plugins: the core stays AutoCAD LT, the disciplines plug in
+### Added — plugins: the core stays a lean 2D CAD, the disciplines plug in
 A plugin is a folder that, switched on, adds one menu, its commands and
 tools, an optional toolbar and options page and its own translations —
 and, switched off, removes exactly that (the suite holds every bundled
@@ -532,32 +740,21 @@ on. Everything a plugin draws is plain DXF (POINT, TEXT, LINE, polylines,
   rendered as a ground overlay draped on the terrain.
 - The Flatpak now shares the network for these; nothing else uses it.
 
-### Added — AutoCAD's keyboard, key by key
+### Added — the classic CAD keyboard, key by key
 SNAP (F9 / Ctrl+B: the cursor jumps by the grid on screen), **object snap
 tracking** (F11: pause on a snap point to acquire it, ride the alignment
 paths from it, lock where two meet), **dynamic input** (F12: the prompt
 and the live coordinates beside the cursor; a bare `x,y` after a first
 point is relative, `#x,y` absolute), Shift held as a temporary ortho,
-Ctrl+G/L/U/F for grid/ortho/polar/osnap (Ctrl+F is no longer Find, which
-AutoCAD leaves without a key), Ctrl+1 Properties, Ctrl+9 the command
+Ctrl+G/L/U/F for grid/ortho/polar/osnap (Ctrl+F is no longer Find), Ctrl+1 Properties, Ctrl+9 the command
 line, Ctrl+A select all, Ctrl+W selection cycling, Ctrl+I coordinates,
 Ctrl+J/M repeat, Ctrl+[ and Ctrl+\ cancel, Ctrl+PgUp/PgDn layout tabs,
 Ctrl+Tab drawing windows, Ctrl+Shift+C copy with base point,
 Ctrl+Shift+V paste as block, F1 help. The table is in the README.
 
-### Added — Open CAD Studio as a second DWG satellite
-[Open CAD Studio](https://github.com/acadrust/opencadstudio) (MIT, Rust)
-is found automatically when installed — an AppImage under `~/Aplicaciones`
-or `~/Applications`, `Program Files\Open CAD Studio` on Windows, anything
-on `PATH`, or `INGECAD_OPENCADSTUDIO` — and IngeCAD drives it as a
-converter, the way it drives LibreDWG: the document never parses DWG.
-It brings **DWG r2018 export** ("Save as ▸ DWG 2018 — Open CAD Studio",
-offered only when the tool is present), and on a machine without LibreDWG
-it reads and writes DWG on its own, so the Windows build no longer depends
-on the LibreDWG binaries for `.dwg`. LibreDWG stays first for reading and
-for r2000 writes; Open CAD Studio keeps the source DXF version, so the
-bridge upgrades the intermediate DXF to AC1032 before asking for r2018.
-`ingecad --check` lists the converters it found.
+### Added — an optional second DWG converter
+An external converter, found automatically when installed, added DWG
+r2018 export. (Removed in 0.6.4: LibreDWG is IngeCAD's only DWG engine.)
 
 ### Fixed
 - **A crash in the core, older than the plugins**: Python collected cyclic
@@ -593,7 +790,7 @@ grips reach it through that viewport's projection while the canvas keeps
 showing the sheet.
 
 The projection lives in one place (scale, view centre and twist), and
-AutoCAD's rules come with it: a click only counts inside the active
+The classic rules come with it: a click only counts inside the active
 viewport, one in another viewport makes that one current (mid-command
 too), one on the bare paper does nothing; the crosshair is clipped to the
 viewport and the coordinate readout switches to model units; ZOOM Window
@@ -609,7 +806,7 @@ the model's index), every one after it 12 ms.
 ### Added — automatic save and drawing recovery
 "What happens if I am drawing and it closes on me?" Now: SAVETIME (minutes,
 10 by default, 0 turns it off), an `.sv$` copy, and the Drawing Recovery
-Manager at the next start or in File ▸ Drawing Utilities — AutoCAD's model,
+Manager at the next start or in File ▸ Drawing Utilities — the classic model,
 with its Options ▸ Open and Save page.
 
 The part that is ours is the part that had to be measured: writing a real
@@ -624,7 +821,7 @@ and object count, and opening it returned every object plus the line that
 was never saved — as unsaved work, so a reflex Ctrl+S cannot overwrite the
 good file.
 
-### Added — hatches select and edit like AutoCAD's
+### Added — hatches select and edit the classic way
 A hatch is picked by **clicking on it** (its real shape, islands excluded),
 not only by hitting its boundary, and it is the last candidate for a click
 so a line drawn over it still wins. HATCHEDIT (alias HE, Modify ▸ Object ▸
@@ -648,7 +845,7 @@ reported upstream.
 
 ### Changed — the Layers panel answers at once
 Turning a layer off used to rebuild the whole drawing: 7.7 s on a plan of
-88 897 entities against AutoCAD's instant. The vertices are already on the
+88 897 entities, where other CAD programs are instant. The vertices are already on the
 GPU, so visibility is now a change of alpha (114-383 ms, no rebuild) and
 colour / linetype / lineweight re-tessellate **that layer only** (209-686
 ms on a layer of 139 692 vertices). A layer that also lives inside a block
@@ -657,7 +854,7 @@ still rebuilds, because its geometry belongs to the INSERT.
 The panel's columns were narrower than their own content, so Color,
 Linetype and Lineweight were cut at every width of the sidebar; they size
 themselves to what they hold now, a width you drag is kept, and the header
-has AutoCAD's right-click menu to turn columns off. The right sidebar
+has the classic right-click menu to turn columns off. The right sidebar
 itself runs to the bottom of the window: the command line used to own that
 corner and cut it short.
 
@@ -669,7 +866,7 @@ corner and cut it short.
 
 ## v0.4.6 — 2026-08-27
 
-### Added — the layout sheet is editable, like AutoCAD
+### Added — the layout sheet is editable
 A colleague sent Marco an A1 layout template. It opened perfectly and
 nothing on it could be touched: no move, no erase, no trim, no scale, no
 text edit — the title block could not even be **selected**. That was a
@@ -686,11 +883,11 @@ model uses:
 - **Draw and edit in paper millimetres**: LINE, MOVE, COPY, ERASE, TRIM,
   EXTEND, SCALE, ROTATE, FILLET, dimensions… with object snap to the title
   block's own geometry.
-- **Edit a title block's text** by double-clicking it, exactly as AutoCAD
+- **Edit a title block's text** by double-clicking it, exactly as a classic CAD
   does (MTEDIT's access method *is* the double click) — and the object's
   own action now wins over entering a viewport, as the reference specifies.
 - **A viewport is an object again**: picked by its frame (never by clicking
-  inside it, which is AutoCAD's rule), caught by window/crossing, moved and
+  inside it, which is the classic rule), caught by window/crossing, moved and
   scaled like anything else. MOVE carries its picture along; SCALE ×0.5
   draws it at half size — which is what refitting an A1 sheet to A3 needs.
 
@@ -715,11 +912,11 @@ coordinates against the model's index.
 
 ### Added — the model background is yours (Drawing Window Colors)
 Colleagues who draw on white or cream can now have it: **Options ▸ Display
-▸ Colors...** opens AutoCAD's *Drawing Window Colors* dialog — context
+▸ Colors...** opens the *Drawing Window Colors* dialog — context
 list (2D model space, Sheet / layout, Block editor), interface elements
 (Uniform background, Crosshairs), the colour drop-down with *Select
 Color...*, a live preview, and the four restore buttons including
-**Restore classic colors** (the black model space of old AutoCAD).
+**Restore classic colors** (the black model space of classic CAD).
 
 The choice is more than a clear colour, and this is where being identical
 matters: **ACI-7 entities flip** (white over dark, black over light — the
@@ -775,7 +972,7 @@ Two defences, verified independently and together:
 
 ## v0.4.4 — 2026-08-24
 
-Marco opened a fence plan next to BricsCAD and reported three things. All
+Marco opened a fence plan next to another CAD and reported three things. All
 three were real, and none was what it looked like.
 
 ### Fixed — every leader label was a blank white box
@@ -832,7 +1029,7 @@ such directory exists. The same trap sat in every save dialog, where a bare
 
 Both halves are fixed, and the fix is worth more than the bug:
 - **Dialogs now open where you were last**, then in the folder of the drawing
-  you have open, then Documents, then home — which is what AutoCAD does and
+  you have open, then Documents, then home — which is
   what the app should have done from the start. All seven dialogs (open,
   save as, template, PDF, image, PDF underlay, startup) go through one
   helper, and a test fails if a new one bypasses it.
@@ -874,7 +1071,7 @@ of its own — one click to install, and later versions arrive by themselves.
   them off-screen. Both are now transformed in one pass, clipped to the
   window and drawn in a single call. A frame with 3000 objects selected:
   **20.6 ms → 6.7 ms**.
-- **Grips follow AutoCAD's GRIPOBJLIMIT** (p. 2339): past 100 selected
+- **Grips follow GRIPOBJLIMIT**: past 100 selected
   objects they are suppressed *entirely*, as the reference says, instead of
   being thinned to the first 200 entities — which on a cadastre meant 2448
   squares repainted every frame for a display nobody can use at that size.
@@ -926,18 +1123,17 @@ noise. But the complaint underneath was real and long-standing:
   project's Wayland gotcha says it belongs — verified under a native Wayland
   session, not just XCB.
 - **A 40 cm circle was drawn with eight segments** — a visible octagon when
-  you zoom in, which is word for word what AutoCAD's own VIEWRES page warns
-  about. **`VIEWRES`** now exists, as a command and as "Arc and circle
-  smoothness" in the dialog, with AutoCAD's scale and its default of 1000.
+  you zoom in, which is exactly what VIEWRES exists to prevent. **`VIEWRES`** now exists, as a command and as "Arc and circle
+  smoothness" in the dialog, with the standard scale and its default of 1000.
   Raising it to 8000 makes the circle round; measured on two real plans that
   costs +0.6% vertices and no measurable regen time, because a civil drawing
   is overwhelmingly straight lines.
 
 ### Added — the cursor is yours now
-Under AutoCAD's own names, since that is where the muscle memory looks:
+Under their standard names, since that is where the muscle memory looks:
 - **Crosshair size** (`CURSORSIZE`, Options ▸ Display) — 1 to 100 % of the
   screen. IngeCAD keeps drawing it full-screen by default, because that is
-  what it has always done; AutoCAD's own default of 5 is one number away.
+  what it has always done; the usual default of 5 is one number away.
 - **Crosshair colour** — any colour, or *Automatic*, which is the behaviour
   there has always been: light over the dark model, dark over a white sheet.
 - **Pickbox size** (`PICKBOX`, Options ▸ Selection) — and this one is more
@@ -959,7 +1155,7 @@ anything since it shipped.** The names are static setters for exactly this
 case and now come first.
 
 ### Added — leaders finally have grips
-- **A LEADER now shows a square on every vertex**, as AutoCAD does, so its
+- **A LEADER now shows a square on every vertex**, so its
   direction can be changed by dragging instead of only being selected.
   Marco found the gap on a real sheet: "esa línea con el texto PEDESTAL VER
   DETALLE... en IngeCAD sólo se selecciona". **MULTILEADER** got the same
@@ -981,7 +1177,7 @@ the geometry, undo, demand it comes back. Three failed, silently:
 - **Selectable now reaches the file.** The flag lived in a Python set on the
   document, so every "not selectable" group came back selectable after a
   save and reload. It belongs in the GROUP object (code 71), which is where
-  AutoCAD keeps it and where a colleague's CAD will look for it.
+  DWG files keep it and where a colleague's CAD will look for it.
 - **The dialog stopped losing your place.** Every action ended by rebuilding
   the list, which left no row selected — so the *next* Add, Remove or
   Selectable click silently did nothing at all.
@@ -1023,10 +1219,10 @@ outside contributor's two reports both answered with machinery.
   object answers — the dimension under the text somebody typed over it.
   A cycled click swaps the selection ("the other one", not "both"), and
   Shift never cycles. What one click selects is unchanged by construction.
-- **Commands in Spanish**, the way a Spanish AutoCAD spells them: `LINEA`,
+- **Commands in Spanish**, with their usual Spanish names: `LINEA`,
   `CIRCULO`, `BORRA`, `DESPLAZA`, `RECORTA`, `ACOLINEAL` — 58 names, and
   English never stops working: `L`, `LINE` and `_LINE` all draw with any
-  language active, as does AutoCAD's `_` global prefix. Localized prompt
+  language active, as does the `_` global prefix. Localized prompt
   keywords too: with Spanish active, `Suprimir`, `D` and `_D` all delete a
   layout, read straight out of the translation's `[Suprimir(D)]`.
 - **A language is now a folder** (`i18n/<code>/meta.json + ui.json`): adding
@@ -1087,7 +1283,7 @@ settings window, and the sheet navigating at speed.
   isolation, display-only as the reference insists ("temporarily"): nothing
   in the drawing changes, it never reaches the file, and a hidden object
   cannot be picked either.
-- **`SELECTSIMILAR`** with its Select Similar Settings dialog and AutoCAD's
+- **`SELECTSIMILAR`** with its Select Similar Settings dialog and the usual
   default (layer plus block name).
 - **`ADDSELECTED`**: the picked object's general properties become current
   and the command that draws its type starts.
@@ -1097,7 +1293,7 @@ settings window, and the sheet navigating at speed.
 - **`GROUP`**: the Object Grouping dialog, names validated to the
   documented rule, and picking one member selecting the whole group
   (per-group Selectable, all of it off under PICKSTYLE 0). Groups live in
-  the drawing's own dictionary, so one made here is a group in AutoCAD.
+  the drawing's own dictionary, so one made here is a group in any CAD that reads the DWG.
 - **`FIND`**: find and replace across the drawing, a layout or the
   selection, with the results list, Zoom to and Select — undoable, and it
   reaches text, MTEXT, attributes and dimension overrides.
@@ -1105,11 +1301,10 @@ settings window, and the sheet navigating at speed.
   unit conversion over the reference's four unit types. Expressions are
   evaluated by walking the parse tree and refusing anything that is not
   arithmetic.
-- **`OPTIONS`** (`OP`): the settings window, under AutoCAD's own tab names
+- **`OPTIONS`** (`OP`): the settings window, under the familiar tab names
   — Files, Display, Drafting and User Preferences. Among them a real new
   setting: **Right-click Customization**, so the right button on an idle
-  canvas can be the shortcut menu or Enter, the way many drafters set
-  AutoCAD up.
+  canvas can be the shortcut menu or Enter, the way many drafters set up their CAD.
 - **Draw Order in one click** from Tools and from the shortcut menu, and
   **Properties shows the style of every styled object** — a dimension's
   Dim style (editable, re-rendering it), a text's or attribute's style, a
@@ -1135,8 +1330,7 @@ settings window, and the sheet navigating at speed.
   broken; the key was being eaten by the command line, which claims it for
   its own text undo. In a CAD that key means the drawing, wherever the
   focus is.
-- **The dimension style preview drew no dimensions at all** for any style
-  with an AutoCAD arrowhead (`_ARCHTICK` — every architectural style), and
+- **The dimension style preview drew no dimensions at all** for any style with a standard arrowhead (`_ARCHTICK` — every architectural style), and
   no text for styles meant for drawings in metres. The sample sizes itself
   to the style now.
 - **The crosshair jumped back to where a pan started** instead of staying
@@ -1171,10 +1365,10 @@ A bug-fix release with one headline: **accents survive "Save as DWG"**.
   IngeCAD now works around it on both sides: the intermediate DXF handed to
   the converter goes out as R2000 — the version the DWG will have anyway, so
   the downgrade cannot cost anything an r2000 DWG could carry — and `MTEXT`
-  is pre-escaped to `\U+xxxx`, AutoCAD's own notation for a character the
+  is pre-escaped to `\U+xxxx`, the standard DXF notation for a character the
   codepage cannot hold, which is pure ASCII and leaves nothing to
   mistranslate. Opening a DWG decodes those escapes again, so drawings that
-  AutoCAD itself wrote that way now show the character instead of the raw
+  other CAD programs wrote that way now show the character instead of the raw
   code.
 - **Old drawings saved as an empty DWG.** Four R12 files in the test bench
   produced a DWG with no entities at all; they now come back complete. Same
@@ -1197,16 +1391,16 @@ A bug-fix release with one headline: **accents survive "Save as DWG"**.
 
 ## v0.3.1 — 2026-08-12
 
-A second dogfooding day against BricsCAD V26, on a real plan (`casa bueno`).
+A second dogfooding day against another CAD program, on a real plan (`casa bueno`).
 This one is mostly **bugs Marco hit while drawing** — the kind only real use
-finds — plus the quick wins from the strategic review of BricsCAD's menus.
+finds — plus the quick wins from a review of classic CAD menus.
 
 ### Added
 - **The Standard toolbar** (New/Open/Save/Plot/Undo/Redo/Cut/Copy/Paste/
   Zoom/Pan), sharing one row with Modify. **Clean Screen (Ctrl+0)** clears
-  every panel and toolbar but the command window, like AutoCAD's.
+  every panel and toolbar but the command window.
 - **Raster images**: `IMAGEATTACH` (PNG/JPEG/BMP/GIF/TIFF, referenced like
-  AutoCAD — the file is linked, not embedded), corner grips that resize
+  a reference — the file is linked, not embedded), corner grips that resize
   about the opposite corner, `IMAGEADJUST` (brightness/contrast/fade) and
   `TRANSPARENCY` with a degree from 0 to 90 %, in the Properties panel too.
 - **`PDFATTACH`**: a PDF page rasterized at 150 DPI and placed as an image —
@@ -1218,11 +1412,11 @@ finds — plus the quick wins from the strategic review of BricsCAD's menus.
   in the Draw toolbar.
 - **Grips on every selectable type**: SPLINE (fit or control points),
   ELLIPSE (centre + four axis ends), IMAGE, TEXT, MTEXT, INSERT, XLINE/RAY,
-  SOLID, HATCH — and **DIMENSION grips like AutoCAD's**: drag an extension
+  SOLID, HATCH — and **DIMENSION grips**: drag an extension
   origin to re-measure, the dimension line to relocate, the text grip to
   move the label. Dragging a dimension grip near another dimension snaps to
-  its line, with BricsCAD's green alignment square.
-- **`DRAWORDER`** (send to back / bring to front, written as AutoCAD's
+  its line, with a green alignment square.
+- **`DRAWORDER`** (send to back / bring to front, written as the standard
   SORTENTSTABLE) and the layer tools **`LAYISO` / `LAYOFF` / `LAYON` /
   `LAYUNISO`**.
 - **The Select Color palette** (the full 255-index ACI grid) wherever a
@@ -1251,7 +1445,7 @@ finds — plus the quick wins from the strategic review of BricsCAD's menus.
   turned white, the label flipped from aligned to horizontal, or landed on
   the wrong side of the line. All three preserved now.
 - **`MATCHPROP` matched dimensions, text height, and colour properly**: it
-  now copies the *effective* height and colour (AutoCAD's inline `\H` and
+  now copies the *effective* height and colour (the inline `\H` and
   `\C` codes, not the attribute residue), and copies "ByLayer" itself
   rather than skipping absent properties.
 - **`REVCLOUD` arcs bulged inward** — a saw blade, not a cloud.
@@ -1266,11 +1460,11 @@ finds — plus the quick wins from the strategic review of BricsCAD's menus.
 
 ## v0.3.0 — 2026-08-11
 
-A day of dogfooding against AutoCAD and BricsCAD V26, command by command:
-Marco drew in IngeCAD with BricsCAD open beside it and every divergence
+A day of dogfooding against other CAD programs, command by command:
+Marco drew in IngeCAD with another CAD open beside it and every divergence
 became a fix or a feature. The headline is the MTEXT in-place editor,
-built from the official In-Place Text Editor chapter of the AutoCAD 2011
-Command Reference (pp. 1221–1244).
+built from the documented in-place text editor behaviour
+of classic CAD.
 
 ### Added — the MTEXT in-place editor
 - **Edit on the canvas**, at the text's real size and position, drawing
@@ -1279,15 +1473,15 @@ Command Reference (pp. 1221–1244).
   edit it; TEXT keeps its single-line in-place editing.
 - **The Text Formatting toolbar**: style, font, height, bold, italic,
   underline, overline, colour, justification (all nine positions) — each
-  written as AutoCAD's own inline codes (`\f`, `\H`, `\L`, `\O`, `\C`),
-  so the file reads identically in AutoCAD.
+  written as the standard MTEXT inline codes (`\f`, `\H`, `\L`, `\O`, `\C`),
+  so the file reads identically in any CAD.
 - **The ruler**: first-line and hanging indent sliders, tab stops with the
   L/C/R tab-type button, the width arrow (drag to resize, double-click to
   fit), all stored as `\px` paragraph codes.
 - **Line spacing** (1.0x/1.5x/2.0x/2.5x/More…/Clear) and **bullets and
   numbered/lettered lists**: Enter continues the list, Enter on an empty
   item ends it, `1.` or `-` plus Tab starts one — plain text plus indents,
-  exactly the construction AutoCAD writes.
+  exactly the standard construction.
 - **Background mask** (border offset factor, fill colour or drawing
   background) and **static columns** with the Column Settings dialog.
 - Formatting the editor cannot represent losslessly (stacked fractions,
@@ -1303,7 +1497,7 @@ Command Reference (pp. 1221–1244).
   and ruler (the canvas hides the OS cursor — the crosshair is the
   cursor — and child widgets inherited it).
 
-### Added — editing, to AutoCAD's prompt trees
+### Added — editing, to the standard prompt trees
 - **STRETCH** (crossing selection semantics), **BREAK** (first/second
   point, `@` for break-at-point), **JOIN**, **CHAMFER** (distances,
   angle, polyline, Undo), **ARRAY** (rectangular/polar), **MATCHPROP**
@@ -1311,32 +1505,32 @@ Command Reference (pp. 1221–1244).
   editing).
 - **OFFSET grown to the full tree**: distance by mouse (two picks),
   Through, Erase, Layer — and it offsets **polylines as one entity**,
-  arcs included, like AutoCAD.
+  arcs included.
 - **ROTATE and SCALE preview live**: the selection turns/scales under the
   cursor around the base point, with Reference and Copy options.
 - Object snaps work **on curves** (circles, arcs, ellipses, splines,
   polyline arc segments), plus **QUA** on every round shape, **TAN**,
-  **INS** and **GCE** (geometric center) — with their AutoSnap markers.
-- **The running object snap list** on the status bar, AutoCAD's own
+  **INS** and **GCE** (geometric center) — with their snap markers.
+- **The running object snap list** on the status bar, the classic one
   (right-click the OSNAP button): per-mode checkboxes, Select All /
   Clear All, and the Drafting Settings dialog.
 
 ### Added — the working session
 - **SAVE / Ctrl+S** (with save-as when untitled), **UNITS** (mm/cm/m,
-  the AutoCAD dialog), and the inquiry commands **DIST / ID / AREA /
+  the classic dialog), and the inquiry commands **DIST / ID / AREA /
   LIST**.
-- **A startup window** like BricsCAD's: pick the template unit, or reopen
+- **A startup window**: pick the template unit, or reopen
   a recent drawing from its thumbnail.
 - **Command prefix autocomplete**: an unambiguous prefix runs the command
   (`OFF` → OFFSET), aliases still win, ambiguity resolves alphabetically
-  — AutoCAD's AutoComplete rule.
+  — the usual autocomplete rule.
 - **Properties bar completed**: linetype, lineweight and colour of the
   selection, and the current-properties defaults for new entities
   ($CECOLOR/$CELTYPE/$CELWEIGHT round-trip to the DXF header).
-- **The Modify toolbar icons redrawn from AutoCAD's own** (traced from a
+- **The Modify toolbar icons redrawn in the classic style** (traced from a
   screenshot, not from memory — the first attempt proved memory draws
   the wrong icons).
-- The crosshair yields to AutoCAD's pickbox-only cursor while a command
+- The crosshair yields to the classic pickbox-only cursor while a command
   is choosing objects, and returns for point picks.
 - Fixed: Ctrl+Y did nothing (the redo key was bound twice, so Qt fired
   neither); selecting an ellipse highlighted its bounding rectangle.
@@ -1350,13 +1544,13 @@ Command Reference (pp. 1221–1244).
 ## v0.2.0 — 2026-08-10
 
 Paper space and the complete dimension family. Everything in this release was
-built the same way: fetch the official AutoCAD documentation first (BricsCAD
-cross-checked — its option lists match AutoCAD's in every command we compared),
+built the same way: take the documented behaviour of classic CAD first (other CAD
+cross-checked — option lists match in every command we compared),
 then implement the exact prompt tree, then verify the result live against the
-reference. If AutoCAD prints `Specify dimension line location or
+reference. If a classic CAD prints `Specify dimension line location or
 [Mtext/Text/Angle/Horizontal/Vertical/Rotated]:`, so does IngeCAD.
 
-### Added — paper space (Model/Layout, the AutoCAD idiom end-to-end)
+### Added — paper space (Model/Layout, the classic idiom end-to-end)
 - **Layout tabs** under the canvas (Model / Layout1 / …) with the LAYOUT
   command (New/Copy/Rename/Delete/Set), the paper sheet drawn with its
   printable-area margin, and the classic right-click tab menu.
@@ -1367,9 +1561,9 @@ reference. If AutoCAD prints `Specify dimension line location or
   (`1/50xp` = 1:50), a Viewports toolbar with the standard-scale dropdown,
   wheel zoom + middle-drag pan inside the active viewport, and **VPLOCK** so
   a set scale can't be nudged by a stray wheel tick.
-- **PAGESETUP** rebuilt as AutoCAD's Page Setup dialog, group by group
+- **PAGESETUP** rebuilt as the classic Page Setup dialog, group by group
   (printer/paper/area/offset/scale/orientation/options), stored per layout in
-  the DXF plot settings like AutoCAD stores them.
+  the DXF plot settings, the standard place.
 - **PLOT of a layout**: the sheet maps to paper at 1:1 (viewports carry the
   scale), pens in physical millimetres (0.25 mm default), viewport frames
   plotted only when their flag says so. Verified with a ruler on the PDF.
@@ -1383,7 +1577,7 @@ reference. If AutoCAD prints `Specify dimension line location or
 - **DIMORDINATE** (`DOR`): X/Y datum with the official auto rule (leader
   direction picks the axis) and Xdatum/Ydatum forcing.
 - **DIMCENTER** (`DCE`): center mark or center lines per DIMCEN, the exact
-  AutoCAD geometry.
+  standard geometry.
 - **DIMCONTINUE / DIMBASELINE** (`DCO`/`DBA`): chain from the session's last
   linear dimension (or Select a base); continue keeps the base's dimension
   line, baseline stacks each line DIMDLI beyond the previous; Undo inside the
@@ -1404,7 +1598,7 @@ reference. If AutoCAD prints `Specify dimension line location or
   (MEASURE steps from the end nearest the pick, official rule); each command
   is ONE undo step.
 - **REVCLOUD**: Rectangular/Polygonal/Freehand/Object (+Reverse), sticky arc
-  length, Normal/Calligraphy styles — the scalloped cloud AutoCAD draws.
+  length, Normal/Calligraphy styles — the classic scalloped cloud.
 
 ### Changed — drawing commands brought to prompt-tree parity
 - **ARC**: the full 11-way construction matrix (3P, S-C-E, S-C-Angle,
@@ -1414,16 +1608,16 @@ reference. If AutoCAD prints `Specify dimension line location or
   **PLINE**: arc mode with tangent chaining, Width/Halfwidth taper, Close in
   both modes. **RECTANG**: Chamfer/Fillet/Width/Elevation/Thickness, Area,
   Dimensions, Rotation. **POLYGON**: Edge, Inscribed/Circumscribed with the
-  AutoCAD drag semantics. **ELLIPSE**: Arc (parametric, like AutoCAD) and
+  standard drag semantics. **ELLIPSE**: Arc (parametric) and
   Rotation; the axis-swap rule fixed to match the spec. **TEXT**: the 14
   justification anchors, Style, Align/Fit. **-HATCH**: the command-line hatch
   with Properties/Solid/User-defined/draW/Advanced/COlor.
-- Session-sticky defaults where AutoCAD has them (CIRCLERAD, PLINEWID,
+- Session-sticky defaults where classic CAD has them (CIRCLERAD, PLINEWID,
   POLYSIDES, rectangle modes, hatch pattern), and new toolbar icons for every
   new command.
 
 ### Added — the Dimension Style Manager (DIMSTYLE)
-- `DIMSTYLE` (`D`) opens **AutoCAD's Dimension Style Manager**: styles list
+- `DIMSTYLE` (`D`) opens **the Dimension Style Manager**: styles list
   with the current one in bold, All styles / Styles in use filter, a live
   **preview that is a real render** (a sample drawing dimensioned with the
   selected style), description against the current style, Set Current / New /
@@ -1437,7 +1631,7 @@ reference. If AutoCAD prints `Specify dimension line location or
   the three text alignments = DIMTIH/DIMTOH). Alternate Units, Tolerances,
   Override and Compare are recorded gaps, not silent omissions.
 - **Modifying a style re-renders every dimension drawn with it**, undo
-  included — AutoCAD's own semantics.
+  included — the standard semantics.
 
 ### Added — layers, audited against the manual
 - **`-LAYER` (`-LA`)**, the command-line variant with the official option
@@ -1583,7 +1777,7 @@ something to download: a self-contained AppImage.
   visible — so "Opening x…" was rendered on top of the coordinates, both
   illegible. The window is shown first, the coordinate slot has exactly one
   writer, and every notice ("Opened x", "Saved x", the F7/F8/F9 toggles, "PDF
-  saved") moved to the command line, where an AutoCAD user reads them and where
+  saved") moved to the command line, where a CAD user reads them and where
   the history keeps them.
 - **Every opened `.dwg` used to leak its converted DXF.** 189 orphaned
   `/tmp/ingecad-dwg-*` directories, 2.4 GB — and `/tmp` is a tmpfs on most
@@ -1634,7 +1828,7 @@ icons for the drawings you work with.
 
 ## v0.1.0 — 2026-07-18
 
-First usable release: the free "AutoCAD LT" workflow for Linux, end to end.
+First usable release: the free classic 2D CAD workflow for Linux, end to end.
 
 ### Highlights
 - Faithful rendering of real-world DWG/DXF (nested blocks, MTEXT, hatch
@@ -1644,12 +1838,12 @@ First usable release: the free "AutoCAD LT" workflow for Linux, end to end.
   verified-save round-trip check) and optional ODA File Converter export
   (r2018). Numerous LibreDWG encoder/decoder fixes were developed against
   a 1,385-file corpus (99% now convert) and are being upstreamed.
-- Classic pre-ribbon UI with a real command line and `acad.pgp`-compatible
+- Classic pre-ribbon UI with a real command line and `.pgp`-compatible
   aliases; Model/Layout tabs; Layers, Properties and Styles panels.
 - Full 2D drafting set: draw (line, circle, arc, polyline, rectangle,
   polygon, text, hatch, dimensions), edit (erase, move, copy, rotate,
   scale, mirror, offset, trim, extend, fillet, explode), grips,
-  window/crossing selection, object snaps with AutoSnap markers,
+  window/crossing selection, object snaps with their markers,
   ORTHO/POLAR, coordinate input, blocks, undo/redo.
 - Print / PDF / PNG export at exact scale.
 

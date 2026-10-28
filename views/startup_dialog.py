@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core import gc_guard
 from core import recent as recent_mod
 from core import templates as templates_mod
 from core.i18n import tr
@@ -82,8 +83,13 @@ _ORPHANS: set = set()
 
 
 def _park_orphan(worker) -> None:
+    # Finished ones are let go here, on the GUI thread. A lambda on the
+    # worker's own `finished` ran ON the worker's thread (PySide calls a
+    # plain callable in the emitter's thread) and dropped the last
+    # reference to the QThread from inside it.
+    for done in [w for w in _ORPHANS if w.isFinished()]:
+        _ORPHANS.discard(done)
     _ORPHANS.add(worker)
-    worker.finished.connect(lambda w=worker: _ORPHANS.discard(w))
 
 
 def drain_orphans() -> None:
@@ -208,7 +214,7 @@ class StartupDialog(QDialog):
         if missing:
             self._worker = _ThumbnailWorker(missing)
             self._worker.ready.connect(self._thumbnail_ready)
-            self._worker.start()
+            gc_guard.start(self._worker)
 
     def _thumbnail_ready(self, drawing: str, thumb: str) -> None:
         for row in range(self.recent.count()):

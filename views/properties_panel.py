@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core import actions, layers as layer_ops
+from core import actions, layers as layer_ops, pickfilter, text_justify
 from core.i18n import tr
 
 BYLAYER_LW = -1          # AutoCAD's ByLayer lineweight sentinel
@@ -135,7 +135,7 @@ class PropertiesPanel(QWidget):
         from collections import Counter
         counts = Counter(e.dxftype() for e in self._all)
         for t, c in sorted(counts.items()):
-            label = _TYPE_LABEL.get(t, t.title())
+            label = pickfilter.display(pickfilter.type_label(t))
             self.filter_cb.addItem(f"{label} ({c})" if c > 1 else label, t)
         idx = self.filter_cb.findData(self._filter)
         self.filter_cb.setCurrentIndex(max(0, idx))
@@ -233,9 +233,12 @@ class PropertiesPanel(QWidget):
         if text == "":
             return
         if row.kind == "num":
+            # a decimal comma is how half the users type it ("0,0035" was
+            # dropped without a word)
             try:
-                value = float(text)
+                value = float(text.replace(",", "."))
             except ValueError:
+                self.window.command_line.echo(tr("Requires a numeric value."))
                 return
         else:
             value = text
@@ -287,7 +290,11 @@ class PropertiesPanel(QWidget):
     def _schema(self, entities: list):
         types = {e.dxftype() for e in entities}
         sections = [(tr("General"), self._general_rows(types))]
-        if len(types) == 1 and len(entities) == 1:
+        # One type, one object or many: AutoCAD shows the type's rows for
+        # the whole selection (*VARIES* where they differ) and an edit lands
+        # on every object -- #57: five texts in different styles could not
+        # be given one style, the Text section only came for a lone text.
+        if len(types) == 1:
             builder = _TYPE_ROWS.get(next(iter(types)))
             if builder is not None:
                 sections.append(builder(self, entities[0]))
@@ -431,7 +438,31 @@ def _lwpolyline_rows(panel, e):
     return (tr("Geometry"), rows)
 
 
+
+def _annotative_row(panel):
+    """AutoCAD's Annotative property (#73): make existing texts and
+    dimensions annotative, so OBJECTSCALE can give them more scales."""
+    from core import annotative
+
+    def apply(value):
+        ents = panel._active()
+        if ents:
+            panel.window.history.execute(
+                annotative.AnnotativePropertyCommand(ents, bool(value)))
+            panel.window.regen_in_memory()
+
+    return Row(tr("Annotative"), "combo",
+               lambda e: 1 if annotative.is_annotative(e) else 0, apply,
+               [(tr("No"), 0), (tr("Yes"), 1)])
+
 def _text_rows(panel, e):
+    def set_justify(v):
+        # #77: the letters stay put; only the alignment point moves
+        def mutate():
+            for ent in panel._active():
+                text_justify.set_justification(ent, v)
+        panel._in_place(mutate)
+
     def set_text(v):
         def mutate():
             for ent in panel._active():
@@ -441,6 +472,8 @@ def _text_rows(panel, e):
         Row(tr("Contents"), "str", lambda e: e.dxf.text, set_text),
         Row(tr("Style"), "combo", lambda e: e.dxf.get("style", "Standard"),
             lambda v: panel._set_prop("style", v), _style_items(panel)),
+        Row(tr("Justify"), "combo", text_justify.justification, set_justify,
+            [(tr(label), name) for label, name in text_justify.JUSTIFICATIONS]),
         Row(tr("Height"), "num", lambda e: e.dxf.height,
             lambda v: panel._set_prop("height", v)),
         Row(tr("Rotation"), "num", lambda e: e.dxf.get("rotation", 0.0),
@@ -450,6 +483,7 @@ def _text_rows(panel, e):
         Row(tr("Obliquing"), "num", lambda e: e.dxf.get("oblique", 0.0),
             lambda v: panel._set_prop("oblique", v)),
     ]
+    rows.append(_annotative_row(panel))
     rows += _pt_rows(panel, "insert", tr("Position"))
     return (tr("Text"), rows)
 
@@ -460,6 +494,9 @@ def _mtext_rows(panel, e):
             lambda e: e.text.replace("\n", " ")[:40]),
         Row(tr("Style"), "combo", lambda e: e.dxf.get("style", "Standard"),
             lambda v: panel._set_prop("style", v), _style_items(panel)),
+        Row(tr("Justify"), "combo", lambda e: e.dxf.get("attachment_point", 1),
+            lambda v: panel._set_prop("attachment_point", v),
+            [(tr(label), n) for label, n in text_justify.ATTACHMENTS]),
         Row(tr("Text height"), "num", lambda e: e.dxf.char_height,
             lambda v: panel._set_prop("char_height", v)),
         Row(tr("Rotation"), "num", lambda e: e.dxf.get("rotation", 0.0),
@@ -467,6 +504,7 @@ def _mtext_rows(panel, e):
         Row(tr("Width"), "num", lambda e: e.dxf.get("width", 0.0),
             lambda v: panel._set_prop("width", v)),
     ]
+    rows.append(_annotative_row(panel))
     rows += _pt_rows(panel, "insert", tr("Position"))
     return (tr("Text"), rows)
 
@@ -493,11 +531,31 @@ def _hatch_rows(panel, e):
         Row(tr("Solid fill"), "ro",
             lambda e: tr("Yes") if e.dxf.solid_fill else tr("No")),
         Row(tr("Pattern angle"), "num", lambda e: e.dxf.get("pattern_angle", 0.0),
-            lambda v: panel._set_prop("pattern_angle", v)),
+            lambda v: _set_hatch_pattern(panel, "angle", v)),
         Row(tr("Pattern scale"), "num", lambda e: e.dxf.get("pattern_scale", 1.0),
-            lambda v: panel._set_prop("pattern_scale", v)),
+            lambda v: _set_hatch_pattern(panel, "scale", v)),
     ]
     return (tr("Pattern"), rows)
+
+
+def _set_hatch_pattern(panel, what: str, value: float) -> None:
+    """A hatch's pattern lines carry its scale and angle: setting the DXF
+    value alone redrew the pattern as it was (#86, Rafael). ezdxf scales or
+    turns the hatch's own lines, so a colleague's custom pattern stays
+    itself; the snapshot of _in_place restores them on undo."""
+    if what == "scale" and value <= 0:
+        panel.window.command_line.echo(tr("Requires a positive number."))
+        return
+
+    def mutate():
+        for e in panel._active():
+            if e.dxftype() != "HATCH":
+                continue
+            if what == "scale":
+                e.set_pattern_scale(value)
+            else:
+                e.set_pattern_angle(value)
+    panel._in_place(mutate)
 
 
 def _polyline_length(e) -> float:
@@ -580,14 +638,46 @@ def _dimension_rows(panel, e):
             lambda v: panel._set_prop("text_rotation", v)),
     ]
     rows += _pt_rows(panel, "text_midpoint", tr("Text position"))
+    rows.append(_annotative_row(panel))
     return (tr("Dimension"), rows)
 
 
+def _set_attribute(panel, prop: str, value: str) -> None:
+    """Tag, prompt or value of the selected attributes, one undo step
+    (#88: a definition's tag, prompt and default could not be edited)."""
+    from core import attributes as att
+
+    if prop == "tag":
+        value = att.normal_tag(value)
+        if not value:
+            return
+    changes = [(e, prop, value) for e in panel._active()
+               if e.dxftype() in ("ATTRIB", "ATTDEF")
+               and (prop != "prompt" or e.dxftype() == "ATTDEF")]
+    if changes:
+        panel.window.tools._execute(att.EditAttribsCommand(changes))
+
+
 def _attrib_rows(panel, e):
-    """ATTRIB and ATTDEF carry a text style like any other text."""
-    rows = [
-        Row(tr("Tag"), "ro", lambda e: e.dxf.get("tag", "")),
-        Row(tr("Contents"), "ro", lambda e: e.dxf.get("text", "")),
+    """ATTRIB and ATTDEF carry a text style like any other text. A
+    definition edits its tag, prompt and default here, as AutoCAD's
+    Properties does; a reference's attribute its value."""
+    if e.dxftype() == "ATTDEF":
+        rows = [
+            Row(tr("Tag"), "str", lambda e: e.dxf.get("tag", ""),
+                lambda v: _set_attribute(panel, "tag", v)),
+            Row(tr("Prompt"), "str", lambda e: e.dxf.get("prompt", ""),
+                lambda v: _set_attribute(panel, "prompt", v)),
+            Row(tr("Value"), "str", lambda e: e.dxf.get("text", ""),
+                lambda v: _set_attribute(panel, "text", v)),
+        ]
+    else:
+        rows = [
+            Row(tr("Tag"), "ro", lambda e: e.dxf.get("tag", "")),
+            Row(tr("Value"), "str", lambda e: e.dxf.get("text", ""),
+                lambda v: _set_attribute(panel, "text", v)),
+        ]
+    rows += [
         Row(tr("Style"), "combo", lambda e: e.dxf.get("style", "Standard"),
             lambda v: panel._set_prop("style", v), _style_items(panel)),
         Row(tr("Height"), "num", lambda e: e.dxf.get("height", 1.0),
@@ -609,12 +699,6 @@ def _leader_rows(panel, e):
     ])
 
 
-_TYPE_LABEL = {
-    "LINE": "Line", "CIRCLE": "Circle", "ARC": "Arc", "ELLIPSE": "Ellipse",
-    "LWPOLYLINE": "Polyline", "POLYLINE": "Polyline", "POINT": "Point",
-    "TEXT": "Text", "MTEXT": "MText", "INSERT": "Block Reference",
-    "HATCH": "Hatch", "DIMENSION": "Dimension",
-}
 
 def _image_rows(panel, e):
     from ezdxf.entities.image import Image as _Image

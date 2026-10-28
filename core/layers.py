@@ -25,12 +25,14 @@ LINEWEIGHTS = [-3, 0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70,
 
 
 def lineweight_label(value: int) -> str:
+    """A lineweight as the interface shows it, translated (the Layers
+    panel showed "Default" in English)."""
     if value == -3:
-        return "Default"
+        return tr("Default")
     if value == -2:
-        return "ByBlock"
+        return tr("ByBlock")
     if value == -1:
-        return "ByLayer"
+        return tr("ByLayer")
     return f"{value / 100:.2f} mm"
 
 
@@ -49,23 +51,36 @@ class LayerInfo:
     in_use: bool = False        # any entity anywhere references it
 
 
+def placed_entities(document):
+    """Every graphic entity the drawing holds: model space, every layout and
+    every block definition, plus the ATTRIBs and POLYLINE vertices that live
+    on their parent. Not the entity database: an erased entity stays alive
+    there for the undo, so "in use" questions asked of it never let go of a
+    layer or style emptied by ERASE (#64)."""
+    from ezdxf.entities import DXFGraphic
+
+    for block in document.doc.blocks:
+        for e in block:
+            if not isinstance(e, DXFGraphic):
+                continue
+            yield e
+            kind = e.dxftype()
+            if kind == "INSERT":
+                yield from e.attribs
+            elif kind == "POLYLINE":
+                yield from e.vertices
+
+
 def layers_in_use(document) -> set[str]:
     """Layer names referenced by any entity — every layout AND every block
     definition (AutoCAD's delete guard counts those as referenced too)."""
-    from ezdxf.entities import DXFGraphic
-
-    # A full entitydb walk (~20 ms on a real plan) that the properties
-    # toolbar used to repeat on every selection change. Nothing but an EDIT
-    # can change the answer, and every edit bumps the revision.
+    # A full walk (~20 ms on a real plan) that the properties toolbar used
+    # to repeat on every selection change. Nothing but an EDIT can change
+    # the answer, and every edit bumps the revision.
     cached = getattr(document, "_layers_in_use_cache", None)
     if cached is not None and cached[0] == document.revision:
         return cached[1]
-    used: set[str] = set()
-    for e in document.doc.entitydb.values():
-        if e.is_alive and isinstance(e, DXFGraphic):
-            name = e.dxf.get("layer", None)
-            if name:
-                used.add(name)
+    used = {e.dxf.get("layer", "0") for e in placed_entities(document)}
     try:
         document._layers_in_use_cache = (document.revision, used)
     except Exception:

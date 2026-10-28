@@ -1032,3 +1032,37 @@ def test_minus_hatch_alias():
     from core.aliases import DEFAULT_ALIASES, resolve
 
     assert resolve("-H", DEFAULT_ALIASES) == "-HATCH"
+
+
+# -- TEXT: height and rotation picked with the mouse ----------------------------
+# AutoCAD's "Specify height" and "Specify rotation angle" take a point as well
+# as a number: the height is the distance from the start point, the angle the
+# direction to it, both with a rubber band from the start point (Marco's
+# recording of AutoCAD 2026, 2026-10-09). A pick there used to do nothing.
+
+def test_text_height_and_rotation_by_points():
+    h = Harness()
+    tool = TextTool(h.ctx)
+    tool.start()
+    tool.on_point((10.0, 10.0))
+    tool.on_point((10.0, 14.0))               # height: 4 above the start
+    tool.on_point((20.0, 20.0))               # rotation: towards 45°
+    _type_text(tool, "N")
+    tool.finish_typing()
+    t = h.msp.query("TEXT")[0]
+    assert t.dxf.height == pytest.approx(4.0)
+    assert t.dxf.rotation == pytest.approx(45.0)
+    assert TextTool.default_height == pytest.approx(4.0)   # TEXTSIZE sticks
+    assert TextTool.last_rotation == pytest.approx(45.0)
+
+
+def test_text_rubber_band_from_the_start_point_while_asking():
+    tool = TextTool(Harness().ctx)
+    tool.start()
+    assert tool.preview_segments((3.0, 4.0)) == []          # nothing picked yet
+    tool.on_point((0.0, 0.0))
+    assert tool.preview_segments((3.0, 4.0)) == [((0.0, 0.0), (3.0, 4.0))]
+    tool.on_option("2")                                     # height typed
+    assert tool.preview_segments((3.0, 4.0)) == [((0.0, 0.0), (3.0, 4.0))]
+    tool.on_point((5.0, 0.0))                               # rotation picked
+    assert tool.typing and tool.preview_segments((3.0, 4.0)) == []

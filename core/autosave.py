@@ -81,22 +81,25 @@ def save_file_path() -> Path:
     return Path(base) / "IngeCAD" / "autosave"
 
 
-def _stem_for(path: Optional[Path]) -> str:
+def _stem_for(path: Optional[Path], slot: int = 1) -> str:
     """The name an autosave takes, unique per drawing and per session.
 
     AutoCAD's is ``<drawing>_1_1_<session>.sv$``. Ours keeps the drawing's
     name for the recovery list to read, plus the pid so two IngeCAD windows
-    on the same file never fight over one file.
+    on the same file never fight over one file, and the drawing tab's slot
+    past the first, so two tabs never do either (two "Untitled", or two
+    plano.dwg from different folders).
     """
     name = path.stem if path is not None else "Untitled"
     safe = "".join(c if c.isalnum() or c in "-_. " else "_" for c in name)
-    return f"{safe}_{os.getpid()}"
+    tab = f"_{slot}" if slot > 1 else ""
+    return f"{safe}_{os.getpid()}{tab}"
 
 
-def autosave_paths(path: Optional[Path]) -> tuple[Path, Path]:
+def autosave_paths(path: Optional[Path], slot: int = 1) -> tuple[Path, Path]:
     """(.sv$, .sv$.json) for this drawing in this session."""
     directory = save_file_path()
-    stem = _stem_for(path)
+    stem = _stem_for(path, slot)
     return directory / (stem + SUFFIX), directory / (stem + INFO_SUFFIX)
 
 

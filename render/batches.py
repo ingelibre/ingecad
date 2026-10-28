@@ -63,7 +63,7 @@ class Bucket:
     layer: str
     color: str
     lineweight: float = 0.25                              # mm, resolved
-    kind: str = ""                                        # "T" = text glyphs
+    kind: str = ""          # "T" text glyphs, "TM" their masks, "X" XLINE/RAY
     # DRAWORDER group: -1 sent to back, +1 brought to front, 0 default. The
     # packer sorts buckets by their dict key, and the backend puts this group
     # FIRST in that key, so back draws under everything and front over.
@@ -94,6 +94,7 @@ class DrawRange:
     first: int  # vertex index (not byte index)
     count: int
     lineweight: float = 0.25  # mm; drives u_half_world for thick ranges
+    group: int = 0            # DRAWORDER group: -1 back, 0, +1 front
 
 
 class Batch:
@@ -109,6 +110,7 @@ class Batch:
         n = len(ranges)
         self.firsts = np.fromiter((r.first for r in ranges), np.int64, n)
         self.counts = np.fromiter((r.count for r in ranges), np.int64, n)
+        self.groups = np.fromiter((r.group for r in ranges), np.int8, n)
         self.bounds = bounds                # (n, 4) world min_x,min_y,max_x,max_y
         self.is_text = is_text              # (n,) bool
         self.text_height = text_height      # (n,) avg glyph height, world units
@@ -121,18 +123,29 @@ class Batch:
         """(N, 2) float32 view of the vertex positions (tests, picking)."""
         return self.data["pos"]
 
+    def group_set(self) -> set:
+        """The DRAWORDER groups this batch has ranges in."""
+        return set(np.unique(self.groups).tolist()) if len(self.groups) else set()
+
     def visible_runs(self, view_rect, px_per_unit: float,
-                     min_text_px: float) -> list[tuple[int, int]]:
-        """Merged (first, count) vertex runs to draw for this view."""
+                     min_text_px: float,
+                     group: Optional[int] = None) -> list[tuple[int, int]]:
+        """Merged (first, count) vertex runs to draw for this view; only
+        those of DRAWORDER ``group`` when given."""
         if not len(self.ranges):
             return []
         if self.bounds is None:
-            return [(0, self.vertex_count)]
-        x0, y0, x1, y1 = view_rect
-        vis = (
-            (self.bounds[:, 0] <= x1) & (self.bounds[:, 2] >= x0)
-            & (self.bounds[:, 1] <= y1) & (self.bounds[:, 3] >= y0)
-        )
+            if group is None or (self.groups == group).all():
+                return [(0, self.vertex_count)]
+            vis = self.groups == group
+        else:
+            x0, y0, x1, y1 = view_rect
+            vis = (
+                (self.bounds[:, 0] <= x1) & (self.bounds[:, 2] >= x0)
+                & (self.bounds[:, 1] <= y1) & (self.bounds[:, 3] >= y0)
+            )
+            if group is not None:
+                vis &= self.groups == group
         if self.is_text is not None and min_text_px > 0.0:
             # A zero height means the metric was never fed for that range —
             # an MTEXT's background-mask quad arrives through a path that
@@ -283,6 +296,7 @@ def _pack_standard(
                 first + s * verts_per_prim,
                 (e - s) * verts_per_prim,
                 bucket.lineweight,
+                bucket.group,
             ))
             bounds.append(np.array([
                 block[:, 0].min(), block[:, 1].min(),
@@ -300,6 +314,59 @@ def _pack_standard(
         np.asarray(is_text, dtype=bool),
         np.asarray(text_h, dtype=np.float64),
     )
+
+
+#: The six corner offsets of a thick dot, in the triangle order of a segment
+_DOT_CORNERS = np.array([(-1, 1), (-1, -1), (1, 1), (1, 1), (-1, -1), (1, -1)],
+                        dtype=np.float32)
+
+
+#: Longest miter, in half widths: past it (a corner narrower than about 29
+#: degrees) the corner keeps its notch rather than grow a long spike.
+_MITER_LIMIT = 4.0
+
+
+def _mitered_normals(seg: np.ndarray, normal: np.ndarray, dot: np.ndarray,
+                     owners) -> tuple[np.ndarray, np.ndarray]:
+    """Start and end offset vectors of each thick segment, mitered where it
+    continues the one before it (same owner, same point).
+
+    Each segment was a rectangle ending square at the vertex, so a polyline
+    with a lineweight showed a notch at every corner. Where two segments
+    meet, both now end on the miter vector (n1 + n2) / (1 + n1.n2), which
+    the shader scales by the half width like any normal: the two quads
+    become trapezoids that close the corner, with no vertex added. A
+    closed polyline's last segment joins its first.
+    """
+    start_n = normal.copy()
+    end_n = normal.copy()
+    n = len(seg)
+    if n < 2:
+        return start_n, end_n
+    joint = ((seg[:-1, 1] == seg[1:, 0]).all(axis=1)
+             & ~dot[:-1] & ~dot[1:])
+    if owners is not None:
+        joint &= owners[:-1] == owners[1:]
+    a = np.flatnonzero(joint)                     # segment a joins a + 1
+    b = a + 1
+    # closed chains: a run of joined segments whose end is its start
+    first = np.flatnonzero(np.concatenate(([True], ~joint)))
+    last = np.flatnonzero(np.concatenate((~joint, [True])))
+    closed = ((seg[last, 1] == seg[first, 0]).all(axis=1)
+              & (last > first) & ~dot[first] & ~dot[last])
+    if owners is not None:
+        closed &= owners[last] == owners[first]
+    a = np.concatenate((a, last[closed]))
+    b = np.concatenate((b, first[closed]))
+    if not len(a):
+        return start_n, end_n
+    na, nb = normal[a], normal[b]
+    denom = 1.0 + (na * nb).sum(axis=1)
+    ok = denom > 2.0 / (_MITER_LIMIT * _MITER_LIMIT)
+    miter = (na[ok] + nb[ok]) / denom[ok, None]
+    end_n[a[ok]] = miter
+    start_n[b[ok]] = miter
+    return start_n, end_n
 
 
 def _pack_thick(
@@ -328,31 +395,38 @@ def _pack_thick(
         seg = np.asarray(bucket.lines, dtype=np.float64).reshape(-1, 2, 2)
         d = seg[:, 1] - seg[:, 0]
         length = np.hypot(d[:, 0], d[:, 1])
-        ok = length > 0.0
-        # Owners are per segment, so they take the same two steps the geometry
-        # takes: drop the zero-length ones, then the grid permutation.
         owners = bucket.lines_owner
-        owner_arr = (np.asarray(owners, dtype=object)[ok]
-                     if owners and handle_ranges is not None else None)
-        seg, d, length = seg[ok], d[ok], length[ok]
-        if len(seg) == 0:
-            continue
+        owner_arr = (np.asarray(owners, dtype=object)
+                     if owners and len(owners) == len(seg) else None)
+        dot = length == 0.0
+        normal = np.column_stack((-d[:, 1], d[:, 0])) / np.where(
+            dot, 1.0, length)[:, None]
+        # in drawing order, before the grid sort scatters a polyline
+        start_n, end_n = _mitered_normals(seg, normal, dot, owner_arr)
+        if handle_ranges is None:
+            owner_arr = None
         cells = _grid_cells(seg.reshape(-1, 2), extents, 2)
         order = np.argsort(cells, kind="stable")
-        seg, d, length, cells = seg[order], d[order], length[order], cells[order]
+        seg, cells, dot = seg[order], cells[order], dot[order]
+        start_n, end_n = start_n[order], end_n[order]
         if owner_arr is not None:
             owner_arr = owner_arr[order]
 
-        normal = np.column_stack((-d[:, 1], d[:, 0])) / length[:, None]
         p0 = seg[:, 0] - (ox, oy)
         p1 = seg[:, 1] - (ox, oy)
         n_seg = len(seg)
         verts = np.empty((n_seg, 6), dtype=THICK_DTYPE)
         # Triangle pair: (p0,+n) (p0,-n) (p1,+n) / (p1,+n) (p0,-n) (p1,-n)
-        corners = ((p0, 1), (p0, -1), (p1, 1), (p1, 1), (p0, -1), (p1, -1))
-        for i, (p, sign) in enumerate(corners):
+        corners = ((p0, start_n, 1), (p0, start_n, -1), (p1, end_n, 1),
+                   (p1, end_n, 1), (p0, start_n, -1), (p1, end_n, -1))
+        for i, (p, n, sign) in enumerate(corners):
             verts["pos"][:, i] = p
-            verts["normal"][:, i] = normal * sign
+            verts["normal"][:, i] = n * sign
+        if dot.any():
+            # A zero-length segment is a linetype's dot (#87): a square as
+            # wide as the pen, its corners pushed out diagonally by the
+            # same half width the shader gives a line.
+            verts["normal"][dot] = _DOT_CORNERS
         verts["rgba"] = _color_u8(bucket.color)
         chunks.append(verts.reshape(-1))
 
@@ -375,7 +449,8 @@ def _pack_thick(
         for s, e in zip(starts, ends):
             block = seg[s:e].reshape(-1, 2)
             ranges.append(DrawRange(
-                bucket.layer, first + s * 6, (e - s) * 6, bucket.lineweight))
+                bucket.layer, first + s * 6, (e - s) * 6, bucket.lineweight,
+                bucket.group))
             bounds.append(np.array([
                 block[:, 0].min(), block[:, 1].min(),
                 block[:, 0].max(), block[:, 1].max(),
@@ -431,6 +506,12 @@ def _world_extents(
             my = _HINT_MARGIN * (hy1 - hy0)
             lo_hi = (hx0 - mx, hy0 - my, hx1 + mx, hy1 + my)
 
+    # Construction lines reach far past the drawing on purpose and are no
+    # part of its extents (AutoCAD's Zoom Extents leaves them out too) --
+    # unless they are all there is.
+    finite = [b for b in buckets if b.kind != "X"]
+    if any(b.lines or b.triangles or b.points for b in finite):
+        buckets = finite
     for use_hint in (lo_hi is not None, False):
         min_x = min_y = np.inf
         max_x = max_y = -np.inf

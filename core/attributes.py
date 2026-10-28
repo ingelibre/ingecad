@@ -148,13 +148,18 @@ def attribs_matching(inserts: Iterable, block_spec: str = "*",
 
 # -- ATTDEF -------------------------------------------------------------------
 
+def normal_tag(tag: str) -> str:
+    """A tag as AutoCAD stores it: upper case, no spaces."""
+    return str(tag).strip().upper().replace(" ", "")
+
+
 def add_attdef(tag: str, prompt: str, default: str, insert, height: float,
                rotation: float = 0.0, mode: AttMode = AttMode(),
                align: str = "LEFT", style: Optional[str] = None,
                p2=None) -> AddEntityCommand:
     """ATTDEF in the current space (the block being edited in BEDIT, or the
     space where the user is defining the block's content)."""
-    tag = tag.strip().upper().replace(" ", "")
+    tag = normal_tag(tag)
     if not tag:
         raise ValueError("An attribute tag is required.")
 
@@ -287,6 +292,22 @@ class EditAttribsCommand(Command):
             else:
                 entity.dxf.set(prop, old)
         document.dirty = True
+
+
+def edit_definition(attdef, tag: str, prompt: str,
+                    default: str) -> Optional[EditAttribsCommand]:
+    """DDEDIT on an attribute definition (Edit Attribute Definition, p.
+    523): its tag, prompt and default, as one undo step; None when nothing
+    changed. A definition shows its TAG, so editing its default alone --
+    all the double-click offered -- left the user unable to touch what they
+    saw (#88, Rafael)."""
+    tag = normal_tag(tag)
+    if not tag:
+        raise ValueError("An attribute tag is required.")
+    changes = [(attdef, prop, value) for prop, value in
+               (("tag", tag), ("prompt", prompt), ("text", default))
+               if str(attdef.dxf.get(prop, "") or "") != value]
+    return EditAttribsCommand(changes, name="DDEDIT") if changes else None
 
 
 def set_attribute_value(attrib, value: str) -> EditAttribsCommand:

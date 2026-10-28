@@ -17,7 +17,6 @@ This module is headless: the GUI side of the contract is a *host* object
 from __future__ import annotations
 
 import importlib.util
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -145,8 +144,9 @@ def bundled_plugins_dir() -> Path:
 
 
 def user_plugins_dir() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "IngeCAD" / "plugins"
+    from core.paths import user_config_dir
+
+    return user_config_dir() / "plugins"
 
 
 def missing_requirements(spec: PluginSpec) -> tuple[str, ...]:

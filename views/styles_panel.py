@@ -206,7 +206,9 @@ class StylesPanel(QWidget):
 
     def refresh(self) -> None:
         self._loading = True
+        keep = self._selected()
         self.list.clear()
+        self._current_item = None
         if self._document is not None or self._cat == _HATCH:
             if self._cat == _TEXT:
                 self._fill_text()
@@ -214,6 +216,16 @@ class StylesPanel(QWidget):
                 self._fill_dim()
             else:
                 self._fill_hatch()
+        # The style picked before stays picked; otherwise the current one,
+        # as AutoCAD's STYLE and DIMSTYLE open on it -- Edit with nothing
+        # picked did nothing, silently (Rafael's seventh review, 10:50).
+        chosen = None
+        if keep is not None:
+            chosen = next((self.list.item(i) for i in range(self.list.count())
+                           if self.list.item(i).data(Qt.UserRole) == keep), None)
+        chosen = chosen or self._current_item
+        if chosen is not None:
+            self.list.setCurrentItem(chosen)
         self._loading = False
 
     def _fill_text(self) -> None:
@@ -253,6 +265,7 @@ class StylesPanel(QWidget):
             f = item.font()
             f.setBold(True)
             item.setFont(f)
+            self._current_item = item
         self.list.addItem(item)
 
     def _selected(self):

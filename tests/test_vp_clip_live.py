@@ -432,7 +432,8 @@ def test_a_twisted_viewport_draws_the_same_live_as_baked(qapp):
         dpr = live.shape[0] / win.viewport.height()
         sl = (slice(int(y1 * dpr), int(y0 * dpr)), slice(int(x0 * dpr), int(x1 * dpr)))
         b, l = baked[sl], live[sl]
-        assert b.sum() > 200, "the baked viewport shows the model"
+        # not empty: 191 px under the CI's software GL (llvmpipe), ~250 here
+        assert b.sum() > 100, "the baked viewport shows the model"
         differing = (b != l).sum()
         assert differing < 0.05 * b.sum(), f"{differing} px differ of {b.sum()} ink"
     finally:

@@ -193,6 +193,12 @@ def _circle_crossing_angles(center: Point, r: float, cutters: list[Seg],
     return angles
 
 
+def circle_crossings(center: Point, r: float, cutters: list[Seg],
+                     cutter_circles) -> list[float]:
+    """Angles where the circle meets the cutters (segments and circles)."""
+    return _circle_crossing_angles(center, r, cutters, cutter_circles or [])
+
+
 def trim_circle(center: Point, r: float, cutters: list[Seg],
                 pick_angle: float,
                 cutter_circles: Optional[list[tuple[Point, float]]] = None,
@@ -350,6 +356,40 @@ def extend_segment(seg: Seg, edges: list[Seg],
     return (x1, y1, px, py) if forward else (px, py, x2, y2)
 
 
+def extend_arc(center: Point, r: float, a_start: float, a_end: float,
+               pick_angle: float, edges: list[Seg],
+               circles: list) -> Optional[tuple[float, float]]:
+    """Extend the end of an ARC (degrees) nearest the pick along its own
+    circle to the first boundary crossing; the new (start, end) in degrees,
+    or None. The circle meeting a boundary only by touching it counts --
+    the tangency tolerance of ``line_circle_intersections`` (issue #14)."""
+    s = math.radians(a_start) % math.tau
+    e = math.radians(a_end) % math.tau
+    sweep = (e - s) % math.tau or math.tau
+    if sweep >= math.tau - EPS:
+        return None                          # a full circle has no end
+    rel = (pick_angle - s) % math.tau
+    if rel <= sweep:
+        forward = rel > sweep / 2.0          # the end nearest along the arc
+    else:                                    # picked off the arc: nearest end
+        forward = (rel - sweep) < (math.tau - rel)
+    crossings = []
+    for ang in _circle_crossing_angles(center, r, edges, circles):
+        rel_c = (ang - s) % math.tau
+        if sweep + EPS < rel_c < math.tau - EPS:
+            crossings.append(rel_c)
+    if not crossings:
+        return None
+    # angles in [0, 360), as AutoCAD writes them: extending past 0° gave a
+    # start of -11.5° (found by the release tour)
+    if forward:
+        start, end = math.degrees(s), math.degrees(s + min(crossings))
+    else:
+        start = math.degrees(s - (math.tau - max(crossings)))
+        end = math.degrees(s + sweep)
+    return (start % 360.0, end % 360.0)
+
+
 def extend_polyline(points: list[Point], closed: bool, pick_point: Point,
                     edges: list[Seg],
                     circles: list[tuple[Point, float]]):
@@ -478,6 +518,109 @@ def fillet_arc(s1: Seg, s2: Seg, radius: float):
     if (a2 - a1) % 360.0 > 180.0:
         a1, a2 = a2, a1
     return ((cx, cy), radius, a1, a2, t1, t2)
+
+
+def sided_fillet(s1: Seg, pick1: Point, s2: Seg, pick2: Point,
+                 radius: float):
+    """A fillet between two lines that keeps the side of each that was
+    picked, as AutoCAD does where the lines cross.
+
+    Returns ``(corner, t1, t2, center, far1, far2, sweep)`` -- the tangent
+    points (both the corner for radius 0), the fillet arc's centre (None
+    for radius 0), the end of each line that stays, and the arc's included
+    angle -- or the reason it cannot be made: "parallel" or "too large".
+    The old rule kept each line's end farther from the corner, which on
+    crossing lines is often the side NOT picked (GeoCad Yaguarete had to
+    patch it).
+    """
+    hit = line_line_intersection(s1, s2, infinite2=True)
+    if hit is None:
+        return "parallel"
+    corner = hit[1]
+
+    def side(seg: Seg, pick: Point):
+        dx, dy = seg[2] - seg[0], seg[3] - seg[1]
+        length = math.hypot(dx, dy)
+        if length < EPS:
+            return None
+        ux, uy = dx / length, dy / length
+        along = (pick[0] - corner[0]) * ux + (pick[1] - corner[1]) * uy
+        if abs(along) < EPS:            # picked on the corner: the far end
+            ends = ((seg[0] - corner[0]) * ux + (seg[1] - corner[1]) * uy,
+                    (seg[2] - corner[0]) * ux + (seg[3] - corner[1]) * uy)
+            along = max(ends, key=abs)
+        if along < 0:
+            ux, uy = -ux, -uy
+        far = max(((seg[0], seg[1]), (seg[2], seg[3])),
+                  key=lambda p: (p[0] - corner[0]) * ux + (p[1] - corner[1]) * uy)
+        reach = (far[0] - corner[0]) * ux + (far[1] - corner[1]) * uy
+        return (ux, uy), far, reach
+
+    a, b = side(s1, pick1), side(s2, pick2)
+    if a is None or b is None:
+        return "parallel"
+    (u1, far1, reach1), (u2, far2, reach2) = a, b
+    cos_phi = max(-1.0, min(1.0, u1[0] * u2[0] + u1[1] * u2[1]))
+    phi = math.acos(cos_phi)
+    if phi < EPS or abs(phi - math.pi) < EPS:
+        return "parallel"
+    if radius <= 0.0:
+        return corner, corner, corner, None, far1, far2, 0.0
+    along = radius / math.tan(phi / 2.0)
+    if along >= reach1 - EPS or along >= reach2 - EPS:
+        return "too large"
+    t1 = (corner[0] + u1[0] * along, corner[1] + u1[1] * along)
+    t2 = (corner[0] + u2[0] * along, corner[1] + u2[1] * along)
+    bx, by = u1[0] + u2[0], u1[1] + u2[1]
+    bl = math.hypot(bx, by)
+    centre_at = radius / math.sin(phi / 2.0)
+    center = (corner[0] + bx / bl * centre_at, corner[1] + by / bl * centre_at)
+    return corner, t1, t2, center, far1, far2, math.pi - phi
+
+
+def sided_chamfer(s1: Seg, pick1: Point, s2: Seg, pick2: Point,
+                  d1: float, d2: float):
+    """CHAMFER's corner on the picked sides (see sided_fillet): returns
+    ``(corner, c1, c2, far1, far2)`` -- the bevel's ends, ``d1`` along the
+    first line and ``d2`` along the second, both the corner when the two
+    distances are 0 -- or "parallel" / "too large"."""
+    base = sided_fillet(s1, pick1, s2, pick2, 0.0)
+    if isinstance(base, str):
+        return base
+    corner, _t1, _t2, _c, far1, far2, _sw = base
+
+    def towards(far, distance):
+        length = math.dist(corner, far)
+        if distance > length + EPS:
+            return None
+        if length < EPS:
+            return corner
+        return (corner[0] + (far[0] - corner[0]) * distance / length,
+                corner[1] + (far[1] - corner[1]) * distance / length)
+
+    c1, c2 = towards(far1, d1), towards(far2, d2)
+    if c1 is None or c2 is None:
+        return "too large"
+    return corner, c1, c2, far1, far2
+
+
+def chamfer_angle_distance(s1: Seg, pick1: Point, s2: Seg, pick2: Point,
+                           length: float, angle_deg: float):
+    """The second distance of an Angle-method chamfer: the bevel leaves
+    the first line ``length`` from the corner at ``angle_deg`` to it.
+    None when that line never meets the second."""
+    base = sided_fillet(s1, pick1, s2, pick2, 0.0)
+    if isinstance(base, str):
+        return None
+    corner, _t1, _t2, _c, far1, far2, _sw = base
+    u1 = (far1[0] - corner[0], far1[1] - corner[1])
+    u2 = (far2[0] - corner[0], far2[1] - corner[1])
+    phi = math.acos(max(-1.0, min(1.0, (u1[0] * u2[0] + u1[1] * u2[1])
+                                  / (math.hypot(*u1) * math.hypot(*u2)))))
+    alpha = math.radians(angle_deg)
+    if phi + alpha >= math.pi - EPS or alpha <= 0:
+        return None
+    return length * math.sin(alpha) / math.sin(phi + alpha)
 
 
 def fillet_parallel(s1: Seg, pick1: Point, s2: Seg):
@@ -660,39 +803,51 @@ def fillet_polyline(rows, closed: bool, radius: float):
     return out, filleted, too_short
 
 
-def chamfer_pieces(s1: Seg, s2: Seg, d1: float, d2: float):
-    """CHAMFER: the two trimmed lines and the bevel that joins them.
+def chamfer_polyline(rows, closed: bool, d1: float, d2: float):
+    """CHAMFER Polyline: ``(new_rows, chamfered, too_short)`` -- every
+    vertex where two straight segments meet is bevelled, ``d1`` back along
+    the segment coming in and ``d2`` along the one going out ("Chamfers
+    become new segments of the polyline"; segments too short are left and
+    counted, CHAMFER p. 315)."""
+    rows = [tuple(r) for r in rows]
+    n = len(rows)
+    if n < 3 or (d1 <= 0 and d2 <= 0):
+        return rows, 0, 0
+    corners = range(n) if closed else range(1, n - 1)
+    lengths = [math.dist(rows[i][:2], rows[(i + 1) % n][:2])
+               for i in range(n if closed else n - 1)]
+    used_start = [0.0] * len(lengths)
+    used_end = [0.0] * len(lengths)
+    cuts = {}
+    done = too_short = 0
+    for i in corners:
+        prev, nxt = (i - 1) % n, (i + 1) % n
+        if rows[prev][4] or rows[i][4]:
+            continue                   # an arc on either side: not two lines
+        a, b, c = rows[prev][:2], rows[i][:2], rows[nxt][:2]
+        cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+        if abs(cross) < EPS:
+            continue                   # straight on: no corner
+        seg_in, seg_out = prev % len(lengths), i % len(lengths)
+        if (d1 + used_start[seg_in] > lengths[seg_in] + EPS
+                or d2 + used_end[seg_out] > lengths[seg_out] + EPS):
+            too_short += 1
+            continue
+        used_end[seg_in] = d1
+        used_start[seg_out] = d2
 
-    ``d1`` is measured along the FIRST line picked and ``d2`` along the
-    second — the order of the picks is part of the answer, which is what the
-    manual means by "applied in the order that you select the objects"
-    (CHAMFER, p.313). Returns ``(new_s1, new_s2, bevel)`` or None when the
-    lines are parallel or the distances do not fit on them.
-    """
-    hit = line_line_intersection(s1, (s2[0], s2[1], s2[2], s2[3]),
-                                 infinite2=True)
-    if hit is None:
-        return None
-    corner = hit[1]
-
-    def cut(seg: Seg, distance: float):
-        """(far end kept, point at `distance` from the corner)."""
-        d_start = math.hypot(seg[0] - corner[0], seg[1] - corner[1])
-        d_end = math.hypot(seg[2] - corner[0], seg[3] - corner[1])
-        far = (seg[0], seg[1]) if d_start >= d_end else (seg[2], seg[3])
-        length = max(d_start, d_end)
-        if length <= 1e-12 or distance > length:
-            return None
-        ux = (far[0] - corner[0]) / length
-        uy = (far[1] - corner[1]) / length
-        return far, (corner[0] + ux * distance, corner[1] + uy * distance)
-
-    first = cut(s1, d1)
-    second = cut(s2, d2)
-    if first is None or second is None:
-        return None
-    far1, p1 = first
-    far2, p2 = second
-    return ((far1[0], far1[1], p1[0], p1[1]),
-            (far2[0], far2[1], p2[0], p2[1]),
-            (p1[0], p1[1], p2[0], p2[1]))
+        def at(p, q, distance):
+            length = math.dist(p, q)
+            return (p[0] + (q[0] - p[0]) * distance / length,
+                    p[1] + (q[1] - p[1]) * distance / length)
+        cuts[i] = (at(b, a, d1), at(b, c, d2))
+        done += 1
+    out = []
+    for i, row in enumerate(rows):
+        if i in cuts:
+            c1, c2 = cuts[i]
+            out.append((c1[0], c1[1], row[2], row[3], 0.0))
+            out.append((c2[0], c2[1], row[2], row[3], 0.0))
+        else:
+            out.append(row)
+    return out, done, too_short

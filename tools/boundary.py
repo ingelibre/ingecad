@@ -137,7 +137,14 @@ class BoundaryTool(Tool):
             return
         outer, islands = region
         loops = [outer] + (list(islands) if type(self)._islands else [])
-        commands = [actions.add_polyline([(x, y) for x, y in loop], closed=True)
+        # the curves come back as curved segments, not as the tracer's
+        # chords (#83: the boundary drifted off an arc when zoomed in)
+        from core.hatch_boundary import loop_with_bulges
+
+        commands = [actions.add_polyline_ex(
+                        [(x, y, 0.0, 0.0, b) for x, y, b
+                         in loop_with_bulges(loop, self._source_entities(loop))],
+                        closed=True, name="BOUNDARY")
                     for loop in loops if len(loop) >= 3]
         if not commands:
             self.ctx.echo(tr("No closed boundary found at that point."))
@@ -149,6 +156,20 @@ class BoundaryTool(Tool):
         self.ctx.echo(tr("{n} loop(s) extracted.", n=len(commands)))
         self.ctx.echo(tr("{n} Polyline(s) created", n=len(commands)))
         self.prompt(_PICK)
+
+    def _source_entities(self, loop) -> list:
+        """The objects a loop may run along: the boundary set, or what the
+        pick index finds over the loop's extents."""
+        if self._candidates is not None:
+            return list(self._candidates)
+        index = getattr(self.ctx.services, "index", None)
+        if index is None:
+            return []
+        xs, ys = [p[0] for p in loop], [p[1] for p in loop]
+        pad = max(max(xs) - min(xs), max(ys) - min(ys)) * 1e-6
+        handles = index.crossing((min(xs) - pad, min(ys) - pad,
+                                  max(xs) + pad, max(ys) + pad))
+        return [e for h in handles if (e := index.entity(h)) is not None]
 
     def _region(self, point: Point):
         services = self.ctx.services

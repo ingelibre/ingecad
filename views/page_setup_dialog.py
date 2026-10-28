@@ -14,7 +14,9 @@ destroy them).
 """
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -32,23 +34,97 @@ from PySide6.QtWidgets import (
 
 from core import layouts as layout_ops
 from core.i18n import tr
+from core.units import STANDARD_SCALES as _SCALES   # one list with PLOT
+from core.units import scale_text as _scale_text
 
 _CUSTOM = "custom"
-
-# The metric scale list AutoCAD shows (plus enlargements). (num, den).
-_SCALES = [(1, 1), (1, 2), (1, 4), (1, 5), (1, 8), (1, 10), (1, 16),
-           (1, 20), (1, 25), (1, 30), (1, 40), (1, 50), (1, 100),
-           (1, 200), (1, 500), (1, 1000), (2, 1), (4, 1), (10, 1)]
 
 _STYLE_SHEETS = ["", "monochrome.ctb", "acad.ctb", "Grayscale.ctb",
                  "Screening 100%.ctb"]
 
 
-def _scale_text(num, den):
-    return f"{num:g}:{den:g}"
+class _MarginsPreview(QWidget):
+    """The sheet, its printable area dashed, the edited margin lit."""
+
+    def __init__(self, dialog) -> None:
+        super().__init__(dialog)
+        self._dialog = dialog
+        self.setMinimumSize(132, 96)
+
+    def sizeHint(self):
+        from PySide6.QtCore import QSize
+
+        return QSize(150, 110)
+
+    def lit_side(self):
+        """Which margin's field is the dialog's focus: "top", "right"... or
+        None. The dialog's own focus widget, not hasFocus(): that one also
+        wants the dialog to be the active window, and the side went dark
+        whenever it was not (the CI's Xvfb has no window manager)."""
+        d = self._dialog
+        focus = d.focusWidget()
+        if focus is None:
+            return None
+        for side in ("top", "right", "bottom", "left"):
+            spin = getattr(d, f"margin_{side}")
+            if focus is spin or spin.isAncestorOf(focus):
+                return side
+        return None
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt override
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QPainter, QPen
+
+        width, height, (top, right, bottom, left) = self._dialog.sheet()
+        if width <= 0 or height <= 0:
+            return
+        pad = 6.0
+        k = min((self.width() - 2 * pad) / width, (self.height() - 2 * pad) / height)
+        sw, sh = width * k, height * k
+        sheet = QRectF((self.width() - sw) / 2, (self.height() - sh) / 2, sw, sh)
+        inner = sheet.adjusted(left * k, top * k, -right * k, -bottom * k)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(sheet, QColor("white"))
+        side = self.lit_side()
+        if side is not None:
+            band = {"top": QRectF(sheet.left(), sheet.top(), sw, top * k),
+                    "bottom": QRectF(sheet.left(), sheet.bottom() - bottom * k, sw, bottom * k),
+                    "left": QRectF(sheet.left(), sheet.top(), left * k, sh),
+                    "right": QRectF(sheet.right() - right * k, sheet.top(), right * k, sh)}[side]
+            highlight = self.palette().highlight().color()
+            band_color = QColor(highlight)
+            band_color.setAlpha(110)
+            p.fillRect(band, band_color)
+        p.setPen(QPen(QColor(90, 90, 90), 1))
+        p.drawRect(sheet)
+        if side is not None:
+            # the lit side's edge, thick: a 5 mm band is two pixels here
+            edge = {"top": (sheet.topLeft(), sheet.topRight()),
+                    "bottom": (sheet.bottomLeft(), sheet.bottomRight()),
+                    "left": (sheet.topLeft(), sheet.bottomLeft()),
+                    "right": (sheet.topRight(), sheet.bottomRight())}[side]
+            p.setPen(QPen(highlight, 4))
+            p.drawLine(*edge)
+        if inner.width() > 0 and inner.height() > 0:
+            pen = QPen(QColor(40, 40, 40), 1, Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            p.drawRect(inner)
+        p.end()
 
 
 class PageSetupDialog(QDialog):
+    def _on_focus_changed(self, _old, _new) -> None:
+        self.margins_preview.update()
+
+    def done(self, result: int) -> None:
+        try:
+            QApplication.instance().focusChanged.disconnect(
+                self._on_focus_changed)
+        except (RuntimeError, TypeError):
+            pass                       # already disconnected
+        super().done(result)
+
     def __init__(self, window, layout) -> None:
         super().__init__(window)
         self.setWindowTitle(tr("Page Setup — {name}", name=layout.name))
@@ -121,20 +197,45 @@ class PageSetupDialog(QDialog):
         self.margin_right = mm_spin(max(m_right, 0.0), hi=200.0)
         self.margin_bottom = mm_spin(max(m_bottom, 0.0), hi=200.0)
         self.margin_left = mm_spin(max(m_left, 0.0), hi=200.0)
-        margins_row = QWidget(self)
-        margins_lay = QHBoxLayout(margins_row)
+        # Each margin sits on its own side of a picture of the sheet (#61,
+        # Rafael: "T R B L" in a row put his 20 mm on the wrong side twice).
+        # The picture follows the paper and orientation, dashes the printable
+        # area and lights the side whose field is being edited.
+        self.margins_preview = _MarginsPreview(self)
+        margins_box = QWidget(self)
+        margins_lay = QGridLayout(margins_box)
         margins_lay.setContentsMargins(0, 0, 0, 0)
-        for label, spin in ((tr("T"), self.margin_top), (tr("R"), self.margin_right),
-                            (tr("B"), self.margin_bottom), (tr("L"), self.margin_left)):
-            margins_lay.addWidget(QLabel(label, self))
-            margins_lay.addWidget(spin)
-        paper_form.addRow(tr("Printable margins:"), margins_row)
+        for spin, tip in ((self.margin_top, tr("Top margin")),
+                          (self.margin_right, tr("Right margin")),
+                          (self.margin_bottom, tr("Bottom margin")),
+                          (self.margin_left, tr("Left margin"))):
+            spin.setToolTip(tip)
+            spin.setAccessibleName(tip)
+            spin.valueChanged.connect(self.margins_preview.update)
+        for spin in (self.margin_top, self.margin_right, self.margin_bottom,
+                     self.margin_left):
+            spin.setFixedWidth(spin.sizeHint().width())
+        margins_lay.addWidget(self.margin_top, 0, 1, Qt.AlignmentFlag.AlignHCenter)
+        margins_lay.addWidget(self.margin_left, 1, 0, Qt.AlignmentFlag.AlignVCenter)
+        margins_lay.addWidget(self.margins_preview, 1, 1)
+        margins_lay.addWidget(self.margin_right, 1, 2, Qt.AlignmentFlag.AlignVCenter)
+        margins_lay.addWidget(self.margin_bottom, 2, 1, Qt.AlignmentFlag.AlignHCenter)
+        margins_lay.setColumnStretch(1, 1)
+        paper_form.addRow(QLabel(tr("Printable margins:"), self))
+        paper_form.addRow(margins_box)
+        # The margin being edited is highlighted in the preview. A bound
+        # method, disconnected in done(): the lambda this was kept every
+        # closed dialog alive and repainting on each focus change.
+        QApplication.instance().focusChanged.connect(self._on_focus_changed)
 
         # -- Plot area ---------------------------------------------------------
         area_group = QGroupBox(tr("Plot area"), self)
         area_form = QFormLayout(area_group)
         self.area = QComboBox(self)
-        self.area.addItem(tr("Layout"), layout_ops.PLOT_TYPE_LAYOUT)
+        # the Model tab has no sheet to plot "as laid out" (AutoCAD offers
+        # Display / Extents / Limits / Window there)
+        if not getattr(layout, "is_modelspace", False):
+            self.area.addItem(tr("Layout"), layout_ops.PLOT_TYPE_LAYOUT)
         self.area.addItem(tr("Extents"), layout_ops.PLOT_TYPE_EXTENTS)
         self.area.addItem(tr("Display"), layout_ops.PLOT_TYPE_DISPLAY)
         try:
@@ -142,7 +243,9 @@ class PageSetupDialog(QDialog):
         except (TypeError, ValueError):
             plot_type = 5
         idx = self.area.findData(plot_type)
-        self.area.setCurrentIndex(idx if idx >= 0 else 0)
+        if idx < 0:
+            idx = self.area.findData(layout_ops.PLOT_TYPE_EXTENTS)
+        self.area.setCurrentIndex(max(idx, 0))
         self.area.currentIndexChanged.connect(self._on_area_changed)
         area_form.addRow(tr("What to plot:"), self.area)
 
@@ -289,6 +392,10 @@ class PageSetupDialog(QDialog):
         self.portrait = QRadioButton(tr("Portrait"), self)
         self.landscape = QRadioButton(tr("Landscape"), self)
         (self.landscape if landscape else self.portrait).setChecked(True)
+        self.landscape.toggled.connect(lambda _on: self.margins_preview.update())
+        self.paper.currentIndexChanged.connect(lambda _i: self.margins_preview.update())
+        self.custom_w.valueChanged.connect(self.margins_preview.update)
+        self.custom_h.valueChanged.connect(self.margins_preview.update)
         self.upside_down = QCheckBox(tr("Plot upside-down"), self)
         self.upside_down.setChecked(rotation in (2, 3))
         orient_form.addRow(self.portrait)
@@ -352,6 +459,22 @@ class PageSetupDialog(QDialog):
             num, den = self.scale.currentData()
             self.scale_num.setValue(num)
             self.scale_den.setValue(den)
+
+    def sheet(self):
+        """(width, height, (top, right, bottom, left)) in mm, as values()
+        would give them -- what the margins picture draws."""
+        data = self.paper.currentData()
+        if data == _CUSTOM or data is None:
+            w, h = self.custom_w.value(), self.custom_h.value()
+        else:
+            _name, w, h = data
+        landscape = getattr(self, "landscape", None)
+        if landscape is not None and landscape.isChecked():
+            w, h = max(w, h), min(w, h)
+        else:
+            w, h = min(w, h), max(w, h)
+        return w, h, (self.margin_top.value(), self.margin_right.value(),
+                      self.margin_bottom.value(), self.margin_left.value())
 
     # -- result ---------------------------------------------------------------
     def values(self) -> dict:

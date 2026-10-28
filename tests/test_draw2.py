@@ -1076,21 +1076,37 @@ def test_a_cancelled_save_as_keeps_the_window_open(qapp, monkeypatch):
         win.close()
 
 
-def test_open_and_new_are_guarded_too(qapp, monkeypatch):
+def test_new_keeps_a_modified_drawing_open_and_close_asks(qapp, monkeypatch):
+    """New opens a tab of its own (#71), so the modified drawing stays open
+    with its changes and nothing is asked; CLOSE on it asks, and Cancel
+    keeps it."""
     from PySide6.QtWidgets import QMessageBox
 
     win = _editor_window(qapp)
     try:
         win.document.dirty = True
         doc = win.document
-        monkeypatch.setattr(QMessageBox, "warning",
-                            lambda *a, **k: QMessageBox.Cancel)
+        asked = []
+
+        def cancel(*a, **k):
+            asked.append(a)
+            return QMessageBox.Cancel
+
+        monkeypatch.setattr(QMessageBox, "warning", cancel)
         win.new_document("mm")
-        assert win.document is doc            # Cancel kept the drawing
-        win.open_path(Path("no-importa.dxf"))
-        assert win.document is doc
+        assert not asked and win.document is not doc
+        assert [s.document for s in win.document_sessions()] == [doc, win.document]
+        assert doc.dirty
+        win.dispatcher.submit("CLOSE")          # the new one: nothing to ask
+        assert not asked and win.document is doc
+        win.dispatcher.submit("CLOSE")          # the modified one asks
+        assert asked and win.document is doc    # and Cancel keeps it
+        assert len(win.document_sessions()) == 1
+        win.dispatcher.submit("CLOSEALL")       # Cancel stops CLOSEALL too
+        assert len(asked) == 2 and win.document is doc
     finally:
-        win.document.dirty = False
+        for session in win.document_sessions():
+            session.document.dirty = False
         win.close()
 
 
@@ -1173,6 +1189,78 @@ def test_a_swallowed_middle_release_does_not_stick_the_pan(qapp):
                            Qt.NoModifier)
         vp.mouseMoveEvent(drag)
         assert vp._panning is True             # still dragging
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_yes_in_discard_throws_the_text_away_once(qapp):
+    """GeoCad Yaguareté had to patch this: the click on the Discard
+    dialog's "Yes" reached the editor's application-wide filter as a
+    click OUTSIDE it, which commits -- so the text the user was throwing
+    away was created, and the editor was then closed a second time."""
+    import sys
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QMessageBox
+
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+    from modal import drive_modal
+
+    win = _editor_window(qapp)
+    cancelled = []
+    try:
+        win.dispatcher.submit("MTEXT")
+        win.tools.tool.on_point((0.0, 10.0))
+        win.tools.tool.on_point((50.0, 0.0))
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        original_cancel = editor._on_cancel
+        editor._on_cancel = lambda: (cancelled.append(1), original_cancel())
+        QTest.keyClicks(editor.edit, "borrador")
+        errors: list = []
+
+        def yes(box):
+            QTest.mouseClick(box.button(QMessageBox.Yes), Qt.LeftButton)
+
+        drive_modal(QMessageBox, yes, errors)
+        QTest.keyClick(editor.edit, Qt.Key_Escape)
+        qapp.processEvents()
+        assert not errors
+        assert not [e for e in win.document.modelspace()
+                    if e.dxftype() == "MTEXT"], "the discarded text was created"
+        assert cancelled == [1]
+        assert not editor.isVisible()
+    finally:
+        win.close()
+
+
+def test_a_text_line_editor_fits_its_text_and_grows(qapp):
+    """GeoCad Yaguarete had to patch this: the in-place box of a one-line
+    TEXT was as wide as the (hidden) MTEXT toolbar -- a long empty box for
+    a two-letter label. It fits the text and grows as you type."""
+    from PySide6.QtTest import QTest
+
+    win = _editor_window(qapp)
+    try:
+        text = win.document.modelspace().add_text(
+            "A1", dxfattribs={"height": 2.5, "insert": (10, 10)})
+        win.tools.attach_document(win.document)
+        assert win.tools.open_text_editor_for(text)
+        qapp.processEvents()
+        editor = win.tools._mtext_editor
+        short = editor.width()
+        assert short < editor._bar.sizeHint().width(), \
+            "the box is as wide as the hidden toolbar"
+        assert editor.edit.fontMetrics().horizontalAdvance("A1") < short
+        QTest.keyClicks(editor.edit, " - VIGA PRINCIPAL DEL EJE B")
+        qapp.processEvents()
+        assert editor.width() > short, "the box does not grow with the text"
+        typed = editor.edit.fontMetrics().horizontalAdvance(
+            editor.edit.toPlainText())
+        assert editor.width() > typed
+        editor.cancel(ask=False)
     finally:
         win.document.dirty = False
         win.close()

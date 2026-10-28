@@ -14,20 +14,21 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
 
 MAX_RECENT = 12
 
 
 def config_dir() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "IngeCAD"
+    from core.paths import user_config_dir
+
+    return user_config_dir()
 
 
 def cache_dir() -> Path:
-    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(base) / "IngeCAD"
+    from core.paths import user_cache_dir
+
+    return user_cache_dir()
 
 
 def _store() -> Path:

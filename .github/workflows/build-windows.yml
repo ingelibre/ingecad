@@ -1,0 +1,174 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# IngeCAD for Windows (#28): installer + portable zip.
+#
+# Two jobs. The patched LibreDWG converters are cross-built on Linux with
+# mingw (tools/libredwg-patches/build-vendor-windows.sh -- the same release
+# and patch as the Linux build, statically linked); the app is then frozen
+# with PyInstaller on Windows, smoke-tested with --check, and wrapped by
+# Inno Setup. Mirrors IngeTrazo's build-windows.yml, signing aside.
+#
+# Runs on a v* tag (attaches to the release), by hand, and on pushes to the
+# `windows` branch, where the Windows work is tried out.
+name: build-windows
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [windows]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version of a test build (e.g. 0.6.5.1); empty = core/version.py"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  converters:
+    name: LibreDWG for win64 (mingw)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: mingw-w64
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 make curl
+      - name: Cross-build the patched converters
+        run: tools/libredwg-patches/build-vendor-windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libredwg-win64
+          path: vendor/libredwg/win64/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows installer
+    needs: converters
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Python dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # PyInstaller with the bootloader COMPILED HERE, not the wheel's
+          # prebuilt one that thousands of programs (and malware) share and
+          # antivirus programs have flagged -- IngeTrazo's lesson (#162 there).
+          # `pip install --no-binary` is not enough: the sdist ships the
+          # prebuilt bootloaders too. Build them with waf, then install.
+          pip download --no-binary pyinstaller --no-deps pyinstaller -d "$RUNNER_TEMP/pyi"
+          PYI_SRC="$(python -c "import glob, os, tarfile; d = os.path.join(os.environ['RUNNER_TEMP'], 'pyi'); t = tarfile.open(glob.glob(os.path.join(d, 'pyinstaller-*.tar.gz'))[0]); t.extractall(d, filter='data'); print(os.path.join(d, t.getnames()[0].split('/')[0]))")"
+          PYI_SRC="$(cygpath -u "$PYI_SRC")"
+          rm -f "$PYI_SRC"/PyInstaller/bootloader/Windows-64bit-intel/*.exe
+          (cd "$PYI_SRC/bootloader" && python ./waf all --target-arch=64bit)
+          test -f "$PYI_SRC/PyInstaller/bootloader/Windows-64bit-intel/run.exe"
+          test -f "$PYI_SRC/PyInstaller/bootloader/Windows-64bit-intel/runw.exe"
+          pip install "$PYI_SRC"
+          python -c "import PyInstaller; print('PyInstaller', PyInstaller.__version__)"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: libredwg-win64
+          path: vendor/libredwg/bin
+
+      - name: The converters run here
+        shell: bash
+        run: |
+          ls -la vendor/libredwg/bin
+          ./vendor/libredwg/bin/dwg2dxf.exe --version
+          ./vendor/libredwg/bin/dxf2dwg.exe --version
+
+      # The suite that does not need a display, on Windows itself: paths,
+      # encodings, the DWG bridge (with these converters), documents.
+      - name: Headless tests on Windows
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m pytest -q -p no:cacheprovider \
+            tests/test_windows_ready.py tests/test_dwg_bridge.py \
+            tests/test_xrefs.py tests/test_units.py tests/test_layers.py \
+            tests/test_editing.py tests/test_point_style.py
+
+      # A test build for a real Windows PC carries its own number, in the
+      # installer AND in the app's About, so nobody mistakes it for a release.
+      - name: Test-build version
+        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+        shell: bash
+        run: |
+          sed -i 's/^__version__ = .*/__version__ = "${{ inputs.version }}"/' core/version.py
+          cat core/version.py | grep __version__
+
+      - name: Freeze with PyInstaller
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --distpath dist --workpath build/pyi packaging/ingecad.spec
+          du -sh dist/ingecad
+
+      - name: Smoke test of the bundle
+        shell: bash
+        run: |
+          test -f dist/ingecad/ingecad.exe
+          for f in dwg2dxf.exe dxf2dwg.exe; do
+            find dist/ingecad -name "$f" | grep -q . || { echo "missing $f"; exit 1; }
+          done
+          ./dist/ingecad/ingecad.exe --check
+          echo "bundle OK"
+
+      - name: Version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION=$(python -c "import core.version as v; print(v.__version__)" 2>/dev/null || echo 0.0.0-dev)
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Portable zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/ingecad -DestinationPath "dist/IngeCAD-${{ steps.ver.outputs.version }}-windows-x64.zip"
+
+      - name: Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-Not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
+          if (-Not (Test-Path $iscc)) { Write-Error "Inno Setup not found"; exit 1 }
+          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" "packaging\windows\ingecad.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ingecad-windows
+          path: |
+            dist/IngeCAD-*-windows-x64.zip
+            dist/ingecad-setup-v*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Attach to the release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+            gh release create "${GITHUB_REF_NAME}" --title "IngeCAD ${GITHUB_REF_NAME#v}" \
+              --notes "See CHANGELOG.md for this release's details."
+          gh release upload "${GITHUB_REF_NAME}" dist/IngeCAD-*-windows-x64.zip \
+            dist/ingecad-setup-v*.exe --clobber

@@ -18,6 +18,9 @@ jobs:
   appimage:
     name: AppImage (x86_64)
     runs-on: ubuntu-22.04
+    # A good run takes about an hour. v0.6.5's hung in Tests for 2 h 44 min
+    # and the release shipped without an AppImage (#55); fail fast instead.
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
 
@@ -54,7 +57,7 @@ jobs:
       - name: Tests
         env:
           QT_QPA_PLATFORM: xcb
-        run: xvfb-run -a -s "-screen 0 1600x1000x24" ./venv/bin/python -m pytest tests/ -q
+        run: scripts/run-tests-split.sh ./venv/bin/python 4
 
       - name: Build the AppImage
         run: packaging/build-appimage.sh dist

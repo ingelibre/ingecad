@@ -78,7 +78,7 @@ def run_python(path: Path | str, host) -> tuple[int, Optional[str]]:
         del history._undo[before:]
         composite = CompositeCommand(path.name, added)
         composite._space = None                      # already done; do() is never re-run here
-        history._undo.append(composite)
+        history.record(composite)
     return len(added), error
 
 

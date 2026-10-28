@@ -125,6 +125,12 @@ def apply_to(document, template: Template) -> None:
     doc.header["$LTSCALE"] = float(template.units_per_mm * template.plot_scale)
     styles_mod.install_default_styles(
         document, unit_factor=template.units_per_mm, overwrite=True)
+    # TEXT and MTEXT start at a 2.5 mm paper text, and the Standard
+    # multileader style speaks the drawing's units: both were in millimetres
+    # whatever the template, so a first TEXT in a metres drawing stood 2.5 m
+    # tall and an MLEADER 4 m (a YouTuber's staircase plan in IngeCAD).
+    doc.header["$TEXTSIZE"] = paper_text_height(template)
+    _scale_mleader_style(doc, template.units_per_mm * template.plot_scale)
     # The CURRENT dimension style must carry the plot scale: the renderer
     # reads dimscale from the STYLE, not from the $DIMSCALE header, so a
     # metres drawing dimensioned with plain ISO-25 (dimscale 1) drew its
@@ -146,8 +152,29 @@ def new_document(key: str = DEFAULT_TEMPLATE):
     template = by_key(key)
     document = Document.new()
     apply_to(document, template)
+    document.uninitialized_layouts.update(
+        name for name in document.doc.layouts.names() if name != "Model")
     document.dirty = False
     return document
+
+
+_MLEADER_LENGTHS = {"char_height": 4.0, "arrow_head_size": 4.0,
+                    "landing_gap_size": 2.0, "dogleg_length": 8.0,
+                    "break_gap_size": 3.75}
+
+
+def _scale_mleader_style(doc, factor: float) -> None:
+    """Standard's lengths, as ezdxf ships them in paper millimetres, put
+    into drawing units at the template's scale. Idempotent: always from
+    the millimetre values."""
+    try:
+        style = doc.mleader_styles.get("Standard")
+    except Exception:  # noqa: BLE001 -- no multileader styles at all
+        return
+    if style is None:
+        return
+    for name, mm in _MLEADER_LENGTHS.items():
+        style.dxf.set(name, mm * factor)
 
 
 def paper_text_height(template: Template) -> float:

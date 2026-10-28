@@ -19,6 +19,7 @@ from ezdxf.document import Drawing
 from ezdxf.lldxf.const import DXFStructureError
 
 from core import ezdxf_patches
+from core import dimassoc  # noqa: F401 -- registers DIMASSOC before any read
 
 ezdxf_patches.apply()
 
@@ -64,6 +65,16 @@ class Document:
         # dirty=True). Lets a background regen detect that the document
         # changed under it and that its result is stale.
         self.revision = 0
+        #: bumped when a block definition changes (see History._mark_blocks)
+        self.blocks_revision = 0
+        #: The last PLOT dialog settings per layout name, for the session:
+        #: the dialog reopens as it was left, the way AutoCAD's does.
+        self.plot_settings: dict[str, dict] = {}
+        #: Layouts born in this session that were never opened: the first
+        #: visit gives them a viewport onto the model, as AutoCAD's Layout1
+        #: comes with one (LAYOUTCREATEVIEWPORT). A drawing's own layouts
+        #: are never touched: an empty sheet in a file is deliberate.
+        self.uninitialized_layouts: set[str] = set()
         #: Name of the block open in the Block Editor, or None. While set,
         #: :meth:`current_space` answers with that block's layout, so every
         #: draw/edit/snap/pick path operates on the definition without
@@ -99,17 +110,30 @@ class Document:
 
     @classmethod
     def new(cls) -> "Document":
-        # Load the standard linetypes (needed for linetype rendering) but not
-        # ezdxf's full style/dimstyle setup — a new AutoCAD drawing carries
-        # only a couple of established styles, not dozens of OpenSans/EZ_*
-        # entries. install_default_styles seeds the metric ISO-25 dim style.
+        # Not ezdxf's setup: a new AutoCAD drawing (acadiso.dwt) carries
+        # only Continuous -- the rest are loaded from acadiso.lin when wanted,
+        # with its millimetre values, not ezdxf's preloaded ones -- and only a
+        # couple of established styles, not dozens of OpenSans/EZ_* entries.
+        # install_default_styles seeds the metric ISO-25 dim style.
         from core import styles as _styles
 
-        document = cls(ezdxf.new("R2018", setup=["linetypes"]))
+        document = cls(ezdxf.new("R2018", setup=False))
         _styles.install_default_styles(document)
         # AutoCAD's templates: MIRROR keeps text readable. ezdxf's own
         # default is 1 (mirror writing).
         document.doc.header["$MIRRTEXT"] = 0
+        # acadiso.dwt's Standard text style is Arial. The drawing stores the
+        # name; where Arial is not installed (a clean Linux) it is drawn in
+        # Liberation Sans, made on Arial's exact widths
+        # (ezdxf_patches._patch_metric_compatible_fonts).
+        standard = document.doc.styles.get("Standard")
+        if standard is not None and not standard.dxf.get("font", ""):
+            standard.dxf.font = "arial.ttf"
+            standard.set_extended_font_data(family="Arial")
+        # and their scale list (annotation scales, viewport scales)
+        from core import annotative
+
+        annotative.seed_standard_scales(document.doc)
         return document
 
     @classmethod
@@ -133,11 +157,19 @@ class Document:
                 doc, _auditor = recover.readfile(path)
             except (DXFStructureError, ValueError) as exc:
                 raise DocumentError(f"not a readable DXF file: {exc}") from exc
+        # sheets IngeCAD wrote before 0.6.7 lack AutoCAD's main viewport
+        from core.layouts import repair_missing_main_viewports
+
+        repair_missing_main_viewports(doc)
         return cls(doc, path)
 
     @property
     def name(self) -> str:
-        return self.path.name if self.path else "Untitled"
+        if self.path:
+            return self.path.name
+        from core.i18n import tr
+
+        return tr("Untitled")
 
     def current_space(self):
         """The space edits happen in — what every draw/edit/snap/pick path
@@ -223,16 +255,27 @@ class Document:
         self.dirty = False
 
 
+def _survives_dwg(entity) -> bool:
+    """Do this object's scale representations come back from a DWG? The
+    bundled LibreDWG imports text and dimension contexts since 0.6.7
+    (vendor patch of 2026-10-10, checked through ODA); other kinds --
+    a colleague's multileaders, hatches, blocks -- are not proven yet."""
+    kind = entity.dxftype()
+    if kind in ("TEXT", "MTEXT"):
+        return True
+    return kind == "DIMENSION" and (entity.dimtype & 7) in (0, 1, 3, 4)
+
+
 def _annotative_save_warnings(doc) -> list[str]:
-    """No DWG writer IngeCAD ships keeps an object's scale representations
-    yet (LibreDWG's DXF importer drops them), so a save that loses them says
-    so -- and DXF, which keeps them all, is the way out."""
+    """A save that would lose scale representations says so -- and DXF,
+    which keeps them all, is the way out."""
     from core import annotative
     from core.i18n import tr
 
     count = sum(1 for layout in doc.layouts for e in layout
                 if annotative.is_annotative(e)
-                and len(annotative.representations(e)) > 1)
+                and len(annotative.representations(e)) > 1
+                and not _survives_dwg(e))
     if not count:
         return []
     return [tr("{count} annotative objects keep only their default scale "

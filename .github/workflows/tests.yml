@@ -7,6 +7,7 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,10 +28,13 @@ jobs:
             libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 \
             libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
             libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
-            libxcb-xkb1 libxcb-cursor0
+            libxcb-xkb1 libxcb-cursor0 gdb
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests
         env:
           QT_QPA_PLATFORM: xcb
-        run: xvfb-run -a -s "-screen 0 1600x1000x24" pytest tests/ -q
+          # a crash prints every thread's native stack (see the script)
+          TESTS_GDB: 1
+        # four processes, each with its own Xvfb (scripts/run-tests-split.sh)
+        run: scripts/run-tests-split.sh python 4

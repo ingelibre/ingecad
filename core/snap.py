@@ -87,6 +87,10 @@ class SnapEngine:
         self.document = document
         self._space = space
         self._dirty = True
+        #: block definitions being walked, to stop a cyclic one
+        self._block_stack: set = set()
+        #: transformed block rows collected by a build (see _emit)
+        self._chunks = None
         self._owners: list[str] = []
         self._owner_ids: dict[str, int] = {}
         self._segs = np.empty((0, 4))     # x1 y1 x2 y2
@@ -177,7 +181,7 @@ class SnapEngine:
                 l = e.dxf.location
                 points.append((l.x, l.y))
                 point_o.append(oid)
-            elif t in ("INSERT", "TEXT", "MTEXT", "ATTDEF", "SHAPE") \
+            elif t in ("INSERT", "TEXT", "MTEXT", "ATTDEF", "ATTRIB", "SHAPE") \
                     and targets is not None:
                 # INSertion: the point the object hangs from.
                 anchor = e.dxf.get("insert")
@@ -190,8 +194,72 @@ class SnapEngine:
                 target_o.append(oid)
             elif t == "SPLINE" and curves is not None:
                 SnapEngine._spline(e, oid, curves, curve_o, targets, target_o)
+            elif t == "VIEWPORT":
+                SnapEngine._viewport_frame(e, oid, segs, seg_o)
+            elif t in ("DIMENSION", "ARC_DIMENSION") and targets is not None:
+                SnapEngine._dimension(e, oid, segs, seg_o, points, point_o,
+                                      targets, target_o)
         except Exception:
             pass  # malformed entity: not snappable, not fatal
+
+    @staticmethod
+    def _dimension(dim, oid, segs, seg_o, points, point_o,
+                   targets, target_o) -> None:
+        """A dimension snaps through what its block draws, as in AutoCAD:
+        its dimension and extension lines (Endpoint, Midpoint, Nearest,
+        Intersection, Perpendicular), its arrows' tips (Endpoint -- an
+        arrowhead is inserted at its tip), its definition points (Node) and
+        its text (Insertion). None of it snapped, so a drafter could not
+        measure from an arrow tip to check a standard's 8 mm (Rafael's
+        seventh review, 16:41)."""
+        block = dim.get_geometry_block()
+        if block is None:
+            return
+        dx = dy = 0.0
+        if dim.dxf.hasattr("insert"):            # a moved copy's block offset
+            dx, dy = dim.dxf.insert.x, dim.dxf.insert.y
+        end, ins = _TARGET_CODE["END"], _TARGET_CODE["INS"]
+        for part in block:
+            kind = part.dxftype()
+            if kind == "LINE":
+                a, b = part.dxf.start, part.dxf.end
+                segs.append((a.x + dx, a.y + dy, b.x + dx, b.y + dy))
+                seg_o.append(oid)
+            elif kind == "INSERT":
+                p = part.dxf.insert
+                targets.append((p.x + dx, p.y + dy, end))
+                target_o.append(oid)
+            elif kind == "POINT":
+                p = part.dxf.location
+                points.append((p.x + dx, p.y + dy))
+                point_o.append(oid)
+            elif kind in ("MTEXT", "TEXT"):
+                p = part.dxf.insert
+                targets.append((p.x + dx, p.y + dy, ins))
+                target_o.append(oid)
+
+    @staticmethod
+    def _viewport_frame(vp, oid, segs, seg_o) -> None:
+        """A floating viewport's frame snaps like a rectangle -- Endpoint at
+        its corners, Midpoint, Intersection, Nearest, Perpendicular -- as in
+        AutoCAD, so a second viewport can be butted against the first. It
+        did not: the snap found only the title block behind it, and
+        Rafael's two viewports overlapped by 2.5 mm (seventh review, 25:45).
+        Not the sheet's own main viewport, which is no window; and a
+        viewport clipped to a shape snaps through that shape, an entity of
+        its own."""
+        from core import layouts
+
+        layout = vp.doc.layouts.get_layout_for_entity(vp) if vp.doc else None
+        if layout is None or vp not in layouts.visible_viewports(layout):
+            return
+        if layouts.viewport_clip(vp) is not None:
+            return
+        x0, y0, x1, y1 = layouts.viewport_rect(vp)
+        for edge in ((x0, y0, x1, y0), (x1, y0, x1, y1),
+                     (x1, y1, x0, y1), (x0, y1, x0, y0)):
+            segs.append(edge)
+            seg_o.append(oid)
 
     # -- per-type helpers ------------------------------------------------------
     @staticmethod
@@ -360,7 +428,178 @@ class SnapEngine:
                           curves, curve_o, targets, target_o)
         return found
 
+    # -- what an ordinary block insert draws -----------------------------------
+    #: nesting deeper than this is not followed (and stops a cyclic definition)
+    _BLOCK_DEPTH = 8
+
+    def _block_local(self, block, depth: int = 0):
+        """A block definition's snap geometry in its own coordinates, as
+        arrays, extracted once per build and reused by every insert of it.
+        A drawing with a thousand inserts of one block pays one walk."""
+        cache = self._blocks()
+        name = block.name
+        local = cache.get(name)
+        if local is not None:
+            return local
+        if name in self._block_stack:            # a cyclic definition
+            return None
+        self._block_stack.add(name)
+        chunks, self._chunks = self._chunks, None    # into these lists
+        lists = [[] for _ in range(12)]
+        segs, seg_o, circles, circle_o, arcs, arc_o, points, point_o, \
+            curves, curve_o, targets, target_o = lists
+        for part in block:
+            kind = part.dxftype()
+            if kind == "ATTDEF":
+                continue          # a definition: the insert shows its ATTRIB
+            if kind == "INSERT":
+                self._insert_children(part, 0, *lists, depth=depth + 1)
+            self._extract(part, 0, segs, seg_o, circles, circle_o,
+                          arcs, arc_o, points, point_o,
+                          curves, curve_o, targets, target_o)
+        local = (np.asarray(segs, dtype=np.float64).reshape(-1, 4),
+                 np.asarray(circles, dtype=np.float64).reshape(-1, 3),
+                 np.asarray(arcs, dtype=np.float64).reshape(-1, 5),
+                 np.asarray(points, dtype=np.float64).reshape(-1, 2),
+                 np.asarray(curves, dtype=np.float64).reshape(-1, 4),
+                 np.asarray(targets, dtype=np.float64).reshape(-1, 3))
+        self._chunks = chunks
+        self._block_stack.discard(name)
+        cache[name] = local
+        return local
+
+    def _blocks(self) -> dict:
+        """The document's block geometry cache, for its current block
+        definitions. Shared by every engine of the document (model, sheets,
+        the background warmer) and kept across rebuilds: Plaza Yanque's
+        drawings-as-blocks cost 0.3 s to walk, and an edit that rebuilds
+        the index must not pay that again. ``blocks_revision`` (bumped by
+        History for anything that changes a definition) retires it."""
+        document = self.document
+        revision = getattr(document, "blocks_revision", 0)
+        shared = getattr(document, "_snap_block_cache", None)
+        if shared is None or shared[0] != revision:
+            shared = (revision, {})
+            try:
+                document._snap_block_cache = shared
+            except Exception:
+                pass
+        return shared[1]
+
+    def _insert_children(self, e, oid, segs, seg_o, circles, circle_o,
+                         arcs, arc_o, points, point_o, curves, curve_o,
+                         targets, target_o, depth: int = 0) -> None:
+        """What a block insert draws snaps, as in AutoCAD: a door's jamb,
+        a column's corner, a title block's frame -- every hit belongs to
+        the INSERT, the object the drawing can select. Only the insertion
+        point snapped before (GeoCad Yaguarete had to patch it in). An
+        external reference goes through ``_xref_children``."""
+        if depth > self._BLOCK_DEPTH:
+            return
+        lists = (segs, seg_o, circles, circle_o, arcs, arc_o, points,
+                 point_o, curves, curve_o, targets, target_o)
+        try:
+            if self._xref_children(e, oid, *lists):
+                return
+            for attrib in e.attribs:
+                if not attrib.is_invisible:
+                    self._extract(attrib, oid, *lists)
+            if e.mcount > 1:                       # MINSERT: each copy
+                for copy in e.multi_insert():
+                    self._one_insert(copy, oid, lists, depth)
+                return
+            self._one_insert(e, oid, lists, depth)
+        except Exception:
+            pass                  # a broken insert: its own point still snaps
+
+    def _one_insert(self, e, oid, lists, depth: int) -> None:
+        block = e.block()
+        if block is None or block.block.dxf.flags & 4:     # xref, unresolved
+            return
+        sx = float(e.dxf.get("xscale", 1.0))
+        sy = float(e.dxf.get("yscale", 1.0))
+        extrusion = e.dxf.get("extrusion", (0.0, 0.0, 1.0))
+        planar = abs(extrusion[0]) < 1e-12 and abs(extrusion[1]) < 1e-12 \
+            and extrusion[2] > 0
+        if not planar or abs(abs(sx) - abs(sy)) > 1e-9 * max(abs(sx), 1.0):
+            # Stretched or tilted: circles are no longer circles. Walk the
+            # insert's own transformed copies.
+            for child in e.virtual_entities():
+                if child.dxftype() == "INSERT":
+                    self._insert_children(child, oid, *lists, depth=depth + 1)
+                self._extract(child, oid, *lists)
+            return
+        local = self._block_local(block, depth)
+        if local is None:
+            return
+        segs, seg_o, circles, circle_o, arcs, arc_o, points, point_o, \
+            curves, curve_o, targets, target_o = lists
+        l_segs, l_circles, l_arcs, l_points, l_curves, l_targets = local
+        rot = math.radians(float(e.dxf.get("rotation", 0.0)))
+        cos_r, sin_r = math.cos(rot), math.sin(rot)
+        a = np.array([[cos_r * sx, -sin_r * sy],
+                      [sin_r * sx, cos_r * sy]])
+        base = block.block.dxf.get("base_point", (0.0, 0.0, 0.0))
+        ins = e.dxf.insert
+        shift = np.array([ins.x, ins.y]) - a @ np.array([base[0], base[1]])
+
+        def xy(arr):
+            return arr @ a.T + shift
+
+        if len(l_segs):
+            moved = np.hstack((xy(l_segs[:, :2]), xy(l_segs[:, 2:])))
+            self._emit("segs", moved, oid, segs, seg_o)
+        if len(l_curves):
+            moved = np.hstack((xy(l_curves[:, :2]), xy(l_curves[:, 2:])))
+            self._emit("curves", moved, oid, curves, curve_o)
+        if len(l_points):
+            self._emit("points", xy(l_points), oid, points, point_o)
+        if len(l_targets):
+            moved = np.column_stack((xy(l_targets[:, :2]), l_targets[:, 2]))
+            self._emit("targets", moved, oid, targets, target_o)
+        scale = abs(sx)
+        if len(l_circles):
+            moved = np.column_stack((xy(l_circles[:, :2]),
+                                     l_circles[:, 2] * scale))
+            self._emit("circles", moved, oid, circles, circle_o)
+        if len(l_arcs):
+            centres = xy(l_arcs[:, :2])
+            sweep = l_arcs[:, 4] - l_arcs[:, 3]
+            mirrored = sx * sy < 0
+            # a mirror runs the arc the other way: its new start is the
+            # image of its old end
+            start = l_arcs[:, 4] if mirrored else l_arcs[:, 3]
+            direction = np.column_stack((np.cos(start), np.sin(start))) @ a.T
+            a0 = np.mod(np.arctan2(direction[:, 1], direction[:, 0]), math.tau)
+            moved = np.column_stack((centres, l_arcs[:, 2] * scale,
+                                     a0, a0 + sweep))
+            self._emit("arcs", moved, oid, arcs, arc_o)
+
+    _CHUNK_KEYS = ("segs", "circles", "arcs", "points", "curves", "targets")
+
+    def _emit(self, key, rows, oid, values, owners) -> None:
+        """A transformed block's rows: kept as one array while a build
+        collects (no per-row Python lists for 170 000 segments), else
+        appended to the lists."""
+        if self._chunks is not None:
+            self._chunks[key].append((rows, oid))
+            return
+        values.extend(rows.tolist())
+        owners.extend([oid] * len(rows))
+
+    def _merged(self, key, values, owners, width):
+        rows = np.asarray(values, dtype=np.float64).reshape(-1, width)
+        oidx = np.asarray(owners, dtype=np.int32)
+        chunks = self._chunks[key] if self._chunks is not None else []
+        if chunks:
+            rows = np.vstack([rows] + [c for c, _ in chunks])
+            oidx = np.concatenate(
+                [oidx] + [np.full(len(c), o, dtype=np.int32)
+                          for c, o in chunks])
+        return rows, oidx
+
     def _build(self) -> None:
+        self._chunks = {key: [] for key in self._CHUNK_KEYS}
         self._owners = []
         self._owner_ids = {}
         segs: list = []
@@ -383,28 +622,27 @@ class SnapEngine:
             except Exception:
                 continue
             if e.dxftype() == "INSERT":
-                # an external reference: its geometry snaps as one object
-                # (and the INSERT's own insertion point below, as ever)
-                self._xref_children(e, oid, segs, seg_o, circles, circle_o,
-                                    arcs, arc_o, points, point_o,
-                                    curves, curve_o, targets, target_o)
+                # what the block or external reference draws snaps as one
+                # object (and the INSERT's own insertion point below)
+                self._insert_children(e, oid, segs, seg_o, circles, circle_o,
+                                      arcs, arc_o, points, point_o,
+                                      curves, curve_o, targets, target_o)
             self._extract(e, oid, segs, seg_o, circles, circle_o,
                           arcs, arc_o, points, point_o,
                           curves, curve_o, targets, target_o)
-        self._segs = np.asarray(segs, dtype=np.float64).reshape(-1, 4)
-        self._seg_oidx = np.asarray(seg_o, dtype=np.int32)
+        self._segs, self._seg_oidx = self._merged("segs", segs, seg_o, 4)
         self._seg_bounds = self._seg_bounds_of(self._segs)
-        self._circles = np.asarray(circles, dtype=np.float64).reshape(-1, 3)
-        self._circle_oidx = np.asarray(circle_o, dtype=np.int32)
-        self._arcs = np.asarray(arcs, dtype=np.float64).reshape(-1, 5)
-        self._arc_oidx = np.asarray(arc_o, dtype=np.int32)
-        self._points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
-        self._point_oidx = np.asarray(point_o, dtype=np.int32)
-        self._curves = np.asarray(curves, dtype=np.float64).reshape(-1, 4)
-        self._curve_oidx = np.asarray(curve_o, dtype=np.int32)
+        self._circles, self._circle_oidx = self._merged(
+            "circles", circles, circle_o, 3)
+        self._arcs, self._arc_oidx = self._merged("arcs", arcs, arc_o, 5)
+        self._points, self._point_oidx = self._merged(
+            "points", points, point_o, 2)
+        self._curves, self._curve_oidx = self._merged(
+            "curves", curves, curve_o, 4)
         self._curve_bounds = self._seg_bounds_of(self._curves)
-        self._targets = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
-        self._target_oidx = np.asarray(target_o, dtype=np.int32)
+        self._targets, self._target_oidx = self._merged(
+            "targets", targets, target_o, 3)
+        self._chunks = None
         self._dirty = False
 
     def add_entities(self, entities) -> None:
@@ -434,6 +672,10 @@ class SnapEngine:
                 oid = self._intern(e.dxf.handle)
             except Exception:
                 continue
+            if e.dxftype() == "INSERT":
+                self._insert_children(e, oid, segs, seg_o, circles, circle_o,
+                                      arcs, arc_o, points, point_o,
+                                      curves, curve_o, targets, target_o)
             self._extract(e, oid, segs, seg_o, circles, circle_o,
                           arcs, arc_o, points, point_o,
                           curves, curve_o, targets, target_o)
@@ -614,19 +856,27 @@ class SnapEngine:
         threshold: float,
         kinds: frozenset[str] = ALL_KINDS,
         from_point: Optional[tuple[float, float]] = None,
+        drawn: Optional[list] = None,
     ) -> Optional[SnapHit]:
         """Best snap within ``threshold`` world units of the cursor.
 
         ``from_point`` anchors PER (perpendicular from the previous point).
+        ``drawn``: segments (x1, y1, x2, y2) the running command has drawn
+        but not committed yet (Tool.drawn_segments), snapped like the
+        drawing's own.
         """
         if self._dirty:
             self._build()
         cx, cy = cursor
         best: Optional[tuple[int, float, SnapHit]] = None
 
-        def offer(kind: str, x: float, y: float, circle=None) -> None:
+        def offer(kind: str, x: float, y: float, circle=None,
+                  reach: Optional[float] = None) -> None:
+            """``reach``: how far the cursor is from what it points at, when
+            that is not the snap point itself (PER: the object, not the
+            foot)."""
             nonlocal best
-            d = math.hypot(x - cx, y - cy)
+            d = math.hypot(x - cx, y - cy) if reach is None else reach
             if d > threshold:
                 return
             key = (PRIORITY[kind], d)
@@ -645,6 +895,20 @@ class SnapEngine:
                     & (b[:, 1] - threshold <= cy) & (b[:, 3] + threshold >= cy))
             segs = self._segs[near]
             seg_oids = self._seg_oidx[near]
+        if drawn:
+            extra = np.asarray(drawn, dtype=float).reshape(-1, 4)
+            lo_x = np.minimum(extra[:, 0], extra[:, 2])
+            hi_x = np.maximum(extra[:, 0], extra[:, 2])
+            lo_y = np.minimum(extra[:, 1], extra[:, 3])
+            hi_y = np.maximum(extra[:, 1], extra[:, 3])
+            near = ((lo_x - threshold <= cx) & (hi_x + threshold >= cx)
+                    & (lo_y - threshold <= cy) & (hi_y + threshold >= cy))
+            if near.any():
+                # each its own object id: two segments of the shape being
+                # drawn do cross, unlike the chords of one curve
+                ids = -1 - np.nonzero(near)[0].astype(np.int32)
+                segs = np.vstack([segs, extra[near]]) if len(segs) else extra[near]
+                seg_oids = np.concatenate([seg_oids, ids]) if len(seg_oids) else ids
         # Curve chords ride along for NEA/PER/INT, and ONLY those: an END on
         # every chord vertex would be a marker on nothing.
         curves = np.empty((0, 4))
@@ -787,12 +1051,58 @@ class SnapEngine:
                     hit = _seg_intersection(segs[a], segs[b_])
                     if hit is not None:
                         offer("INT", hit[0], hit[1])
+        if "INT" in kinds:
+            # Circles, arcs and a polyline's curved segments cross lines and
+            # each other too (#82: INT answered only between straight
+            # segments). Only rims within reach of the cursor take part.
+            rims = []
+            for arr, oids, full in ((circles, self._circle_oidx, True),
+                                    (arcs, self._arc_oidx, False)):
+                if not len(arr):
+                    continue
+                reach = np.abs(np.hypot(cx - arr[:, 0], cy - arr[:, 1])
+                               - arr[:, 2]) <= threshold
+                for i in np.nonzero(reach)[0][:32]:
+                    rims.append((arr[i], int(oids[i]) if len(oids) else -1, full))
+            for j, (row, oid, full) in enumerate(rims):
+                for a in near_idx:
+                    if len(seg_oids) and seg_oids[a] == oid:
+                        continue
+                    for x, y in _segment_circle_crossings(segs[a], row):
+                        if full or _angle_in_sweep(
+                                math.atan2(y - row[1], x - row[0]) % math.tau,
+                                row[3], row[4]):
+                            offer("INT", x, y)
+                for row2, oid2, full2 in rims[j + 1:]:
+                    if oid2 == oid:
+                        continue
+                    for x, y in _circle_circle_crossings(row, row2):
+                        if (full or _angle_in_sweep(
+                                math.atan2(y - row[1], x - row[0]) % math.tau,
+                                row[3], row[4])) and (full2 or _angle_in_sweep(
+                                math.atan2(y - row2[1], x - row2[0]) % math.tau,
+                                row2[3], row2[4])):
+                            offer("INT", x, y)
         if "PER" in kinds and from_point is not None and len(near_idx):
             fx, fy = from_point
+            # A foot ON the point it is drawn from is no perpendicular: the
+            # point lies on that very object. It is what a grip dragged
+            # along its own line meets (the line's other end anchors PER),
+            # and taking it pinned the drag to where it started -- "no
+            # consigo menguar esto", a line that would not shorten.
+            same = threshold * 1e-3
             for a in near_idx:
                 p = _project_on_segment(segs[a], fx, fy)
+                if p is not None and math.hypot(p[0] - fx, p[1] - fy) <= same:
+                    continue
                 if p is not None:
-                    offer("PER", p[0], p[1])
+                    # AutoCAD lights PER when the aperture is over the
+                    # OBJECT, and the marker goes to the foot wherever it
+                    # falls on it: the foot is often far from the cursor
+                    # (a grip drag on a big screen missed it, the CI's)
+                    over = _closest_on_segment(segs[a], cx, cy)
+                    offer("PER", p[0], p[1],
+                          reach=math.hypot(over[0] - cx, over[1] - cy))
         if "NEA" in kinds:
             for a in near_idx:
                 p = _closest_on_segment(segs[a], cx, cy)
@@ -809,6 +1119,40 @@ class SnapEngine:
                         offer("NEA", p[0], p[1])
 
         return best[2] if best else None
+
+
+def _segment_circle_crossings(seg, row):
+    """Where segment (x1, y1, x2, y2) crosses the circle of ``row``."""
+    x1, y1, x2, y2 = seg
+    cx, cy, r = row[0], row[1], row[2]
+    dx, dy = x2 - x1, y2 - y1
+    L2 = dx * dx + dy * dy
+    if L2 == 0:
+        return []
+    t0 = ((cx - x1) * dx + (cy - y1) * dy) / L2
+    fx, fy = x1 + t0 * dx, y1 + t0 * dy
+    h2 = r * r - ((cx - fx) ** 2 + (cy - fy) ** 2)
+    if h2 < -1e-12 * max(1.0, r * r):
+        return []
+    dt = math.sqrt(max(h2, 0.0) / L2)
+    out = []
+    for t in (t0 - dt, t0 + dt):
+        if -1e-9 <= t <= 1 + 1e-9:
+            out.append((x1 + t * dx, y1 + t * dy))
+    return out
+
+
+def _circle_circle_crossings(a, b):
+    """Where the circles of rows ``a`` and ``b`` cross (0, 1 or 2 points)."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    d = math.hypot(dx, dy)
+    r1, r2 = a[2], b[2]
+    if d == 0 or d > r1 + r2 + 1e-9 * max(1.0, d) or d < abs(r1 - r2) - 1e-9 * max(1.0, d):
+        return []
+    m = (r1 * r1 - r2 * r2 + d * d) / (2 * d)
+    h = math.sqrt(max(r1 * r1 - m * m, 0.0))
+    mx, my = a[0] + m * dx / d, a[1] + m * dy / d
+    return [(mx + h * dy / d, my - h * dx / d), (mx - h * dy / d, my + h * dx / d)]
 
 
 def _tangent_points(row, px: float, py: float):

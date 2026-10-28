@@ -30,7 +30,7 @@ def test_main_window_constructs_offscreen(qapp):
     win = MainWindow()
     win.show()
     qapp.processEvents()
-    assert win.viewport is win.centralWidget()
+    assert win.viewport.parent() is win.centralWidget()
     # The view transform tracked the widget size.
     assert win.viewport.view.width > 100
     assert win.viewport.view.height > 100
@@ -390,7 +390,7 @@ def test_argv_drawing_opens_after_the_window_is_shown():
     import main as entry
 
     src = inspect.getsource(entry.main)
-    assert src.index("window.show()") < src.index("window.open_path(doc)")
+    assert src.index("window.show()") < src.index("window.open_paths(drawings)")
 
 
 def test_the_coordinate_slot_is_never_taken_by_a_notice():

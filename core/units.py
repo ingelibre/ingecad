@@ -85,6 +85,37 @@ INSUNIT_ABBREV = {
     10: "yd", 14: "dm",
 }
 
+#: Millimetres in one drawing unit, by $INSUNITS (0, unitless, reads as mm).
+MM_PER_INSUNIT = {
+    0: 1.0, 1: 25.4, 2: 304.8, 3: 1609344.0, 4: 1.0, 5: 10.0, 6: 1000.0,
+    7: 1e6, 8: 2.54e-5, 9: 0.0254, 10: 914.4, 11: 1e-7, 12: 1e-6, 13: 1e-3,
+    14: 100.0, 15: 1e4, 16: 1e5,
+}
+
+
+def insunits(drawing, default: int = 0) -> int:
+    """The drawing's $INSUNITS, or ``default`` when it is missing or odd."""
+    try:
+        return int(drawing.header.get("$INSUNITS", default))
+    except (TypeError, ValueError):
+        return default
+
+
+#: The plot scales offered, paper:drawing as (num, den): AutoCAD's metric
+#: scale list (SCALELISTEDIT), the civil scales a site plan needs, and the
+#: enlargements a detail needs (#68). One list for Plot and Page Setup.
+STANDARD_SCALES = (
+    (1, 1), (1, 2), (1, 4), (1, 5), (1, 8), (1, 10), (1, 16), (1, 20),
+    (1, 25), (1, 30), (1, 40), (1, 50), (1, 75), (1, 100), (1, 125),
+    (1, 200), (1, 250), (1, 500), (1, 1000), (1, 2000), (1, 5000),
+    (2, 1), (4, 1), (5, 1), (8, 1), (10, 1), (100, 1),
+)
+
+
+def scale_text(num: float, den: float) -> str:
+    return f"{num:g}:{den:g}"
+
+
 # What the header holds, with AutoCAD's own defaults for a fresh drawing.
 DEFAULTS = {
     "$LUNITS": DECIMAL,
@@ -185,6 +216,8 @@ def _fraction_text(whole: int, rest: Fraction) -> str:
 def format_length(value: float, lunits: int = DECIMAL, luprec: int = 4) -> str:
     """One length, in the drawing's linear format."""
     luprec = max(0, min(8, int(luprec)))
+    if round(value, luprec) == 0:
+        value = 0.0          # float noise is not "-0.000"
     sign = "-" if value < 0 else ""
     magnitude = abs(value)
 

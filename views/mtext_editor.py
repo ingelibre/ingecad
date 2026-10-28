@@ -1041,7 +1041,17 @@ class MTextInPlaceEditor(QWidget):
                 finally:
                     self._loading = was
 
-        self.edit.document().setTextWidth(width - 6)
+        if self._single_line:
+            # A TEXT line grows with what is typed, as AutoCAD's does. It
+            # was as wide as the hidden MTEXT toolbar -- a long empty box
+            # for a two-letter label (GeoCad Yaguarete had to patch it).
+            metrics = self.edit.fontMetrics()
+            typed = metrics.horizontalAdvance(self.edit.toPlainText() or "")
+            width = max(typed + 2 * metrics.averageCharWidth() + 12,
+                        3 * metrics.averageCharWidth() + 12)
+            self.edit.document().setTextWidth(-1)      # one line, no wrap
+        else:
+            self.edit.document().setTextWidth(width - 6)
         content = int(self.edit.document().size().height()) + 8
         # The floor is ONE REAL LINE at the current zoom, not a fixed pixel
         # count: an empty editor whose text is taller than the fixed floor
@@ -1056,10 +1066,14 @@ class MTextInPlaceEditor(QWidget):
         chrome = 0
         if not self._single_line:
             chrome += self._bar.sizeHint().height() + 1
-            if self.ruler.isVisible():
+            # isVisibleTo, not isVisible: the first pass runs before the
+            # editor is shown, when isVisible() is False for every child --
+            # the ruler then appeared on top of an area 18 px short
+            if self.ruler.isVisibleTo(self):
                 chrome += self.ruler.height() + 1
-        self.setGeometry(int(sx) - 2, int(sy) - chrome - 2,
-                         max(width + 4, self._bar.sizeHint().width() + 4),
+        outer = width + 4 if self._single_line \
+            else max(width + 4, self._bar.sizeHint().width() + 4)
+        self.setGeometry(int(sx) - 2, int(sy) - chrome - 2, outer,
                          height + chrome + 4)
 
     # -- lifecycle -------------------------------------------------------------
@@ -1115,7 +1129,7 @@ class MTextInPlaceEditor(QWidget):
                 self, tr("Text Editor"),
                 tr("Discard the changes to this text?"),
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if answer != QMessageBox.Yes:
+            if answer != QMessageBox.Yes or self._closed:
                 return
         self._teardown()
         self._on_cancel()
@@ -1157,6 +1171,11 @@ class MTextInPlaceEditor(QWidget):
             if not inside:
                 popup = QApplication.activePopupWidget()
                 if popup is not None:       # a combo's list is "inside"
+                    return False
+                if QApplication.activeModalWidget() is not None:
+                    # A dialog the editor opened (Discard?, a colour, a
+                    # symbol): its "Yes" is not a click outside the text.
+                    # Committing here created the text being discarded.
                     return False
                 self.commit()
             return False

@@ -156,3 +156,42 @@ def test_reading_angle_folds_into_bottom_or_right():
     assert reading_angle(200.0) == 20.0
     assert reading_angle(300.0) == -60.0
     assert reading_angle(89.0) == 89.0
+
+
+def test_fixed_height_text_style_is_not_scaled_by_dimscale():
+    """A fixed-height text style sets dimension text as is, as AutoCAD does.
+
+    A colleague's portico plan (DIMSCALE 304.8, style height 62.5): ezdxf
+    multiplied the style's height by DIMSCALE, so the first grip drop grew
+    every label from 62.5 to 19050. Driven through the grip's own Command.
+    """
+    from core.actions import DimGripCommand
+    from core.commands import History
+    from core.document import Document
+
+    doc = Document.new()
+    d = doc.doc
+    d.styles.add("FixedNarrow", font="arial.ttf").dxf.height = 62.5
+    d.dimstyles.new("Portico", dxfattribs={
+        "dimscale": 304.8, "dimtxt": 2.5, "dimtxsty": "FixedNarrow"})
+    dim = doc.modelspace().add_linear_dim(
+        base=(0, 1000), p1=(0, 0), p2=(5000, 0), dimstyle="Portico") \
+        .render().dimension
+
+    def text_height():
+        for e in d.blocks.get(dim.dxf.geometry):
+            if e.dxftype() == "MTEXT":
+                return e.dxf.char_height
+        raise AssertionError("no text in the dimension block")
+
+    assert abs(text_height() - 62.5) < 1e-9
+    History(doc).execute(DimGripCommand(dim, "defpoint", (0.0, 1500.0)))
+    assert abs(text_height() - 62.5) < 1e-9
+    # a variable-height style still scales DIMTXT by DIMSCALE
+    d.dimstyles.new("Variable", dxfattribs={"dimscale": 10.0, "dimtxt": 2.5})
+    other = doc.modelspace().add_linear_dim(
+        base=(0, 100), p1=(0, 0), p2=(500, 0), dimstyle="Variable") \
+        .render().dimension
+    heights = [e.dxf.char_height for e in d.blocks.get(other.dxf.geometry)
+               if e.dxftype() == "MTEXT"]
+    assert heights and abs(heights[0] - 25.0) < 1e-9

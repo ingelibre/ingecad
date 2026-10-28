@@ -179,12 +179,38 @@ class CommandLine(QWidget):
 
     def echo(self, text: str) -> None:
         self.history.appendPlainText(text)
+        self._prompt_open = False
         scrollbar = self.history.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
+    def echo_prompt(self, text: str) -> None:
+        """A command's prompt: written, and left open for its answer."""
+        self.echo(text)
+        self._prompt_open = True
+        self._last_prompt = text
 
     def echo_input(self, text: str) -> None:
         prompt = text.strip() or ""
         self.echo(f"{tr('Command')}: {prompt}")
+
+    def echo_answer(self, text: str) -> None:
+        """The answer to a command's prompt goes at the end of the prompt's
+        own line, as AutoCAD's history reads ("Specify first point: 0,0").
+        It was written as "Command: 0,0", as if a new command had been
+        typed -- a number looked like a command name (Rafael's seventh
+        review). A message printed after the prompt gets the prompt repeated
+        with the answer."""
+        answer = text.strip()
+        if getattr(self, "_prompt_open", False):
+            if answer:
+                cursor = self.history.textCursor()
+                cursor.movePosition(cursor.MoveOperation.End)
+                cursor.insertText(" " + answer)
+                self.history.setTextCursor(cursor)
+            self._prompt_open = False
+            return
+        prompt = getattr(self, "_last_prompt", "")
+        self.echo(f"{prompt} {answer}".strip() if prompt else answer)
 
     def type_ahead(self, event: QKeyEvent) -> None:
         """Forward a keystroke typed over the viewport (AutoCAD feel)."""

@@ -103,10 +103,13 @@ class NewLayoutCommand(Command):
 
     def do(self, document) -> None:
         document.doc.layouts.new(self.layout_name)
+        # LAYOUTCREATEVIEWPORT: its first visit adds a viewport
+        document.uninitialized_layouts.add(self.layout_name)
         document.dirty = True
 
     def undo(self, document) -> None:
         document.doc.layouts.delete(self.layout_name)
+        document.uninitialized_layouts.discard(self.layout_name)
         document.dirty = True
 
 
@@ -273,6 +276,8 @@ class AddViewportCommand(Command):
 
     def do(self, document) -> None:
         psp = document.doc.layouts.get(self.layout_name)
+        # the sheet's own main viewport first, as AutoCAD has on every layout
+        self._main = ensure_main_viewport(psp)
         self.entity = psp.add_viewport(
             center=self.center, size=self.size,
             view_center_point=self.view_center, view_height=self.view_height)
@@ -297,6 +302,10 @@ class AddViewportCommand(Command):
             psp = document.doc.layouts.get(self.layout_name)
             psp.delete_entity(self.entity)
             self.entity = None
+            main = getattr(self, "_main", None)
+            if main is not None and main.is_alive:
+                psp.delete_entity(main)
+            self._main = None
         document.dirty = True
 
 
@@ -363,6 +372,21 @@ def viewport_from_corners(document, layout_name: str,
     view_center, view_height = model_fit_view(document, w, h)
     return AddViewportCommand(layout_name, center, (w, h),
                               view_center, view_height)
+
+
+def first_visit_viewport(document, layout_name: str) -> Optional[AddViewportCommand]:
+    """The viewport a layout born in this session gets when first opened
+    (AutoCAD's LAYOUTCREATEVIEWPORT): one filling the printable area and
+    showing the whole model. None when the layout was visited before, came
+    with the drawing, or already has a viewport of its own (Rafael's review
+    6: a new drawing's Layout1 was a blank sheet, the model nowhere)."""
+    if layout_name not in document.uninitialized_layouts:
+        return None
+    document.uninitialized_layouts.discard(layout_name)
+    layout = document.doc.layouts.get(layout_name)
+    if layout is None or visible_viewports(layout):
+        return None
+    return viewport_fit_printable(document, layout_name)
 
 
 def viewport_fit_printable(document, layout_name: str) -> AddViewportCommand:
@@ -598,6 +622,40 @@ def repair_viewport_status(doc) -> int:
             vp.dxf.id = number
             changed += 1
     return changed
+
+
+def ensure_main_viewport(layout):
+    """Give a sheet the main viewport AutoCAD gives every layout -- id 1,
+    status 1, the paper view itself -- when it has none. Returns the one
+    added, or None.
+
+    Without it the first floating viewport was taken for the paper view by
+    AutoCAD and ODA when they renumbered on opening: an IngeCAD sheet sent
+    to a colleague lost its first viewport (found checking annotative
+    scales through ODA, 2026-10-10).
+    """
+    if layout is None or getattr(layout, "name", "Model") == "Model":
+        return None
+    if any(int(vp.dxf.get("id", 0) or 0) == 1
+           for vp in layout if vp.dxftype() == "VIEWPORT"):
+        return None
+    return layout.add_new_main_viewport()
+
+
+def repair_missing_main_viewports(doc) -> int:
+    """On opening: a sheet that has floating viewports but no viewport
+    numbered 1 -- what IngeCAD wrote before 0.6.7 -- gets its main viewport.
+    A DWG renumbered on reading (repair_viewport_status) already has a 1;
+    a sheet with no viewport at all is left for AutoCAD to complete."""
+    added = 0
+    for layout in doc.layouts:
+        if layout.name == "Model":
+            continue
+        if not any(e.dxftype() == "VIEWPORT" for e in layout):
+            continue
+        if ensure_main_viewport(layout) is not None:
+            added += 1
+    return added
 
 
 def viewport_hit(layout, x: float, y: float):
@@ -1136,6 +1194,10 @@ def page_setup_command(layout, width: float, height: float,
         "limmin": (-(s_left + ox), -(s_bottom + oy)),
         "limmax": (width - s_left - ox, height - s_bottom - oy),
     }
+    if getattr(layout, "is_modelspace", False):
+        # the Model tab's limits are the drawing's, in drawing units, not
+        # a sheet: its page setup only says how the model plots
+        del fields["limmin"], fields["limmax"]
     if device is not None:
         fields["plot_configuration_file"] = device
     if plot_type is not None:

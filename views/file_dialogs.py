@@ -16,6 +16,7 @@ drawing you have open, then Documents, then home.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QStandardPaths
@@ -33,8 +34,9 @@ def _usable(candidate: Path | str | None) -> Path | None:
     * ``/app`` — the sandbox's own read-only prefix. ``is_dir()`` says yes,
       and it means nothing to the portal that draws the dialog outside the
       sandbox. That is exactly how the original bug slipped through.
-    * ``/run/user/N/doc/...`` — the document portal's per-file mount, which
-      is how a file chosen outside ``--filesystem=home`` is handed over. It
+    * ``/run/user/N/doc/...`` (or ``/run/flatpak/doc/...``) — the document
+      portal's per-file mount, which is how the chooser may hand a file
+      over. It
       is a fine path to *open*, and a useless folder to reopen in: it holds
       that one file and disappears.
     """
@@ -51,9 +53,7 @@ def _usable(candidate: Path | str | None) -> Path | None:
         return None
     if resolved == Path("/app") or Path("/app") in resolved.parents:
         return None
-    parts = resolved.parts
-    if parts[:2] == ("/", "run") and len(parts) > 4 and parts[2] == "user" \
-            and parts[4] == "doc":
+    if _is_portal_path(resolved):
         return None
     return resolved
 
@@ -98,11 +98,51 @@ def remember(path: Path | str | None) -> None:
         QSettings().setValue(SETTING_LAST_DIR, str(found))
 
 
+def _is_portal_path(path: Path) -> bool:
+    """A document-portal mount: ``/run/user/N/doc/...`` or ``/run/flatpak/doc/...``."""
+    parts = path.parts
+    return (len(parts) > 4 and parts[:3] == ("/", "run", "user") and parts[4] == "doc") \
+        or (len(parts) > 3 and parts[:4] == ("/", "run", "flatpak", "doc"))
+
+
+def host_path(filename: str) -> str:
+    """The real path behind a document-portal one, when the app can reach it.
+
+    In the Flatpak the file chooser may hand back ``/run/flatpak/doc/<id>/x.dwg``:
+    fine to read now, gone after a restart. Stored in a drawing (an xref's
+    path) or a recent-files list, it points nowhere the next day (#66). The
+    portal publishes the host path as an extended attribute; with
+    ``--filesystem=home`` that path is readable from inside the sandbox too.
+    Anything else is returned unchanged.
+    """
+    if not filename:
+        return filename
+    path = Path(filename)
+    if not _is_portal_path(path):
+        return filename
+    try:
+        raw = os.getxattr(path, "user.document-portal.host-path")
+    except (OSError, AttributeError):   # old portal, or no xattr support
+        return filename
+    real = Path(os.fsdecode(raw.rstrip(b"\0")))
+    return str(real) if real.is_file() else filename
+
+
 def get_open_file(parent, caption: str, name_filter: str,
-                  preferred: Path | str | None = None) -> str:
-    """``QFileDialog.getOpenFileName`` that starts somewhere real."""
+                  preferred: Path | str | None = None,
+                  select_file: Path | str | None = None) -> str:
+    """``QFileDialog.getOpenFileName`` that starts somewhere real.
+
+    ``select_file`` opens on that file, already selected, when its folder is
+    one the host can show -- AutoCAD's Select Linetype File on acad.lin.
+    """
+    where = start_dir(preferred if select_file is None else select_file)
+    if select_file is not None and Path(select_file).is_file() \
+            and Path(where) == Path(select_file).parent.resolve():
+        where = str(Path(where) / Path(select_file).name)
     filename, _selected = QFileDialog.getOpenFileName(
-        parent, caption, start_dir(preferred), name_filter)
+        parent, caption, where, name_filter)
+    filename = host_path(filename)
     remember(filename)
     return filename
 

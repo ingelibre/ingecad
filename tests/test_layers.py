@@ -133,3 +133,32 @@ def test_set_entity_property_undo():
     assert line.dxf.get("color", 256) in (256, 7)
     h.undo()   # layer back to 0 for both
     assert line.dxf.layer == "0" and circle.dxf.layer == "0"
+
+
+def test_layer_emptied_by_erase_is_not_in_use():
+    # #64: ERASE unlinks entities but keeps them alive for the undo, so a
+    # walk over the entity database still found them and the panel refused
+    # to delete a layer that held nothing.
+    doc, h = make_doc()
+    doc.doc.layers.add("WALLS", color=1)
+    L.set_current_layer(doc, "WALLS")
+    add = actions.add_line((0, 0), (10, 0))
+    h.execute(add)
+    L.set_current_layer(doc, "0")
+    assert "WALLS" in L.layers_in_use(doc)
+    h.execute(actions.EraseCommand([add.entity]))
+    assert "WALLS" not in L.layers_in_use(doc)
+    assert add.entity not in list(L.placed_entities(doc))   # dimstyles ask too
+    h.undo()
+    assert "WALLS" in L.layers_in_use(doc)
+
+
+def test_layers_in_use_counts_blocks_and_attributes():
+    doc, _ = make_doc()
+    for name in ("INSIDE", "TAG"):
+        doc.doc.layers.add(name)
+    block = doc.doc.blocks.new("B")
+    block.add_line((0, 0), (1, 0), dxfattribs={"layer": "INSIDE"})
+    insert = doc.doc.modelspace().add_blockref("B", (0, 0))
+    insert.add_attrib("T", "x", dxfattribs={"layer": "TAG"})
+    assert {"INSIDE", "TAG"} <= L.layers_in_use(doc)

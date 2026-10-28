@@ -16,6 +16,7 @@ modification time (``core.recent.thumbnail_path``).
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -26,6 +27,10 @@ THUMB_SIZE = (256, 160)
 # The canvas colour, so a thumbnail reads like the drawing does on screen.
 BACKGROUND = (30, 33, 38)
 
+
+
+#: Largest drawing copied for its preview where it cannot be linked (Windows).
+_COPY_LIMIT = 30 * 1024 * 1024
 
 def cached(path) -> Path | None:
     """The thumbnail already on disk for this exact version of the file."""
@@ -55,7 +60,7 @@ def _from_dwg_preview(path: Path, size):
     """Extract the preview a DWG already carries, via LibreDWG's dwgbmp."""
     if path.suffix.lower() != ".dwg":
         return None
-    from formats.dwg_bridge import converter_path
+    from formats.dwg_bridge import converter_path, quiet_process
 
     tool = converter_path("dwgbmp")
     if tool is None:
@@ -68,11 +73,18 @@ def _from_dwg_preview(path: Path, size):
         try:
             work.symlink_to(path.resolve())
         except OSError:
-            return None
+            # Windows creates symlinks only with privileges: a copy, when
+            # the drawing is small enough for that to be cheap
+            try:
+                if path.stat().st_size > _COPY_LIMIT:
+                    return None
+                shutil.copyfile(path, work)
+            except OSError:
+                return None
         try:
             subprocess.run([str(tool), work.name], cwd=tmp, timeout=20,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           check=False)
+                           check=False, **quiet_process())
         except (OSError, subprocess.SubprocessError):
             return None
         for produced in sorted(Path(tmp).iterdir()):

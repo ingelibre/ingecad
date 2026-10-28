@@ -61,6 +61,16 @@ class MLeaderTool(_TextLines, Tool):
     """MLEADER: arrowhead, landing, content (or the other orders), with the
     Options submenu the reference lists."""
 
+    def _text_height(self) -> float:
+        """MLEADER writes with its own style: the editor shows that height
+        (it showed the dimension style's 0.04 and saved 4.0)."""
+        window = getattr(self.ctx.services, "window", None)
+        document = getattr(window, "document", None)
+        doc = getattr(document, "doc", None)
+        if doc is None:
+            return super()._text_height()
+        return leaders.mleader_text_height(doc)
+
     #: session-wide, like AutoCAD's: the Options stick until changed
     leader_type = "S"          # Straight / sPline / None
     landing_on = True

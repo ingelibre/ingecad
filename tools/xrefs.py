@@ -167,7 +167,8 @@ class XAttachTool(Tool):
             name = xrefs.unique_name(doc, stem)     # a plain block took the name
         self.ctx.execute(xrefs.AttachXrefCommand(
             name, saved, self._insert, self._xscale, self._yscale,
-            self._rotation, overlay=self._overlay))
+            self._rotation + self.ucs().degrees,     # from the UCS's X (#91)
+            overlay=self._overlay))
         self.ctx.echo(tr("Xref {name} attached ({kind}, {path}).",
                          name=name,
                          kind=tr("Overlay") if self._overlay else tr("Attach"),

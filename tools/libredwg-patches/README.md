@@ -3,6 +3,192 @@
 IngeCAD embeds LibreDWG's `dwg2dxf`/`dxf2dwg` as satellite converters
 (`vendor/libredwg/bin`, gitignored).
 
+## 2026-10-19: no false errors saving a recent AutoCAD plan
+
+Appended to `current/ingecad-vendor-0.14.8597.patch`. Every AutoCAD 2013+
+plan saved as DWG ended in "Saved with a warning" (found by a plugin
+author filtering the log; three AutoCAD 2018 plans of the corpus: 16 to 37
+errors each).
+
+- **`add_HATCH` dropped a boundary line's end Y of exactly 0** (`&&
+  pair->value.d != 0.0` on code 21 only; code 11 never had it), logging
+  "Unknown DXF code 21 for HATCH". The point was zero-initialised anyway,
+  so the geometry was right and only the log lied; a spline fit point
+  with Y = 0 went the same way.
+- **DETAILVIEWSTYLE / SECTIONVIEWSTYLE read their colors only from an
+  R2004+ DXF** (`FIELD_CMC2004`). A DXF writer that keeps an object it
+  does not know -- ezdxf writing the R2000 intermediate of a 2018 plan --
+  passes the 62s on; the reader lost its place at the first one and the
+  style reached the DWG with its sizes and text style zeroed. Now the
+  color is read whenever it is there (`dxf_read_CMC` backs up if not).
+
+ODA as the judge: the styles of a 2018 plan saved by IngeCAD read back in
+ODA with the original's heights, offsets and text styles (zeroed before).
+Their colors still come back ByBlock instead of ByLayer, but already in
+`dwg2dxf`'s DXF of the original: a read-side bug, not this one. `make
+check` 286/0; `dwg_fuzz` 500 seeds identical, seed by seed. Of four AutoCAD 2018 plans,
+three now save without a warning; the fourth still logs "Illegal
+BLOCK_HEADER *Model_Space.entities[7]", which loses nothing there (ODA:
+7601 entities in, 7601 out, type by type) but is not understood yet, so
+it still warns. Upstream: #1464 (HATCH) and #1465 (view styles), 2026-10-20.
+
+## 2026-10-19: justified text keeps its alignment point in the DWG
+
+Appended to `current/ingecad-vendor-0.14.8597.patch`. Reported by a user
+(IngeCAD #95): a DXF opened and saved as DWG reopened with every centred
+text at 0,0.
+
+- **`dwg_set_dataflags` dropped the alignment point when it equalled the
+  insertion point** (bit 0x02 = "not stored"). ezdxf, like other DXF
+  writers that do not compute the left baseline point, writes a justified
+  TEXT/ATTDEF/ATTRIB with both points alike; the point a non-left
+  alignment places the text by was then left out, and an absent alignment
+  point reads back as 0,0 -- in LibreDWG and in ODA. The same macro already
+  keeps the horizontal and vertical alignments that use it; now a non-zero
+  alignment keeps the point too.
+
+ODA as the judge: 10 justifications (LEFT ... FIT) written by `dxf2dwg`
+read back in ODA at their alignment points, ODA recomputing the insertion
+as AutoCAD does (all but LEFT/ALIGNED/FIT at 0,0 before). `make check`
+286/0; `dwg_fuzz` 500 seeds identical, seed by seed. Upstream: #1463 (2026-10-20).
+
+## 2026-10-11: 2-line angular dimensions keep their points
+
+Appended to `current/ingecad-vendor-0.14.8597.patch`. Found by re-rendering
+every dimension of the corpus in place: 2-line angular dimensions read
+nonsense (521 of 646 differed from the author's block).
+
+- **`dwg.spec` read the points in the wrong order.** In the DWG stream the
+  arc point (DXF 16) comes first, as a 2RD, and the second line's end (DXF
+  10) last, as a 3BD (ODA spec); the spec read the 2RD into `def_pt` and
+  the last 3BD into `xline2end_pt`, swapping 10 and 16 both ways. The
+  pre-R13 branch above already treats `xline2end_pt` as the arc point.
+  DXF and JSON output keep their order.
+
+ODA as the judge: 123 of 123 such dimensions in 40 corpus drawings now
+have ODA's points (0 before), and a DWG written by `dxf2dwg` reads back in
+ODA with its points (swapped before). With IngeCAD's sector fix in
+`core/ezdxf_patches.py`, 132 of 138 redraw to the author's own text (0
+before; the rest are a `\M+` degree sign and one extra text). `make check`
+286/0; `dwg_fuzz` 500 seeds identical; 150 corpus drawings read with the
+same entity counts. Upstream: #1438.
+
+## 2026-10-11: polyline widths survive both ways
+
+Appended to `current/ingecad-vendor-0.14.8597.patch`. Found by a GUI sweep:
+`PLINE` with Width, saved as DWG, reopened hairline.
+
+- **`in_dxf` flagged per-vertex widths with bit 4**, which in the DWG is
+  "has const_width"; "has widths" is 32. The writer then wrote a constant
+  width of 0 and no width list. Also the 41 test.
+- **The width list was allocated only by vertex 0's 40.** `dwg2dxf` writes
+  no 40/41 for a vertex without width, so a polyline whose first segment is
+  thin made `CHK_array` abort the import. Now the first 40 allocates, as the
+  first 42 does for bulges.
+- **`dwg2dxf` wrote the widths only when the polyline had bulges**
+  (`num_bulges == num_points` copied into the widths test): a colleague's
+  plan opened with its wide polylines thin.
+
+ODA as the judge: a DWG written by the new `dxf2dwg` reads back in ODA with
+every width; on two corpus plans ODA's polylines with widths (2 and 6) are
+exactly what the new `dwg2dxf` gives (0 before). Read sweep, 197 corpus
+drawings old vs new `dwg2dxf`: same entity counts everywhere, and 962
+polylines in 44 drawings get their widths back. `make check` 286/0;
+`dwg_fuzz` 500 seeds identical, seed by seed. Upstream: #1437 (all three
+were still on master as of a3d51f13).
+
+## 2026-10-10: associative dimensions survive open and Save as DWG
+
+Appended to `current/ingecad-vendor-0.14.8597.patch`. IngeCAD 0.6.7 ties
+dimensions to their objects (DIMASSOC = 2, `core/dimassoc.py`); 10 of 40
+corpus plans converted by ODA carry DIMASSOC objects (Yanaquihua: 73).
+
+- **DIMASSOC was UNSTABLE**, so `dwg2dxf` wrote none: a colleague's
+  associative dimensions opened untied. Made stable.
+- **The refs were indexed by bit.** They follow one another: one per set
+  bit of `associativity`, each followed by its last-point companion when
+  `has_lastpt_ref` (a perpendicular's "from" point, no bit of its own).
+  With a companion every later ref was lost -- decoding too: a dimension
+  with two perpendiculars has 5 refs for its 2 bits. `dwg2.spec` now reads
+  and writes them in sequence.
+- **DXF layout as ODA writes it:** the dimension's 330 first; no 74 count
+  before the 332s (a DWG count, like the 331s').
+- **`in_dxf` `add_DIMASSOC`** rewritten for the sequential layout (6 refs,
+  92/301/302, the spec's handle codes), and the 330 in `AcDbDimAssoc`
+  imported as `dimensionobj`: left to the generic search it was lost, and
+  ODA drops a DIMASSOC that names no dimension.
+
+ODA as the judge: `dwg2dxf` on the 18 corpus plans with DIMASSOC gives 217
+of 217 objects identical, tag by tag, to ODA's DXF. A sheet saved by
+IngeCAD reads back in ODA with its ties identical to ODA's own conversion,
+and Yanaquihua opened in IngeCAD and saved as DWG reads back in ODA with
+all 73 identical. Through IngeCAD's save and open the dimension still
+follows its line. `make check` 270/0; `dwg_fuzz` 500 seeds identical.
+Read sweep (200 corpus drawings, old vs new `dwg2dxf`, IngeCAD's reader):
+200/200 the same entities and audit errors, and now 5305 DIMASSOC in 102
+of them (none before). Write sweep (120 drawings through IngeCAD's save,
+ODA as judge): no drawing worse, and 10 that ODA rejected now read --
+the old `dxf2dwg` mis-wrote the DIMASSOC the new reader brings, so both
+halves of this patch go together. Upstream: #1434.
+
+## 2026-10-10: annotative scales and viewports survive Save as DWG
+
+Appended to `current/ingecad-vendor-0.14.8597.patch`. Found making Rafael's
+annotative dimensions measure the same in a 1:1 and a 2:1 viewport, then
+saving as DWG (he works in DWG): every scale came back lost.
+
+- **`object_alias` tested `ACAD_`** in its `ACDB_*OBJECTCONTEXTDATA_CLASS`
+  branch -- its own comment says `ACDB_` -- so `dxf2dwg` logged "Unhandled 0
+  ACDB_..._CLASS (objects)" for every context object and dropped it: TEXT,
+  MTEXT and dimension scale representations all vanished on DXF -> DWG.
+- **A dimension context's common body** (`AcDbDimensionObjectContextData`) is
+  the embedded `Dwg_OCD_Dimension`, which the generic field search does not
+  see: with the prefix right, its `2` (the `*D` block, by name) aborted the
+  whole import. `dxf_set_ocd_dimension` sets those groups.
+- **RADIM and DMDIM context classes** moved out of `DEBUG_CLASSES` and made
+  stable like ALDIM (#1424): they are ALDIM's body plus their arc points.
+  No corpus drawing carries one; ODA reads IngeCAD's back.
+- **Pre-r2004 viewports were all off.** A viewport is on or off in the
+  `VX_TABLE_RECORD` `in_dxf` makes for it, whose `is_on` was never set (a
+  commented-out line): every sheet saved as r2000 opened in ODA (and AutoCAD)
+  with its viewports off. Now from the DXF 68 status (0 off, else on).
+- **A context's own 70 became the class version.** The 70 that follows the
+  body's subclass (MTEXT attachment, ...) overwrote `class_version` of
+  `AcDbObjectContextData`. `dxf_set_context_70` sends it to the body.
+- **MTEXT context columns.** `72` counts the `46` heights that follow; the
+  generic search warned "Ignore ... column_heights VECTOR" and kept the
+  count, so the writer read the heights from NULL and ODA segfaulted on the
+  DWG of a real bridge plan (the A/B sweep below caught it). Now the vector
+  is allocated from 72 and filled from each 46.
+
+ODA as the judge: IngeCAD's sheet with linear, aligned, radius and diameter
+dimensions at 1:1 and 2:1 goes through `dxf2dwg` and reads back with no audit
+error, every scale of every dimension with its own block, and the viewports
+on (a viewport whose 68 is 0 stays off). Through IngeCAD's own save and open
+the 1:1 and 2:1 viewports draw the same text (1014/1014 px). `make check`
+270/0; `dwg_fuzz.py run --count 500` identical seed by seed to the build
+without it. A/B sweep of 120 corpus drawings through IngeCAD's save path
+(load_dwg -> intermediate DXF -> old and new `dxf2dwg` -> ODA): 120/120 the
+same (102 read by both, 15 rejected by both, 3 IngeCAD cannot open); before
+the columns fix one bridge plan crashed ODA with the new build only.
+Upstream: #1432 (context import: prefix, dimension body, 70, columns) and
+#1433 (r2000 viewports on). The RADIM/DMDIM promotion stays vendor-only.
+
+## 2026-10-08: xref blocks survive Save as DWG (IngeCAD #66)
+
+Appended to `current/ingecad-vendor-0.14.8597.patch`. An r13+ DXF has no 70
+in BLOCK_RECORD: a block's xref bits (70: 4 xref, 8 overlay, 32 resolved)
+and its path (1) are only in the BLOCK entity, while a DWG keeps them in
+the BLOCK_HEADER. `new_object` threw away BLOCK's 70 and 1 as "DXF
+artifacts", and the 1 that dynapi did take landed in `BLOCK.xref_pname`,
+which no DWG writes. So every xref saved through `dxf2dwg` came back as an
+empty plain block: an attached title block vanished after save and reopen
+(Rafael, review 6). Now the 70 bits go to the owning BLOCK_HEADER and the
+path is copied to it when the BLOCK is linked (upstream PR #1431). ODA reads the result as an
+xref (70 = 4, 1 = `./FormatoA4.dxf`; before: 0 and empty). `make check`
+270/0; `dwg_fuzz.py run --count 500` identical seed by seed to the build
+without it.
+
 ## Current state — 2026-09-27: re-based on 0.14.8597
 
 `current/ingecad-vendor-0.14.8597.patch` carries everything below onto the

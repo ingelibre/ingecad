@@ -379,7 +379,13 @@ def test_scaletext_base_point_options_pin_the_chosen_corner():
     h = Harness()
     t = h.msp.add_text("HOLA", dxfattribs={"height": 2.5, "insert": (10, 20)})
     top_right = modify.scaletext_base_point(t, "TR")
-    assert top_right[0] > 10.0 and top_right[1] == pytest.approx(22.5)
+    # the top of the capitals as drawn: 22.5 with Arial, a little lower
+    # with the Liberation twin standing in for it on a Linux without Arial
+    from ezdxf.tools.text_size import text_size
+
+    assert top_right[0] > 10.0
+    assert top_right[1] == pytest.approx(20.0 + text_size(t).cap_height)
+    assert 22.3 < top_right[1] <= 22.5
     h.history.execute(modify.scale_texts([t], "TR", factor=2.0))
     assert t.dxf.height == pytest.approx(5.0)
     # the top-right corner stayed where it was: the insert moved left and down

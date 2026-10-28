@@ -45,12 +45,6 @@ SETTING_MARKEXE = "center/markexe"
 DEFAULT_EXE = 3.5              # acadiso: 3.5 mm past the circle, on paper
 PAPER_TEXT_MM = 2.5            # ISO text height the annotation scale is read from
 
-#: Millimetres in one drawing unit, by $INSUNITS.
-_MM_PER_UNIT = {
-    0: 1.0, 1: 25.4, 2: 304.8, 3: 1609344.0, 4: 1.0, 5: 10.0, 6: 1000.0,
-    7: 1e6, 8: 2.54e-5, 9: 0.0254, 10: 914.4, 11: 1e-7, 12: 1e-6, 13: 1e-3,
-    14: 100.0, 15: 1e4, 16: 1e5,
-}
 DEFAULT_LTYPE = "CENTER2"
 DEFAULT_CROSSSIZE = "0.1x"
 DEFAULT_CROSSGAP = "0.05x"
@@ -136,15 +130,18 @@ def annotation_scale(drawing) -> float:
         style = drawing.dimstyles.get(name) if name in drawing.dimstyles else None
     except Exception:
         style = None
-    height = float(style.dxf.get("dimtxt", 2.5)) if style is not None else 2.5
+    from core.styles import dim_text_height
+
+    height = dim_text_height(drawing, style.dxf.get) if style is not None else 2.5
     scale = float(style.dxf.get("dimscale", 1.0)) if style is not None else 1.0
     if not scale > 0.0:            # 0 is AutoCAD's "work it out": 1 here
         scale = 1.0
     if height > 0.0:
         return height * scale / PAPER_TEXT_MM
     try:
-        mm_per_unit = _MM_PER_UNIT.get(
-            int(drawing.header.get("$INSUNITS", 4)), 1.0)
+        from core import units
+
+        mm_per_unit = units.MM_PER_INSUNIT.get(units.insunits(drawing, 4), 1.0)
     except Exception:
         mm_per_unit = 1.0
     return scale / mm_per_unit
@@ -214,7 +211,7 @@ def _resolve_linetype(drawing, wanted: str):
     from core import linetypes as lt_ops
 
     have = {lt.dxf.name.upper(): lt.dxf.name for lt in drawing.linetypes}
-    library = lt_ops.library()
+    library = lt_ops.STANDARD           # names only: the same in both files
     for name in (wanted, DEFAULT_LTYPE):
         key = name.upper()
         if key in have:

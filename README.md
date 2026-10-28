@@ -2,10 +2,10 @@
 
 **[ingecad.org](https://ingecad.org)** · CAD 2D libre para Linux, con DWG de fábrica.
 
-**Free 2D CAD for Linux, in the spirit of classic AutoCAD.**
+**Free 2D CAD for Linux, in the spirit of classic CAD.**
 
 IngeCAD is a lightweight 2D drafting program for civil engineers and architects
-migrating from AutoCAD: same command aliases (`M` ⏎ moves, `TR` ⏎ trims), the
+coming from other CAD programs: the usual command aliases (`M` ⏎ moves, `TR` ⏎ trims), the
 classic pre-ribbon interface (menus + toolbars + a real command line), and
 faithful round-tripping of the DWG/DXF files your colleagues send you.
 
@@ -24,14 +24,14 @@ and IngePresupuestos (construction budgeting).
   [ezdxf](https://ezdxf.mozman.at/)); everything IngeCAD does not understand is
   preserved untouched when saving. DWG is handled by external converters
   (GNU LibreDWG bundled; ODA File Converter optional) — never parsed in-app.
-- **AutoCAD muscle memory.** Command line at the bottom, `acad.pgp`-compatible
-  aliases, window/crossing selection, object snaps with the classic markers.
+- **CAD muscle memory.** Command line at the bottom, the usual command
+  aliases (`.pgp` alias files), window/crossing selection, object snaps with the classic markers.
 - **Linux/Wayland first.** Native, fast, no ribbon — ever.
 - **Deliberately small.** Lines, circles, polylines, blocks, layers, hatches,
   trim/offset/extend, survey points with elevations, and printing to scale.
-  Not a feature-for-feature AutoCAD clone.
+  Not a feature-for-feature clone of any other CAD.
 
-## Status — v0.6.5
+## Status — v0.6.8.2
 
 What works today:
 
@@ -66,12 +66,13 @@ What works today:
   smooth pan/zoom even on cadastre-scale drawings (90k+ entities).
 - **DWG in and out**: open `.dwg` transparently via GNU LibreDWG; save as
   DWG r2000 (LibreDWG, bundled), with a silent verified-save check.
-- **Classic interface**: command line at the bottom with AutoCAD aliases
+- **Classic interface**: command line at the bottom with the usual aliases
   (`L`, `C`, `M`, `TR`, `Z`+`E` …), dark model space, dockable Layers /
-  Properties / Styles panels. Your own aliases go in `acad.pgp`, same syntax
-  as AutoCAD's (*Tools ▸ Customize ▸ Edit Program Parameters*, then
-  `REINIT`); a Spanish AutoCAD file works as it is (`DE, *DESPLAZA`).
-- **Paper space like AutoCAD**: Model/Layout tabs and **the sheet itself is
+  Properties / Styles panels, **drawing tabs** to keep several drawings open
+  in one window, and copy/paste between IngeCAD windows. Your own aliases go in the standard `.pgp`
+  alias file (*Tools ▸ Customize ▸ Edit Program Parameters*, then
+  `REINIT`); a Spanish alias file works as it is (`DE, *DESPLAZA`).
+- **Paper space, the classic way**: Model/Layout tabs and **the sheet itself is
   editable** — draw, move, erase, trim, scale and edit the text of a title
   block with the commands you already know, in paper millimetres. Plus MVIEW
   floating viewports (objects you select by their frame, with grips), exact
@@ -87,28 +88,37 @@ What works today:
   radius and diameter to the norm (arrowheads inside the circle), center
   marks and the chain-line axes of CENTERMARK / CENTERLINE,
   continue/baseline chains and DIMTEDIT —
-  every command with AutoCAD's own options (`Text` with `<>`, `Angle`,
+  every command with its standard options (`Text` with `<>`, `Angle`,
   `Rotated`, `Quadrant`, `Partial`…) and the official prompts, plus the
   **Dimension Style Manager** with its five tabs and a live preview.
-- **Layers like AutoCAD's**: the properties table (status, on, freeze, lock,
+  **Associative dimensions** (`DIMASSOC` 2) follow the object they measure,
+  and a colleague's dimensions keep their author's text, number and
+  position when edited, moved, rotated or mirrored.
+- **Layers, the classic way**: the properties table (status, on, freeze, lock,
   colour, linetype, lineweight, plot, description) with live search, and the
   `-LAYER` command line with wildcards for the keyboard-only flow.
 - **Editing**: ERASE / MOVE / COPY / ROTATE / SCALE / MIRROR / OFFSET
   (polylines and arcs included, distance by mouse) / TRIM / EXTEND / FILLET /
-  CHAMFER / STRETCH / BREAK / JOIN / ARRAY / MATCHPROP / PEDIT / EXPLODE,
+  CHAMFER / STRETCH / BREAK / JOIN / ARRAY / MATCHPROP / PEDIT (Join turns
+  lines and arcs into one polyline) / EXPLODE,
   grips, window/crossing selection, clipboard copy/paste, and ROTATE/SCALE
-  show the result turning live under the cursor.
+  show the result turning live under the cursor — with the standard options
+  (MOVE/COPY Displacement, ROTATE/SCALE Copy, TRIM Fence, UNDO with a count,
+  OOPS), locked layers that protect their objects, and an undo that gives
+  back the whole object. Linetypes through a Linetype Manager.
 - **The MTEXT in-place editor**: text edits on the canvas at its real size
   with the classic Text Formatting toolbar (style, font, height, bold,
   italic, underline, overline, colour), the ruler with indents, tab stops
   and the width arrow, line spacing, bullets and numbered lists, background
-  mask and static columns — all stored as AutoCAD's own inline codes.
-- **The AutoCAD feel**: object snaps with AutoSnap markers (END, MID, CEN,
+  mask and static columns — all stored as the standard MTEXT inline codes.
+- **The classic CAD feel**: object snaps with their markers (END, MID, CEN,
   NOD, INT, PER, TAN, QUA, INS, GCE — on curves too, and through a layout's
   viewports to the model they show, with paper-space dimensions reading the
   model's length) with the status-bar running-snap list, ORTHO / POLAR
   (tracking that locks near a path, the increment and additional angles in
-  Drafting Settings), the nested adaptive grid with GRIDUNIT / SNAPUNIT
+  Drafting Settings), a user coordinate system (UCS: moved and turned
+  origin, named, Previous, Object) that typed points, the grid and the
+  commands follow, the nested adaptive grid with GRIDUNIT / SNAPUNIT
   saved in the drawing, absolute / relative / polar coordinate input and
   LASTPOINT, command prefix autocomplete (`OFF` runs OFFSET), inquiry
   commands (DIST / ID / AREA / LIST), UNITS, blocks (`B` / `I`), a startup
@@ -126,7 +136,7 @@ What works today:
   **OVERKILL**, **WBLOCK**; LENGTHEN, ALIGN, BOUNDARY, DONUT, SCALETEXT;
   **annotative** text and dimensions at the annotation scale of each view.
 - **Scripts**: APPLOAD runs a Python file over IngeCAD's commands as one
-  undo step, SCRIPT runs an AutoCAD `.scr`.
+  undo step, SCRIPT runs a `.scr` script.
 - **Raster images and PDF underlays**: attach PNG/JPEG/BMP/GIF/TIFF or a
   PDF page (rasterized) to trace over, with corner grips, brightness /
   contrast / fade and a transparency degree.
@@ -135,11 +145,10 @@ What works today:
 - **Grips on every selectable type**, dimensions included: drag an
   extension origin to re-measure, the line to relocate, the text to move
   the label — with alignment snapping to neighbouring dimensions.
-- **The AutoCAD shortcut menu**, built from the Command Reference's own
-  Access Methods, with the commands behind it: object isolation, Select
+- **The classic shortcut menu**, with the commands behind it: object isolation, Select
   Similar, Add Selected, Quick Select, Group, Find and Replace, QuickCalc
   and Draw Order.
-- **A settings window** (`OPTIONS`) under AutoCAD's tab names, including
+- **A settings window** (`OPTIONS`) under the familiar tab names, including
   right-click customization.
 - **The Block Editor** (`BEDIT`, alias `BE`): open a definition in its own
   environment — only the block, base point at the origin, the classic
@@ -150,7 +159,7 @@ What works today:
   object answers — the dimension under the text somebody typed over it.
 - **Spanish, complete — commands included**: the whole interface, prompts
   whose option keys always work (`Suprimir`, `D` and `_D` all delete a
-  layout), and commands the way a Spanish AutoCAD spells them (`LINEA`,
+  layout), and commands with their usual Spanish names (`LINEA`,
   `BORRA`, `RECORTA`…) with English never stopping to work underneath.
   **A language is a folder** under `i18n/` — adding one needs no Python.
   Czech (community, by Michal Josef Špaček, 64 % of the strings) ships too.
@@ -161,7 +170,7 @@ What works today:
   MATCHPROP paints its second target in 37 ms instead of 2.76 s.
 - **The display is yours**: line smoothing (on by default), `VIEWRES` for
   arc and circle smoothness, crosshair size and colour (`CURSORSIZE`) and
-  pickbox size (`PICKBOX`) — under AutoCAD's own names, typable at the
+  pickbox size (`PICKBOX`) — under their standard names, typable at the
   prompt or set in **Options ▸ Display / Selection**.
 - **Report a Problem** under Help: guided issue forms, Spanish welcome.
 
@@ -169,7 +178,7 @@ Planned next (v0.5): survey-point import with elevations, coordinate
 tables, elevation profiles — as the first discipline plug-in. See
 `CLAUDE.md` for the roadmap.
 
-## Keyboard — the AutoCAD one
+## Keyboard — the classic one
 
 | Key | Does |
 |---|---|
@@ -198,6 +207,14 @@ tables, elevation profiles — as the first discipline plug-in. See
 | Ctrl+Tab | Next drawing window |
 | Ctrl+N / O / S / Shift+S / P / Q | New, open, save, save as, plot, quit |
 
+
+## Install (Windows, 64-bit)
+
+From the [latest release](https://github.com/ingelibre/ingecad/releases/latest):
+`ingecad-setup-v*.exe` installs it (Start menu, "Open with" for `.dwg` and
+`.dxf`); `IngeCAD-*-windows-x64.zip` runs without installing. The installer
+is not signed yet, so the first time Windows SmartScreen says it protected
+your PC: *More info* ▸ *Run anyway*.
 
 ## Install (Linux, x86_64)
 
@@ -235,7 +252,7 @@ and exits non-zero if any of them is missing.
 
 To give every account on a machine the same starting setup -- a class, an
 office -- put a folder at `/etc/ingecad/` (or point `INGECAD_SITE_DIR` at
-one). It plays the part of an AutoCAD deployment's shared support folder and
+one). It plays the part of a CAD deployment's shared support folder and
 profile, and each user's own choices still win over it:
 
 ```
@@ -262,8 +279,8 @@ terreno\enabled=false
 savetime=5
 ```
 
-`acad.pgp` there uses AutoCAD's syntax; a Spanish AutoCAD's file works as it
-is. `ingecad --check` shows whether the folder was found. With the Flatpak,
+`acad.pgp` there uses the standard `.pgp` syntax; a Spanish alias file works
+as it is. `ingecad --check` shows whether the folder was found. With the Flatpak,
 let the app read the host's `/etc` once, as root:
 
 ```bash
