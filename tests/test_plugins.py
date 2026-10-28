@@ -366,3 +366,41 @@ def test_the_frozen_build_carries_everything_the_bundled_plugins_import():
             f"{module}: only a plugin imports it; add it to the spec's hiddenimports")
     for module in sorted(std_imports):
         assert module in hidden, f"{module}: a plugin needs it and the spec does not freeze it"
+
+
+def test_a_toolbar_takes_separators_as_a_menu_does(qapp):
+    # SEPARATOR in a plugin's toolbar raised AttributeError ('str' has no
+    # 'icon') and the plugin failed to activate.
+    from core.plugins import SEPARATOR, PluginSpec, ToolbarItem
+
+    win = _window(qapp)
+    try:
+        win.plugins.loaded["ejemplo"].spec = PluginSpec(
+            id="ejemplo", name="Sample", commands={"HELLO": lambda ctx, *a: None},
+            toolbar=(ToolbarItem("Hello", "HELLO"), SEPARATOR,
+                     ToolbarItem("Again", "HELLO")))
+        win.plugins.set_toolbar_enabled("ejemplo", True)
+        assert win.plugins.activate("ejemplo")
+        bar = win._plugin_toolbars["ejemplo"]
+        assert [a.isSeparator() for a in bar.actions()] == [False, True, False]
+    finally:
+        win.plugins.set_toolbar_enabled("ejemplo", False)
+        win.plugins.deactivate("ejemplo")
+        win.close()
+
+
+def test_a_plugin_tags_under_its_own_appid_beside_ingecads():
+    # core/xdata.py used to tell every plugin to write under INGECAD, where
+    # set_xdata replaced the survey tags of the same entity.
+    import ezdxf
+
+    from core.xdata import APPID, ensure_appid
+
+    doc = ezdxf.new("R2018")
+    point = doc.modelspace().add_point((1, 2))
+    ensure_appid(doc)
+    point.set_xdata(APPID, [(1000, "PTO"), (1070, 12)])
+    ensure_appid(doc, "GEOCAD")
+    point.set_xdata("GEOCAD", [(1000, "parcela")])
+    assert "GEOCAD" in doc.appids
+    assert [v for _c, v in point.get_xdata(APPID)] == ["PTO", 12]

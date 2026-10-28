@@ -32,7 +32,7 @@ def test_integrate_writes_launcher_and_icon_pointing_at_the_file(tmp_path, monke
     f = appimage.integrate(img)
     assert f == data / "applications" / "ingecad.desktop"
     text = f.read_text()
-    assert f'Exec="{img}" %f' in text and f"TryExec={img}" in text
+    assert f'Exec="{img}" %F' in text and f"TryExec={img}" in text
     assert "Icon=ingecad" in text
     assert "image/vnd.dwg" in text and "image/vnd.dxf" in text
     assert (data / "icons/hicolor/256x256/apps/ingecad.png").read_bytes() == b"\x89PNG"

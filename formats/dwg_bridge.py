@@ -408,10 +408,14 @@ def verify_dwg(source_dxf: Path, dwg_path: Path, stderr: str = "") -> list[str]:
     reads the same wrong way (a "mirror" bug a strict parser would still
     reject) can slip through. The developer bench (ODA/BricsCAD) covers those.
     """
+    from core.i18n import tr
+
     warnings: list[str] = []
-    if _converter_errors(stderr):
+    errors = _converter_errors(stderr)
+    if errors:
         warnings.append(
-            "the DWG writer reported internal errors while packing the file")
+            tr("the DWG writer reported internal errors while packing the "
+               "file: {detail}", detail=_error_detail(errors)))
     try:
         n_src = _modelspace_count(source_dxf)
         back_dxf = _convert_dwg(dwg_path)     # counted raw: no ezdxf fix-ups
@@ -422,11 +426,27 @@ def verify_dwg(source_dxf: Path, dwg_path: Path, stderr: str = "") -> list[str]:
         # A drop means geometry was lost. Allow tiny bookkeeping deltas.
         if n_src and n_back < n_src:
             warnings.append(
-                f"some drawing objects did not survive the save "
-                f"({n_src} → {n_back})")
+                tr("some drawing objects did not survive the save "
+                   "({before} → {after})", before=n_src, after=n_back))
     except Exception:
-        warnings.append("could not re-open the saved DWG to verify it")
+        warnings.append(tr("could not re-open the saved DWG to verify it"))
     return warnings
+
+
+def _error_detail(errors: list[str], most: int = 3) -> str:
+    """The writer's errors as the user reads them: the most frequent few,
+    each once with its count, and how many other kinds there were."""
+    from collections import Counter
+
+    from core.i18n import tr
+
+    counts = Counter(e.removeprefix("ERROR:").strip() for e in errors)
+    shown = [f"«{text}» (×{n})" if n > 1 else f"«{text}»"
+             for text, n in counts.most_common(most)]
+    detail = "; ".join(shown)
+    if len(counts) > most:
+        detail += tr(" and {count} more", count=len(counts) - most)
+    return detail
 
 
 def write_dwg(dxf_path: Path, dwg_path: Path, version: str = "r2000") -> list[str]:

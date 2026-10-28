@@ -463,7 +463,9 @@ def test_a_new_layer_is_the_selected_row_and_plots(qapp):
         row = panel.table.currentRow()
         name = panel._row_layer(row)
         assert name.startswith("Layer"), f"the current row is {name!r}"
-        assert panel.table.item(row, 8).text() == "🖶"
+        from views.layers_panel import _STATE_ROLE
+
+        assert panel.table.item(row, 8).data(_STATE_ROLE) is True
         info = next(i for i in layer_ops.layer_list(win.document) if i.name == name)
         assert info.plot
         assert win.document.doc.layers.get(name).dxf.get("plot", 1) == 1

@@ -1123,3 +1123,114 @@ _PAINTERS = {
 def command_icon(name: str) -> QIcon:
     painter = _PAINTERS.get(name)
     return QIcon(painter()) if painter else QIcon()
+
+
+# -- Layers panel states (#100) -------------------------------------------------
+# They were font glyphs -- a bulb, a sun, a padlock, a printer as emoji -- and
+# a machine without a desktop's fonts drew empty boxes in their place. The
+# two padlocks also looked alike at 11 px (GeoCad's review). Painted here,
+# each pair differs in shape AND colour.
+_LAMP = QColor(0xF2, 0xC9, 0x4C)
+_DIM = QColor(0x6B, 0x6B, 0x72)
+_DIM_FILL = QColor(0x3A, 0x3A, 0x40)
+_ICE = QColor(0x8F, 0xC8, 0xF0)
+_NO = QColor(0xD8, 0x6B, 0x62)
+
+
+def _bulb(on: bool):
+    pm, p = _canvas()
+    p.setPen(QPen(_LAMP if on else _DIM, 1.4))
+    p.setBrush(QBrush(_LAMP if on else _DIM_FILL))
+    p.drawEllipse(QPointF(12, 10), 6.5, 6.5)          # the glass
+    p.setBrush(QBrush(_STROKE if on else _DIM))
+    p.setPen(Qt.NoPen)
+    p.drawRect(QRectF(9, 16.5, 6, 4.5))               # the screw base
+    p.end()
+    return pm
+
+
+def _sun():
+    pm, p = _canvas()
+    _pen(p, _LAMP, 1.6)
+    for k in range(8):
+        a = math.radians(45 * k)
+        p.drawLine(QPointF(12 + 6.5 * math.cos(a), 12 + 6.5 * math.sin(a)),
+                   QPointF(12 + 9.5 * math.cos(a), 12 + 9.5 * math.sin(a)))
+    p.setBrush(QBrush(_LAMP))
+    p.drawEllipse(QPointF(12, 12), 4.2, 4.2)
+    p.end()
+    return pm
+
+
+def _snowflake():
+    pm, p = _canvas()
+    _pen(p, _ICE, 1.6)
+    for k in range(3):
+        a = math.radians(90 + 60 * k)
+        dx, dy = 9 * math.cos(a), 9 * math.sin(a)
+        p.drawLine(QPointF(12 - dx, 12 - dy), QPointF(12 + dx, 12 + dy))
+        for sign in (1, -1):                         # the little V at each end
+            ex, ey = 12 + sign * dx, 12 + sign * dy
+            for turn in (35, -35):
+                b = a + math.radians(turn) + (math.pi if sign > 0 else 0)
+                p.drawLine(QPointF(ex, ey),
+                           QPointF(ex + 3.5 * math.cos(b), ey + 3.5 * math.sin(b)))
+    p.end()
+    return pm
+
+
+def _padlock(locked: bool):
+    pm, p = _canvas()
+    colour = _LAMP if locked else _STROKE
+    _pen(p, colour, 2.0)
+    p.setBrush(Qt.NoBrush)
+    shackle = QPainterPath()
+    if locked:                                        # closed, both legs in
+        shackle.moveTo(7.5, 12)
+        shackle.lineTo(7.5, 8)
+        shackle.arcTo(QRectF(7.5, 3.5, 9, 9), 180, -180)
+        shackle.lineTo(16.5, 12)
+    else:                                             # open: lifted, one leg out
+        shackle.moveTo(16.5, 12)
+        shackle.lineTo(16.5, 6)
+        shackle.arcTo(QRectF(16.5, 1.5, 7, 9), 180, -180)
+        shackle.lineTo(23.5, 7.5)
+    p.drawPath(shackle)
+    p.setPen(QPen(colour, 1.4))
+    p.setBrush(QBrush(colour) if locked else Qt.NoBrush)
+    p.drawRoundedRect(QRectF(5, 11.5, 14, 10), 1.5, 1.5)
+    p.end()
+    return pm
+
+
+def _printer(plots: bool):
+    pm, p = _canvas()
+    _pen(p, _STROKE if plots else _DIM, 1.4)
+    p.drawRect(QRectF(7, 3, 10, 6))                   # paper in
+    p.drawRoundedRect(QRectF(3, 9, 18, 8), 1.5, 1.5)  # the body
+    p.drawRect(QRectF(7, 14, 10, 7))                  # paper out
+    if not plots:
+        _pen(p, _NO, 2.2)
+        p.drawLine(QPointF(4, 21), QPointF(20, 3))
+    p.end()
+    return pm
+
+
+_LAYER_STATES = {
+    ("on", True): lambda: _bulb(True), ("on", False): lambda: _bulb(False),
+    ("thaw", True): _sun, ("thaw", False): _snowflake,
+    ("lock", False): lambda: _padlock(False), ("lock", True): lambda: _padlock(True),
+    ("plot", True): lambda: _printer(True), ("plot", False): lambda: _printer(False),
+}
+_layer_state_cache: dict = {}
+
+
+def layer_state_icon(kind: str, state: bool) -> QIcon:
+    """The Layers panel's state icons: ``on`` (bulb lit or not), ``thaw``
+    (sun, or snowflake when frozen), ``lock`` (padlock, closed when True),
+    ``plot`` (printer, struck out when False)."""
+    key = (kind, bool(state))
+    icon = _layer_state_cache.get(key)
+    if icon is None:
+        icon = _layer_state_cache[key] = QIcon(_LAYER_STATES[key]())
+    return icon

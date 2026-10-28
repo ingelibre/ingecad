@@ -534,3 +534,125 @@ def test_attdef_dialog_values_and_align_below(qapp):
     finally:
         win.document.dirty = False
         win.close()
+
+
+# -- Rafael's flow (#88): define, edit the definition, BLOCK, INSERT ------------
+
+def _rafaels_definition(win):
+    from core import actions
+
+    win.tools._execute(actions.add_line((200, 0), (220, 0)))
+    win.tools._execute(att.add_attdef("nombre", "¿Nombre?", "Rafa",
+                                      (200.0, 5.0), 2.5))
+    return [e for e in win.document.modelspace() if e.dxftype() == "ATTDEF"][0]
+
+
+def test_a_double_click_on_a_definition_edits_its_tag_prompt_and_default(
+        qapp, monkeypatch):
+    # Rafael (2026-10-12): the definition shows its tag, and the in-place
+    # editor offered only the default -- "no encontré la forma de editar
+    # el atributo una vez creado"
+    from PySide6.QtCore import QTimer
+
+    from views import attribute_dialogs
+
+    win = _window(qapp)
+    try:
+        attdef = _rafaels_definition(win)
+
+        class Editing(attribute_dialogs.EditAttDefDialog):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                assert (self.tag.text(), self.prompt.text(),
+                        self.default.text()) == ("NOMBRE", "¿Nombre?", "Rafa")
+                self.tag.setText("autor")
+                self.prompt.setText("¿Autor del plano?")
+                self.default.setText("Rafael")
+                QTimer.singleShot(0, self._accept)
+
+        monkeypatch.setattr(attribute_dialogs, "EditAttDefDialog", Editing)
+        win.on_canvas_double_click(200.5, 5.5)
+        qapp.processEvents()
+        assert (attdef.dxf.tag, attdef.dxf.prompt, attdef.dxf.text) == (
+            "AUTOR", "¿Autor del plano?", "Rafael")
+        win._cmd_undo()                       # one step
+        assert (attdef.dxf.tag, attdef.dxf.prompt, attdef.dxf.text) == (
+            "NOMBRE", "¿Nombre?", "Rafa")
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_properties_edit_a_definitions_prompt_and_an_attributes_value(qapp):
+    from PySide6.QtWidgets import QLineEdit, QTreeWidgetItemIterator
+
+    from core.i18n import tr
+
+    def type_in(panel, label, text):
+        editor = None
+        it = QTreeWidgetItemIterator(panel.tree)
+        while it.value():
+            if it.value().text(0) == tr(label):
+                editor = panel.tree.itemWidget(it.value(), 1)
+            it += 1
+        assert isinstance(editor, QLineEdit), label
+        editor.setText(text)
+        editor.editingFinished.emit()
+
+    win = _window(qapp)
+    try:
+        attdef = _rafaels_definition(win)
+        win.tools.selection = {attdef.dxf.handle}
+        win.toggle_properties_panel()
+        panel = win._properties_panel
+        panel.refresh()
+        type_in(panel, "Prompt", "¿Autor?")
+        panel.refresh()
+        type_in(panel, "Tag", "autor")
+        assert (attdef.dxf.tag, attdef.dxf.prompt) == ("AUTOR", "¿Autor?")
+        win._cmd_undo()
+        win._cmd_undo()
+        assert (attdef.dxf.tag, attdef.dxf.prompt) == ("NOMBRE", "¿Nombre?")
+        # a reference's attribute: its value
+        sheet = [e for e in win.document.modelspace()
+                 if e.dxftype() == "INSERT"][0].get_attrib("SHEET")
+        win.tools.selection = {sheet.dxf.handle}
+        panel.refresh()
+        type_in(panel, "Value", "A12")
+        assert sheet.dxf.text == "A12"
+    finally:
+        win.document.dirty = False
+        win.close()
+
+
+def test_block_gives_the_converted_reference_its_attributes():
+    from core import actions
+
+    h = Harness()
+    h.history.execute(actions.add_line((0, 0), (20, 0)))
+    h.history.execute(att.add_attdef("nombre", "¿Nombre?", "Rafa", (0, 5), 2.5))
+    h.history.execute(actions.create_block("PERSONA", (0, 0), list(h.msp)))
+    (ref,) = list(h.msp)
+    assert [(a.dxf.tag, a.dxf.text) for a in ref.attribs] == [("NOMBRE", "Rafa")]
+    h.history.undo()
+    assert sorted(e.dxftype() for e in h.msp) == ["ATTDEF", "LINE"]
+    # and INSERT then asks the definition's prompt, proposing its default
+    h.history.redo()
+    tool = InsertTool(h.ctx)
+    tool.start()
+    tool.on_point((50.0, 50.0))
+    assert h.prompts[-1] == "¿Nombre? <Rafa>:"
+
+
+def test_eattedit_on_a_definition_says_where_it_is_edited():
+    from tools.attributes import EattEditTool
+
+    h = Harness()
+    h.history.execute(att.add_attdef("nombre", "¿Nombre?", "Rafa", (0, 5), 2.5))
+    attdef = list(h.msp)[0]
+    h.services.pick_entity = lambda point: attdef
+    tool = EattEditTool(h.ctx)
+    tool.start()
+    tool.on_point((0.0, 5.0))
+    assert h.echoed[-2] == "That object is not a block."
+    assert "DDEDIT" in h.echoed[-1]

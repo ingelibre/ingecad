@@ -885,7 +885,7 @@
   "Nothing selected. Select polyline:": "Nic není vybráno. Vyberte křivku:",
   "Object selected is not a polyline. Do you want it to turn into one? <Y>:": "Vybraný objekt není křivka. Chcete jej převést na křivku? <A>:",
   "PEDIT works on polylines, lines and arcs.": "PEDIT pracuje s křivkami, čarami a oblouky.",
-  "Enter an option [{first}/Width/Reverse/Undo/eXit] <eXit>:": "Zadejte volbu [{first}/Šířka(W)/Otočit(R)/Zpět(U)/Konec(X)] <Konec>:",
+  "Enter an option [{first}/Join/Width/Reverse/Undo/eXit] <eXit>:": "Zadejte volbu [{first}/Připojit(J)/Šířka(W)/Otočit(R)/Zpět(U)/Konec(X)] <Konec>:",
   "Close": "Uzavřít",
   "Specify new width for all segments:": "Určete novou šířku pro všechny segmenty:",
   "Polyline direction reversed.": "Směr křivky byl obrácen.",

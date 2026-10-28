@@ -46,6 +46,20 @@ def _no_modal_close_prompt(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _status_toggles_start_at_defaults():
+    """The status-bar toggles are remembered between sessions, so a test that
+    presses F8 would leave ORTHO on for every window after it. Each test
+    starts from the defaults; the ones about remembering set their own."""
+    core = sys.modules.get("PySide6.QtCore")
+    if core is not None:
+        settings = core.QSettings()
+        settings.remove("statusbar")
+        settings.remove("display/grid")
+        settings.remove("display/lineweight")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _let_closed_windows_go():
     """A closed MainWindow deletes itself (WA_DeleteOnClose), but only when
     the event loop next turns -- and a test that closes its window last

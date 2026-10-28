@@ -77,8 +77,8 @@ def test_a_representation_is_the_entity_at_that_scale():
 def _points(scene, handle, x_min=-np.inf, x_max=np.inf):
     """Every vertex the scene draws for ``handle`` (world or sheet units),
     optionally only those between x_min and x_max -- one viewport's copy."""
-    parts = [getattr(scene, batch).data["pos"][lo:hi].astype(float)
-             for batch, lo, hi in scene.handle_ranges.get(handle, [])]
+    parts = [getattr(scene, batch).data["pos"][first:first + count].astype(float)
+             for batch, first, count in scene.handle_ranges.get(handle, [])]
     if not parts:
         return np.empty((0, 2))
     pos = np.concatenate(parts) + np.array(scene.origin)

@@ -39,10 +39,12 @@ def apply() -> None:
     _patch_dimension_number_format()
     _patch_underscored_arrow_names()
     _patch_suppressed_dimension_line_arrows()
+    _patch_narrow_linear_dimension_text()
     _patch_two_line_angular_sector()
     _patch_three_point_angular_sector()
     _patch_arc_length_symbol_text()
     _patch_dms_angular_text()
+    _patch_linetype_dots()
 
 
 def dms_text(degrees: float, dimadec: int, dimdsep: str = ".",
@@ -141,9 +143,16 @@ def _patch_fixed_height_dimension_text() -> None:
     19050 on the first grip drop. The authors' own blocks are the judge:
     all 130 such dimensions of nine corpus plans carry the bare height.
     Drop it if ezdxf stops scaling a fixed height.
+
+    An ANNOTATIVE text style is the exception: its height is a paper
+    height, so the dimension's scale multiplies it like DIMTXT -- held
+    bare, an annotative dimension kept a 2.5 text at 1:50 and 1:100 while
+    its arrows grew (#85, Rafael).
     """
     from ezdxf.render import dim_base
     from ezdxf.render.dim_base import Measurement
+
+    from core import annotative
 
     if getattr(Measurement.__init__, "_ingecad_fixed_height", False):
         return
@@ -154,7 +163,7 @@ def _patch_fixed_height_dimension_text() -> None:
         doc = dim_style.dimension.doc
         text_style = dim_base.get_text_style(doc, self.text_style_name)
         height = text_style.dxf.get("height", 0.0)
-        if height > 0.0:
+        if height > 0.0 and not annotative.is_annotative(text_style):
             self.text_height = height
         if self.measurement_factor < 0.0:
             # "negative values are applied to paper space only" (DIMLFAC):
@@ -270,6 +279,119 @@ def _patch_suppressed_dimension_line_arrows() -> None:
 
     __init__._ingecad_patch = True
     BaseDimensionRenderer.__init__ = __init__
+
+
+def _patch_narrow_linear_dimension_text() -> None:
+    """Text that does not fit between the extension lines goes BESIDE them.
+
+    DIMTMOVE 0 ("Beside the dimension line", the ISO-25 and AutoCAD
+    default) moves the text with the dimension line: outside, past the
+    second extension line (the first with DIMJUST 1), past the arrowhead
+    when that went outside too, at the same distance above the line as any
+    other dimension, and the dimension line runs on under it. ezdxf left
+    such text centred between the extension lines -- on top of them and of
+    the arrows -- and lifted it above their ends (DIMEXE more than every
+    other dimension's text): a 2.56 mm dimension of a tester's part read
+    "ahogada" and "despegada de la línea" next to well-placed ones (#102).
+
+    Placed by hand (a user location), over the line (DIMTMOVE 1/2) or forced
+    inside (DIMTIX), ezdxf's own layout stands.
+
+    Whether the text fits, and how far it then sits, takes its real width in
+    the dimension's text style, as AutoCAD measures it: ezdxf counted every
+    character as wide as it is tall ("2,56" = 10 mm at 2.5), which pushed
+    text out of spaces it fits in and left a gap before text set beside.
+    """
+    from ezdxf.render.dim_base import Measurement
+    from ezdxf.render.dim_linear import LinearDimension
+
+    if getattr(LinearDimension.default_text_location, "_ingecad_patch", False):
+        return
+    original_measurement_init = Measurement.__init__
+    estimate = Measurement.text_width
+
+    def measurement_init(self, dim_style, *args, **kwargs):
+        original_measurement_init(self, dim_style, *args, **kwargs)
+        font = None
+        try:
+            style = dim_style.doc.styles.get(self.text_style_name)
+            font = style.dxf.font or None
+        except Exception:
+            pass
+        self._ingecad_font = font
+
+    def text_width(self, text: str) -> float:
+        font = getattr(self, "_ingecad_font", None)
+        if font and text and "\\" not in text and "{" not in text:
+            try:
+                from ezdxf.fonts import fonts
+
+                return fonts.make_font(font, self.text_height,
+                                       self.text_width_factor).text_width(text)
+            except Exception:
+                pass
+        return estimate(self, text)       # stacked/formatted text: ezdxf's guess
+
+    Measurement.__init__ = measurement_init
+    Measurement.text_width = text_width
+    original_location = LinearDimension.default_text_location
+    original_extensions = LinearDimension.add_arrow_extension_lines
+    original_line = LinearDimension.add_dimension_line
+
+    def beside(self) -> bool:
+        m = self.measurement
+        try:
+            rule = int(self.dim_style.get("dimtmove", 0) or 0)
+        except (TypeError, ValueError):
+            rule = 0
+        return (m.text_is_outside and m.user_location is None
+                and m.text_halign in (0, 1, 2) and rule == 0)
+
+    def default_text_location(self):
+        self._ingecad_beside = None
+        if not beside(self):
+            return original_location(self)
+        m = self.measurement
+        first = m.text_halign == 1
+        anchor = self.dim_line_start if first else self.dim_line_end
+        out = -self.dim_line_vec if first else self.dim_line_vec
+        arrow = (self.arrows.arrow_size
+                 if self.arrows_outside and not self.arrows.has_ticks else 0.0)
+        near = arrow + m.text_gap
+        self._ingecad_beside = (first, arrow, near + self._total_text_width)
+        location = anchor + out * (near + self._total_text_width / 2.0)
+        return location + self.dim_line_vec.orthogonal().normalize(
+            m.text_vertical_distance())
+
+    def add_arrow_extension_lines(self):
+        side = getattr(self, "_ingecad_beside", None)
+        if side is None or self.measurement.vertical_placement == 0:
+            return original_extensions(self)
+        # the text side's tail is drawn, longer, by add_dimension_line
+        arrows = self.arrows
+        attr = "suppress1" if side[0] else "suppress2"
+        kept = getattr(arrows, attr)
+        setattr(arrows, attr, True)
+        try:
+            original_extensions(self)
+        finally:
+            setattr(arrows, attr, kept)
+
+    def add_dimension_line(self, start, end):
+        original_line(self, start, end)
+        side = getattr(self, "_ingecad_beside", None)
+        if side is None or self.measurement.vertical_placement == 0:
+            return              # centred text: no line through it
+        first, arrow, far = side
+        anchor = self.dim_line_start if first else self.dim_line_end
+        out = -self.dim_line_vec if first else self.dim_line_vec
+        self.add_line(anchor + out * arrow, anchor + out * far,
+                      dxfattribs=self.dimension_line.dxfattribs())
+
+    default_text_location._ingecad_patch = True
+    LinearDimension.default_text_location = default_text_location
+    LinearDimension.add_arrow_extension_lines = add_arrow_extension_lines
+    LinearDimension.add_dimension_line = add_dimension_line
 
 
 def _patch_two_line_angular_sector() -> None:
@@ -1159,3 +1281,63 @@ def reading_angle(angle: float) -> float:
     elif a > 270.0:
         a -= 360.0
     return a
+
+
+def _patch_linetype_dots() -> None:
+    """A linetype's dot reaches the backend as a zero-length line (#87).
+
+    ezdxf stretches every element of a pattern to ``min_dash_length``, the
+    dots of DASHDOT, CENTER and PHANTOM included, so each dot was drawn as
+    a stroke shorter than a pixel: GL lit it or not depending on where it
+    fell, and Rafael found the dots "muy difíciles de ver". (Leaving the
+    dot at 0 does not do: ezdxf's C renderer drops zero-length dashes.)
+    Here what the renderer leaves at that length or shorter collapses to
+    its midpoint, a zero-length line, which the screen backend draws as a
+    pixel or a square of the pen's width and the plot as a pen-wide dot.
+    """
+    from ezdxf.addons.drawing.pipeline import LinetypeStage2d
+    from ezdxf.math import Vec2
+    from ezdxf.render import linetypes
+
+    if getattr(LinetypeStage2d.draw_line, "_ingecad_patch", False):
+        return
+
+    def dotted(stage, properties, lines):
+        pattern = properties.linetype_pattern
+        if not any(v == 0.0 for v in pattern[0::2]):
+            return lines
+        limit = stage.config.min_dash_length * stage.get_ltype_scale() * (1 + 1e-9)
+        out = []
+        for s, e in lines:
+            if (e - s).magnitude <= limit:
+                m = s.lerp(e)
+                out.append((m, m))
+            else:
+                out.append((s, e))
+        return out
+
+    original_line = LinetypeStage2d.draw_line
+    original_path = LinetypeStage2d.draw_path
+
+    def draw_line(self, start, end, properties):
+        if self.solid_lines_only or len(properties.linetype_pattern) < 2:
+            return original_line(self, start, end, properties)
+        renderer = linetypes.LineTypeRenderer(self.pattern(properties))
+        s, e = Vec2(start), Vec2(end)
+        self.next_stage.draw_solid_lines(
+            dotted(self, properties, list(renderer.line_segment(s, e))),
+            properties)
+
+    def draw_path(self, path, properties):
+        if self.solid_lines_only or len(properties.linetype_pattern) < 2:
+            return original_path(self, path, properties)
+        renderer = linetypes.LineTypeRenderer(self.pattern(properties))
+        vertices = path.flattening(self.config.max_flattening_distance, segments=16)
+        self.next_stage.draw_solid_lines(
+            dotted(self, properties,
+                   [(Vec2(s), Vec2(e)) for s, e in renderer.line_segments(vertices)]),
+            properties)
+
+    draw_line._ingecad_patch = True
+    LinetypeStage2d.draw_line = draw_line
+    LinetypeStage2d.draw_path = draw_path

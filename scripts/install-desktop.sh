@@ -23,7 +23,7 @@ chmod +x "$BIN/ingecad"
 
 # Desktop entry with an absolute Exec (~/.local/bin may not be in PATH for
 # the session that spawns GNOME Shell).
-sed "s|^Exec=.*|Exec=$BIN/ingecad %f|" \
+sed "s|^Exec=.*|Exec=$BIN/ingecad %F|" \
     "$HERE/resources/ingecad.desktop" > "$APPS/ingecad.desktop"
 
 # Icon: the scalable SVG plus rasterized sizes. GNOME's icon cache prefers

@@ -99,7 +99,12 @@ class PrintDialog(QDialog):
                          ("Meters", 1000.0), ("Inches", 25.4), ("Feet", 304.8)):
             self.units.addItem(tr(name), mm)
         drawing_mm = 1000.0
-        if window.document is not None:
+        if is_layout_tab:
+            # a layout is drawn in paper units, whatever the model's
+            sheet = window.document.doc.layouts.get(self._layout_name)
+            inches = int(sheet.dxf.get("plot_paper_units", 1) or 0) == 0
+            drawing_mm = 25.4 if inches else 1.0
+        elif window.document is not None:
             code = unit_info.insunits(window.document.doc)
             if code:
                 drawing_mm = unit_info.MM_PER_INSUNIT.get(code, 1000.0)
@@ -165,7 +170,10 @@ class PrintDialog(QDialog):
         self._pdf_btn, self._printer_btn = pdf_btn, printer_btn
         if state:
             self._restore(state)
-        elif not is_layout_tab and window.document is not None:
+        elif is_layout_tab:
+            self._from_page_setup(
+                window.document.doc.layouts.get(self._layout_name))
+        elif window.document is not None:
             self._from_page_setup(window.document.doc.modelspace())
         self._on_area_changed()
         self._on_scale_changed()
@@ -212,17 +220,18 @@ class PrintDialog(QDialog):
         if idx >= 0:
             self.area.setCurrentIndex(idx)
 
-    def _from_page_setup(self, model) -> None:
-        """Start from the Model tab's page setup (PAGESETUP there), as
-        AutoCAD's Plot dialog does: paper, orientation, area and scale."""
+    def _from_page_setup(self, layout) -> None:
+        """Start from the tab's page setup (PAGESETUP there), as AutoCAD's
+        Plot dialog does: paper, orientation, area and scale. A layout used
+        to open on A4 landscape whatever its own sheet."""
         from core import layouts as layout_ops
         from core.layouts import FLAG_USE_STANDARD_SCALE, PLOT_TYPE_DISPLAY, \
-            PLOT_TYPE_EXTENTS
+            PLOT_TYPE_EXTENTS, PLOT_TYPE_LAYOUT
 
-        dxf = model.dxf
+        dxf = layout.dxf
         if not dxf.hasattr("paper_width"):
             return                              # never set up: the defaults
-        page = layout_ops.effective_page(model)
+        page = layout_ops.effective_page(layout)
         width, height = page["width"], page["height"]
         short, long_ = sorted((width, height))
         for i, (w, h) in enumerate(pdf_out.PAPER_SIZES_MM.values()):
@@ -230,9 +239,9 @@ class PrintDialog(QDialog):
                 self.paper.setCurrentIndex(i)
                 break
         self.orientation.setCurrentIndex(self.orientation.findData(width >= height))
-        area = {PLOT_TYPE_EXTENTS: "extents",
-                PLOT_TYPE_DISPLAY: "view"}.get(int(dxf.get("plot_type", 1) or 0))
-        if area is not None:
+        area = {PLOT_TYPE_EXTENTS: "extents", PLOT_TYPE_DISPLAY: "view",
+                PLOT_TYPE_LAYOUT: "layout"}.get(int(dxf.get("plot_type", 1) or 0))
+        if area is not None and self.area.findData(area) >= 0:
             self.area.setCurrentIndex(self.area.findData(area))
         flags = int(dxf.get("plot_layout_flags", 0) or 0)
         if flags & FLAG_USE_STANDARD_SCALE and int(dxf.get("standard_scale_type", 0) or 0) == 0:
@@ -246,10 +255,19 @@ class PrintDialog(QDialog):
         # "1 mm = N units" is paper mm per drawing unit: find it in the list
         # for the drawing unit already chosen
         for i in range(1, self.scale.count()):
-            num, den = self.scale.itemData(i)
+            ratio = self.scale.itemData(i)
+            if not isinstance(ratio, tuple):
+                continue                        # "Custom": no ratio to compare
+            num, den = ratio
             if abs(self.units.currentData() * num / den - target) <= 1e-9 * max(target, 1.0):
                 self.scale.setCurrentIndex(i)
                 return
+        # not in the list (1:37, 1000 mm = 25 units...): the page setup's own
+        # ratio as the custom scale. Reaching "Custom" in the loop above used
+        # to raise, and PLOT in such a layout opened nothing at all.
+        self.custom_mm.setValue(float(dxf.get("scale_numerator", 1.0)))
+        self.custom_units.setValue(float(dxf.get("scale_denominator", 1.0)))
+        self.scale.setCurrentIndex(self.scale.findData("custom"))
 
     def _pick_window(self) -> None:
         idx = self.area.findData("window")

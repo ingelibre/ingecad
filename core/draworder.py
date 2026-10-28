@@ -64,6 +64,10 @@ def order_groups(layout) -> dict[str, int]:
 class DrawOrderCommand(Command):
     """Send the selection to back / bring it to front, with exact undo."""
 
+    #: the canvas batches by layer and color: only a regen redraws the order
+    #: (typed DRAWORDER and its undo showed nothing until REGEN)
+    needs_regen = True
+
     def __init__(self, entities: list, mode: str) -> None:
         assert mode in ("front", "back")
         self.name = tr("draw order")
