@@ -98,7 +98,7 @@ def test_edit_program_parameters_creates_the_file_and_reinit_reads_it(
         customize_actions = customize.actions()
         customize_actions[0].trigger()
         assert pgp_path.is_file()
-        assert opened and opened[0].toLocalFile() == str(pgp_path)
+        assert opened and Path(opened[0].toLocalFile()) == pgp_path
         # the user adds a Spanish line, saves, and types REINIT
         pgp_path.write_bytes(pgp_path.read_bytes()
                              + "DE, *DESPLAZA\n".encode("cp1252"))

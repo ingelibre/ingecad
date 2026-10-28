@@ -16,6 +16,8 @@ def test_the_next_session_opens_at_the_size_the_last_one_closed(qapp):
     first.resize(700, 520)       # inside the offscreen 800 x 600 screen
     first.show()
     qapp.processEvents()
+    # what the window really took: on Windows its minimum width is ~800
+    closed_at = (first.width(), first.height())
     first.document.dirty = False
     first.close()
     qapp.processEvents()
@@ -29,7 +31,7 @@ def test_the_next_session_opens_at_the_size_the_last_one_closed(qapp):
     again.show()
     qapp.processEvents()
     try:
-        assert (again.width(), again.height()) == (700, 520)
+        assert (again.width(), again.height()) == closed_at
     finally:
         again.close()
         QSettings().remove(SETTING_WINDOW_GEOMETRY)

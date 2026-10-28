@@ -13,7 +13,24 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 # Keep QSettings writes (e.g. the language switch) out of the developer's
 # real ~/.config — must be set before Qt is first imported.
-os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="ingecad-tests-")
+_SETTINGS_DIR = tempfile.mkdtemp(prefix="ingecad-tests-")
+os.environ["XDG_CONFIG_HOME"] = _SETTINGS_DIR
+
+if sys.platform == "win32":
+    # Windows reads neither XDG variable. core.paths puts the recent list and
+    # the caches under %APPDATA% / %LOCALAPPDATA%, so the suite wrote into
+    # the developer's real ones and a list left by one run failed the next.
+    os.environ["APPDATA"] = os.path.join(_SETTINGS_DIR, "Roaming")
+    os.environ["LOCALAPPDATA"] = os.path.join(_SETTINGS_DIR, "Local")
+    # Native QSettings live in the registry, and with no organization name
+    # set (tests never run main.py) they have no key to live under, so every
+    # write was silently dropped. INI files in the temporary folder behave
+    # as on Linux.
+    from PySide6.QtCore import QSettings
+
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, _SETTINGS_DIR)
+    QSettings.setPath(QSettings.IniFormat, QSettings.SystemScope, _SETTINGS_DIR)
 
 # Tests import project packages from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
