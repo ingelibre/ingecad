@@ -63,7 +63,7 @@ class Bucket:
     layer: str
     color: str
     lineweight: float = 0.25                              # mm, resolved
-    kind: str = ""                                        # "T" = text glyphs
+    kind: str = ""          # "T" text glyphs, "TM" their masks, "X" XLINE/RAY
     # DRAWORDER group: -1 sent to back, +1 brought to front, 0 default. The
     # packer sorts buckets by their dict key, and the backend puts this group
     # FIRST in that key, so back draws under everything and front over.
@@ -316,6 +316,59 @@ def _pack_standard(
     )
 
 
+#: The six corner offsets of a thick dot, in the triangle order of a segment
+_DOT_CORNERS = np.array([(-1, 1), (-1, -1), (1, 1), (1, 1), (-1, -1), (1, -1)],
+                        dtype=np.float32)
+
+
+#: Longest miter, in half widths: past it (a corner narrower than about 29
+#: degrees) the corner keeps its notch rather than grow a long spike.
+_MITER_LIMIT = 4.0
+
+
+def _mitered_normals(seg: np.ndarray, normal: np.ndarray, dot: np.ndarray,
+                     owners) -> tuple[np.ndarray, np.ndarray]:
+    """Start and end offset vectors of each thick segment, mitered where it
+    continues the one before it (same owner, same point).
+
+    Each segment was a rectangle ending square at the vertex, so a polyline
+    with a lineweight showed a notch at every corner. Where two segments
+    meet, both now end on the miter vector (n1 + n2) / (1 + n1.n2), which
+    the shader scales by the half width like any normal: the two quads
+    become trapezoids that close the corner, with no vertex added. A
+    closed polyline's last segment joins its first.
+    """
+    start_n = normal.copy()
+    end_n = normal.copy()
+    n = len(seg)
+    if n < 2:
+        return start_n, end_n
+    joint = ((seg[:-1, 1] == seg[1:, 0]).all(axis=1)
+             & ~dot[:-1] & ~dot[1:])
+    if owners is not None:
+        joint &= owners[:-1] == owners[1:]
+    a = np.flatnonzero(joint)                     # segment a joins a + 1
+    b = a + 1
+    # closed chains: a run of joined segments whose end is its start
+    first = np.flatnonzero(np.concatenate(([True], ~joint)))
+    last = np.flatnonzero(np.concatenate((~joint, [True])))
+    closed = ((seg[last, 1] == seg[first, 0]).all(axis=1)
+              & (last > first) & ~dot[first] & ~dot[last])
+    if owners is not None:
+        closed &= owners[last] == owners[first]
+    a = np.concatenate((a, last[closed]))
+    b = np.concatenate((b, first[closed]))
+    if not len(a):
+        return start_n, end_n
+    na, nb = normal[a], normal[b]
+    denom = 1.0 + (na * nb).sum(axis=1)
+    ok = denom > 2.0 / (_MITER_LIMIT * _MITER_LIMIT)
+    miter = (na[ok] + nb[ok]) / denom[ok, None]
+    end_n[a[ok]] = miter
+    start_n[b[ok]] = miter
+    return start_n, end_n
+
+
 def _pack_thick(
     buckets: list[Bucket], origin: tuple[float, float], extents,
     batch_name: str = "", handle_ranges: Optional[dict] = None,
@@ -342,31 +395,38 @@ def _pack_thick(
         seg = np.asarray(bucket.lines, dtype=np.float64).reshape(-1, 2, 2)
         d = seg[:, 1] - seg[:, 0]
         length = np.hypot(d[:, 0], d[:, 1])
-        ok = length > 0.0
-        # Owners are per segment, so they take the same two steps the geometry
-        # takes: drop the zero-length ones, then the grid permutation.
         owners = bucket.lines_owner
-        owner_arr = (np.asarray(owners, dtype=object)[ok]
-                     if owners and handle_ranges is not None else None)
-        seg, d, length = seg[ok], d[ok], length[ok]
-        if len(seg) == 0:
-            continue
+        owner_arr = (np.asarray(owners, dtype=object)
+                     if owners and len(owners) == len(seg) else None)
+        dot = length == 0.0
+        normal = np.column_stack((-d[:, 1], d[:, 0])) / np.where(
+            dot, 1.0, length)[:, None]
+        # in drawing order, before the grid sort scatters a polyline
+        start_n, end_n = _mitered_normals(seg, normal, dot, owner_arr)
+        if handle_ranges is None:
+            owner_arr = None
         cells = _grid_cells(seg.reshape(-1, 2), extents, 2)
         order = np.argsort(cells, kind="stable")
-        seg, d, length, cells = seg[order], d[order], length[order], cells[order]
+        seg, cells, dot = seg[order], cells[order], dot[order]
+        start_n, end_n = start_n[order], end_n[order]
         if owner_arr is not None:
             owner_arr = owner_arr[order]
 
-        normal = np.column_stack((-d[:, 1], d[:, 0])) / length[:, None]
         p0 = seg[:, 0] - (ox, oy)
         p1 = seg[:, 1] - (ox, oy)
         n_seg = len(seg)
         verts = np.empty((n_seg, 6), dtype=THICK_DTYPE)
         # Triangle pair: (p0,+n) (p0,-n) (p1,+n) / (p1,+n) (p0,-n) (p1,-n)
-        corners = ((p0, 1), (p0, -1), (p1, 1), (p1, 1), (p0, -1), (p1, -1))
-        for i, (p, sign) in enumerate(corners):
+        corners = ((p0, start_n, 1), (p0, start_n, -1), (p1, end_n, 1),
+                   (p1, end_n, 1), (p0, start_n, -1), (p1, end_n, -1))
+        for i, (p, n, sign) in enumerate(corners):
             verts["pos"][:, i] = p
-            verts["normal"][:, i] = normal * sign
+            verts["normal"][:, i] = n * sign
+        if dot.any():
+            # A zero-length segment is a linetype's dot (#87): a square as
+            # wide as the pen, its corners pushed out diagonally by the
+            # same half width the shader gives a line.
+            verts["normal"][dot] = _DOT_CORNERS
         verts["rgba"] = _color_u8(bucket.color)
         chunks.append(verts.reshape(-1))
 
@@ -446,6 +506,12 @@ def _world_extents(
             my = _HINT_MARGIN * (hy1 - hy0)
             lo_hi = (hx0 - mx, hy0 - my, hx1 + mx, hy1 + my)
 
+    # Construction lines reach far past the drawing on purpose and are no
+    # part of its extents (AutoCAD's Zoom Extents leaves them out too) --
+    # unless they are all there is.
+    finite = [b for b in buckets if b.kind != "X"]
+    if any(b.lines or b.triangles or b.points for b in finite):
+        buckets = finite
     for use_hint in (lo_hi is not None, False):
         min_x = min_y = np.inf
         max_x = max_y = -np.inf

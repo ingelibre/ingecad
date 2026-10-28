@@ -2804,3 +2804,49 @@ BLOCK_HEADER, and the importer dropped both as "DXF artifacts".
  
      COMMON_ENTITY_HANDLE_DATA;
      FIELD_HANDLE (dimstyle, 5, 0);
+--- a/src/encode.c
++++ b/src/encode.c
+@@ -8154,8 +8154,13 @@
+   _obj->dataflags = 0xff;                                                     \
+   if (_obj->elevation != 0.0)                                                 \
+     _obj->dataflags &= ~1;                                                    \
++  /* the alignment point is what a non-left alignment places the text by,  \
++     even when it equals the insertion point (DXF writers that do not       \
++     compute the left baseline point write both alike): omitted, it reads   \
++     back as 0,0 and the text jumps to the origin */                        \
+   if (_obj->alignment_pt.x != _obj->ins_pt.x                                  \
+-      || _obj->alignment_pt.y != _obj->ins_pt.y)                              \
++      || _obj->alignment_pt.y != _obj->ins_pt.y                               \
++      || _obj->horiz_alignment != 0 || _obj->vert_alignment != 0)             \
+     _obj->dataflags &= ~2;                                                    \
+   if (_obj->oblique_angle != 0.0)                                             \
+     _obj->dataflags &= ~4;                                                    \
+diff --git a/src/in_dxf.c b/src/in_dxf.c
+--- a/src/in_dxf.c
++++ b/src/in_dxf.c
+@@ -3557,8 +3557,7 @@
+                         j, k, o->paths[j].segs[k].curve_type, pair->code);
+             }
+         }
+-      else if (pair->code == 21 && !is_plpath && !o->num_seeds
+-               && pair->value.d != 0.0)
++      else if (pair->code == 21 && !is_plpath && !o->num_seeds)
+         {
+           CHK_paths;
+           CHK_segs;
+@@ -9361,11 +9360,10 @@
+ }
+ 
+ #  define FIELD_CMC(field, dxf) dxf_read_CMC (dwg, dat, &o->field, #field, dxf)
+-#  define FIELD_CMC2004(field, dxf)                                           \
+-    SINCE (R_2004a)                                                           \
+-    {                                                                         \
+-      FIELD_CMC (field, dxf);                                                 \
+-    }
++// Not only since R_2004: a DXF writer that keeps an object it does not
++// know (e.g. ezdxf saving a 2018 drawing as R2000) passes its colors on.
++// dxf_read_CMC backs up when the color is not there.
++#  define FIELD_CMC2004(field, dxf) FIELD_CMC (field, dxf)
+ 
+ // starts with 71 . 0
+ // returns NULL on success

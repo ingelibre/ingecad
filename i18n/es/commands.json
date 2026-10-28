@@ -46,6 +46,7 @@
   "BREAK":     {"name": "PARTE"},
   "JOIN":      {"name": "UNIR"},
   "PEDIT":     {"name": "EDITPOL"},
+  "UCS":       {"name": "SCP"},
   "MATCHPROP": {"name": "IGUALARPROP"},
   "CHPROP":    {"name": "CAMBIAPROP"},
   "DRAWORDER": {"name": "ORDENAOBJETOS"},

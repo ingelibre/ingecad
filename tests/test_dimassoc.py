@@ -249,3 +249,86 @@ def test_the_tie_survives_save_as_dwg_and_reopen(win, tmp_path):
     line = again.doc.modelspace().query("LINE")[0]
     History(again).execute(stretch_entities([line], [(35, -1, 45, 1)], 10, 0))
     assert dim.get_measurement() == pytest.approx(50)
+
+
+def _screen(win, x, y):
+    from PySide6.QtCore import QPoint
+
+    sx, sy = win.viewport.view.world_to_screen(x, y)
+    return QPoint(round(sx), round(sy))
+
+
+def test_a_grip_on_the_line_drags_its_dimension_along(win, qapp):
+    # #90, Rafael (2026-10-12): "que las cotas se ajusten automáticamente
+    # cuando se modifica una línea mediante sus pinzamientos". Grips edit
+    # first and record after, and the record skipped the reactor.
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtTest import QTest
+
+    t = win.tools
+    t._execute(actions.add_line((0, 0), (40, 0)))
+    line = win.document.modelspace().query("LINE")[0]
+    dim = _dimlinear_on_ends(win, (0, 0), (40, 0), (20, -8))
+    win.resize(1000, 700)
+    qapp.processEvents()
+    win.viewport.view.zoom_extents(-10, -20, 70, 20)
+    t.osnap_on = False
+    t.ortho_on = False
+    t.selection = {line.dxf.handle}
+    vp = win.viewport
+    QTest.mouseClick(vp, Qt.MouseButton.LeftButton, pos=_screen(win, 40, 0))
+    qapp.processEvents()
+    assert t._grip_drag is not None, "the grip did not get hot"
+    pos = QPointF(_screen(win, 55, 0))
+    vp.mouseMoveEvent(QMouseEvent(
+        QEvent.Type.MouseMove, pos, vp.mapToGlobal(pos),
+        Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier))
+    QTest.mouseClick(vp, Qt.MouseButton.LeftButton, pos=_screen(win, 55, 0))
+    qapp.processEvents()
+
+    length = line.dxf.end.x - line.dxf.start.x
+    assert length == pytest.approx(55, abs=0.3)
+    assert dim.get_measurement() == pytest.approx(length)
+    assert dim in t._pending_render, "the new number is not on screen"
+    assert da.of_dimension(dim) is not None, "the grip untied it"
+    # one undo step takes both back, redo both forward
+    win._cmd_undo()
+    assert (line.dxf.end.x, dim.get_measurement()) == pytest.approx((40, 40))
+    win._cmd_redo()
+    assert dim.get_measurement() == pytest.approx(length)
+
+
+def test_an_end_typed_in_properties_drags_its_dimension_along(win):
+    t = win.tools
+    t._execute(actions.add_line((0, 0), (40, 0)))
+    line = win.document.modelspace().query("LINE")[0]
+    dim = _dimlinear_on_ends(win, (0, 0), (40, 0), (20, -8))
+    t.selection = {line.dxf.handle}
+    panel = win._properties_panel
+    panel.refresh()
+    panel._set_comp("end", 0, 25.0)
+    assert dim.get_measurement() == pytest.approx(25)
+    win._cmd_undo()
+    assert dim.get_measurement() == pytest.approx(40)
+
+
+def test_a_script_folded_into_one_step_undoes_its_dimensions_too(win, tmp_path):
+    # APPLOAD folds a script's commands into one undo step; the dimensions
+    # each command re-measured stayed re-measured through that undo
+    t = win.tools
+    t._execute(actions.add_line((0, 0), (40, 0)))
+    dim = _dimlinear_on_ends(win, (0, 0), (40, 0), (20, -8))
+    script = tmp_path / "stretch.py"
+    script.write_text(
+        "from core.modify import stretch_entities\n"
+        "line = document.modelspace().query('LINE')[0]\n"
+        "for _ in range(2):\n"
+        "    execute(stretch_entities([line], [(35, -1, 65, 1)], 10, 0))\n")
+    win._on_command_submitted(f"APPLOAD {script}")
+    assert dim.get_measurement() == pytest.approx(60)
+    win._cmd_undo()
+    assert dim.get_measurement() == pytest.approx(40)
+    win._cmd_redo()
+    assert dim.get_measurement() == pytest.approx(60)

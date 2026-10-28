@@ -95,6 +95,14 @@ class Tool:
 
         return keywords.match(text, self._prompt_source) or ""
 
+    def ucs(self):
+        """The current UCS (core/ucs.py): a typed angle or an "along X"
+        default is measured from its X axis, as in AutoCAD (#91)."""
+        from core import ucs
+
+        fn = getattr(self.ctx.services, "current_ucs", None)
+        return fn() if fn is not None else ucs.WORLD
+
     def on_target_entities(self, entities: list, rect) -> None:
         """Targets captured by a window/crossing during the tool's pick phase."""
 

@@ -82,6 +82,24 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.6.8.2" date="2026-10-21">
+      <description>
+        <p>Plot opens again in a layout whose page setup uses a scale outside the list.</p>
+        <p xml:lang="es">Trazar vuelve a abrirse en una presentación cuya configuración de página usa una escala que no está en la lista.</p>
+      </description>
+    </release>
+    <release version="0.6.8.1" date="2026-10-20">
+      <description>
+        <p>A drawing opened from the file manager while IngeCAD runs becomes a tab of its window instead of a second window.</p>
+        <p xml:lang="es">Un plano abierto desde el gestor de archivos con IngeCAD ya abierto se abre como pestaña de su ventana, no en una segunda ventana.</p>
+      </description>
+    </release>
+    <release version="0.6.8" date="2026-10-20">
+      <description>
+        <p>PEDIT Join turns lines and arcs into one polyline, and a user coordinate system (UCS) that typed points, the grid and the drawing commands follow. Narrow dimensions set their text beside them, status-bar toggles are remembered, justified text survives Save as DWG, dotted linetypes and hatch edits draw right, objects on hidden layers are no longer selected, and plots from a layout use its page setup.</p>
+        <p xml:lang="es">PEDIT Juntar convierte líneas y arcos en una sola polilínea, y un sistema de coordenadas personal (SCP) que siguen los puntos tecleados, la rejilla y las órdenes de dibujo. Las cotas estrechas ponen el texto al costado, la barra de estado recuerda sus botones, el texto justificado sobrevive a Guardar como DWG, los tipos de línea punteados y la edición de sombreados se dibujan bien, los objetos en capas ocultas ya no se seleccionan, y el trazado de una lámina usa su configuración de página.</p>
+      </description>
+    </release>
     <release version="0.6.7" date="2026-10-11">
       <description>
         <p>Drawing tabs and associative dimensions. A colleague's dimensions keep their author's text, number and position when edited, rotated, scaled or mirrored; AutoCAD's command options (MOVE Displacement, ROTATE and SCALE Copy, TRIM Fence, UNDO with a count, OOPS); locked layers that protect their objects; an undo that gives back the whole object; dashed linetypes and lineweights that plot right in drawings in metres; polyline widths that survive DWG.</p>

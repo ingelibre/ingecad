@@ -359,6 +359,30 @@ def test_the_shortcut_menu_follows_the_reference(qapp):
         win.close()
 
 
+def test_ok_in_options_keeps_new_drawings_in_metres(qapp, clean_settings):
+    """Never having picked a template, new drawings start in metres -- but
+    the Files tab showed Millimeters, and OK wrote it back: a user who only
+    changed, say, the right-click mode found every next drawing in mm."""
+    from PySide6.QtCore import QSettings
+
+    from core import templates as templates_mod
+    from views.main_window import MainWindow
+    from views.options_dialog import OptionsDialog
+    from views.startup_dialog import SETTING_TEMPLATE
+
+    QSettings().remove(SETTING_TEMPLATE)
+    win = MainWindow()
+    try:
+        assert win.startup_template() == templates_mod.DEFAULT_TEMPLATE == "m"
+        dlg = OptionsDialog(win)
+        assert dlg.template.currentData() == "m"
+        dlg.apply()
+        dlg.close()
+        assert win.startup_template() == "m"
+    finally:
+        win.close()
+
+
 def test_options_dialog_persists_what_it_offers(qapp, clean_settings):
     """OPTIONS (p. 1314) under AutoCAD's tab names, holding only settings
     that exist. Everything it shows must survive Apply and be readable

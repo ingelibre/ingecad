@@ -32,7 +32,7 @@ def test_integrate_writes_launcher_and_icon_pointing_at_the_file(tmp_path, monke
     f = appimage.integrate(img)
     assert f == data / "applications" / "ingecad.desktop"
     text = f.read_text()
-    assert f'Exec="{img}" %f' in text and f"TryExec={img}" in text
+    assert f'Exec="{img}" %F' in text and f"TryExec={img}" in text
     assert "Icon=ingecad" in text
     assert "image/vnd.dwg" in text and "image/vnd.dxf" in text
     assert (data / "icons/hicolor/256x256/apps/ingecad.png").read_bytes() == b"\x89PNG"
@@ -71,7 +71,7 @@ def test_the_help_menu_offers_integration_only_as_an_appimage(qapp, tmp_path, mo
 def test_the_store_page_has_screenshots_served_over_https():
     """GNOME Software showed "No screenshots": the metainfo had none."""
     root = Path(__file__).resolve().parents[1]
-    text = (root / "packaging/flatpak/org.ingecad.IngeCAD.metainfo.xml").read_text()
+    text = (root / "packaging/flatpak/org.ingecad.IngeCAD.metainfo.xml").read_text(encoding="utf-8")
     images = re.findall(r"<image>([^<]+)</image>", text)
     assert len(images) >= 5
     assert all(u.startswith("https://ingecad.org/images/screenshots/") for u in images)

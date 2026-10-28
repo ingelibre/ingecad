@@ -280,14 +280,16 @@ class InsertTool(Tool):
     def _insert(self) -> None:
         from core import attributes as att
 
+        # the rotation is measured from the UCS's X, as AutoCAD's (#91)
+        rotation = self._rotation + self.ucs().degrees
         if self._attdefs:
             command = att.insert_block_with_attribs(
                 self._block_name, self._point, self._xscale, self._xscale,
-                self._rotation, self._values)
+                rotation, self._values)
         else:
             command = actions.insert_block(
                 self._block_name, self._point, self._xscale, self._xscale,
-                self._rotation)
+                rotation)
         self.ctx.execute(command)
         self.ctx.finish()
 
@@ -331,6 +333,10 @@ class HatchTool(Tool):
 
     # Last-used settings persist for the session (AutoCAD remembers them).
     _last = {"pattern": "SOLID", "scale": 1.0, "angle": 0.0, "color": 256}
+
+    def _world_angle(self, angle: float) -> float:
+        """The pattern angle is measured from the UCS's X (#91)."""
+        return float(angle) + self.ucs().degrees
     # Set by the Palette to launch HATCH straight into point-picking with the
     # already-chosen pattern (skips the style dialog). One-shot.
     _skip_dialog = False
@@ -404,7 +410,7 @@ class HatchTool(Tool):
             return
         s = self.settings
         self.ctx.execute(actions.add_hatch(
-            boundaries, s["pattern"], s["scale"], s["angle"],
+            boundaries, s["pattern"], s["scale"], self._world_angle(s["angle"]),
             color=s.get("color", 256), islands=self.islands))
         self.ctx.echo(tr("Hatch created."))
         self.ctx.finish()
@@ -680,10 +686,13 @@ class HatchCliTool(HatchTool):
             self.ctx.finish()
             return
         s = self.settings
+        user_def = self._user_def
+        if user_def is not None:
+            user_def = (self._world_angle(user_def[0]),) + tuple(user_def[1:])
         self.ctx.execute(actions.add_hatch(
-            boundaries, s["pattern"], s["scale"], s["angle"],
+            boundaries, s["pattern"], s["scale"], self._world_angle(s["angle"]),
             color=s.get("color", 256), islands=self.islands,
-            style=type(self)._style, user_def=self._user_def))
+            style=type(self)._style, user_def=user_def))
         self.ctx.echo(tr("Hatch created."))
         self.ctx.finish()
 

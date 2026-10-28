@@ -127,7 +127,7 @@ class AttDefCliTool(_TextPrompts, Tool):
     def on_option(self, text: str) -> bool:
         state = self._text_state
         if state == "tag":
-            tag = text.strip().upper().replace(" ", "")
+            tag = att.normal_tag(text)
             if not tag or "!" in tag:
                 self.ctx.echo(tr("Invalid tag name."))
                 self._ask("tag", "Enter attribute tag name:")
@@ -216,7 +216,7 @@ class AttDefCliTool(_TextPrompts, Tool):
                 value = float(text)
             except ValueError:
                 return False
-            self._rotation = value
+            self._rotation = value + self.ucs().degrees   # from the UCS's X
             self._create()
             return True
         return False
@@ -242,7 +242,7 @@ class AttDefCliTool(_TextPrompts, Tool):
             self._rotation_prompt()
             return
         if self._await == "rotation":
-            self._rotation = self._default_rotation()
+            self._rotation = self._default_rotation() + self.ucs().degrees
             self._create()
             return
         self.ctx.finish()
@@ -342,7 +342,9 @@ class AttDefCliTool(_TextPrompts, Tool):
             self.ctx.finish()
             return
         self.ctx.execute(command)
-        type(self)._last = (self._height, self._rotation or 0.0)
+        # the default offered next time is read in the UCS, as typed
+        type(self)._last = (self._height,
+                            (self._rotation or 0.0) - self.ucs().degrees)
         _remember(self, command)
         self.ctx.finish()
 
@@ -423,6 +425,12 @@ class EattEditTool(Tool):
         entity = services.pick_entity(point) if services else None
         if entity is None or entity.dxftype() != "INSERT":
             self.ctx.echo(tr("That object is not a block."))
+            if entity is not None and entity.dxftype() == "ATTDEF":
+                # Rafael picked his loose definition here and found no way
+                # to edit it (#88): say where that is done
+                self.ctx.echo(tr("An attribute definition is edited with a "
+                                 "double-click (DDEDIT); its values, once the "
+                                 "block is inserted."))
             self.prompt("Select a block:")
             return
         if not entity.attribs:

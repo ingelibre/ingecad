@@ -215,8 +215,8 @@ def _dim_colours(doc, dim) -> set:
 
     scene = build_scene(doc, "Model")
     colours = set()
-    for batch, lo, hi in scene.handle_ranges[dim.dxf.handle]:
-        rgba = getattr(scene, batch).data["rgba"][lo:hi]
+    for batch, first, count in scene.handle_ranges[dim.dxf.handle]:
+        rgba = getattr(scene, batch).data["rgba"][first:first + count]
         colours |= {tuple(int(v) for v in c)
                     for c in np.unique(rgba[:, :3], axis=0)}
     return colours

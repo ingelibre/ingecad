@@ -137,7 +137,7 @@ def test_the_drawing_is_written_and_says_what_it_is_a_copy_of(qapp,
         assert sv.exists(), "no automatic save was written"
         assert ezdxf.readfile(str(sv)).modelspace(), "the copy has no drawing"
         data = json.loads(info.read_text(encoding="utf-8"))
-        assert data["drawing"] == "/planos/Detalle.dxf"
+        assert data["drawing"] == str(Path("/planos/Detalle.dxf"))   # backslashes on Windows
         assert data["pid"] == os.getpid()
         assert data["entities"] > 0
     finally:

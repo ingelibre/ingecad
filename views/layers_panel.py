@@ -27,6 +27,7 @@ from core import layers as layer_ops
 from core.i18n import tr
 from views.color_dialog import (BYBLOCK, BYLAYER, STANDARD_ACIS, aci_label,
                                 aci_qcolor, swatch_icon)
+from views.icons import layer_state_icon
 
 
 # Dash patterns for the previews, by the family a standard linetype's name
@@ -122,6 +123,9 @@ def fill_color_combo(combo, include_bylayer: bool = True) -> None:
 
 COLLAPSED_WIDTH = 22
 
+#: Where a state cell keeps its state (on, thawed, unlocked, plots)
+_STATE_ROLE = Qt.UserRole + 1
+
 _PANEL_STYLE = """
 LayersPanel { background: #26262a; }
 LayersPanel QTableWidget { font-size: 11px; background: #1e1e22;
@@ -151,13 +155,17 @@ class LayersPanel(QWidget):
         self.table = QTableWidget(0, 10, self)
         self.table.setHorizontalHeaderItem(0, self._header_item("✓", tr("Status")))
         self.table.setHorizontalHeaderItem(1, self._header_item(tr("Name"), tr("Name")))
-        self.table.setHorizontalHeaderItem(2, self._header_item("◍", tr("On/Off")))
-        self.table.setHorizontalHeaderItem(3, self._header_item("❄", tr("Freeze")))
-        self.table.setHorizontalHeaderItem(4, self._header_item("🔒", tr("Lock")))
+        self.table.setHorizontalHeaderItem(2, self._header_item(
+            "", tr("On/Off"), layer_state_icon("on", True)))
+        self.table.setHorizontalHeaderItem(3, self._header_item(
+            "", tr("Freeze"), layer_state_icon("thaw", False)))
+        self.table.setHorizontalHeaderItem(4, self._header_item(
+            "", tr("Lock"), layer_state_icon("lock", True)))
         self.table.setHorizontalHeaderItem(5, self._header_item("■", tr("Color")))
         self.table.setHorizontalHeaderItem(6, self._header_item(tr("Linetype"), tr("Linetype")))
         self.table.setHorizontalHeaderItem(7, self._header_item(tr("Lineweight"), tr("Lineweight")))
-        self.table.setHorizontalHeaderItem(8, self._header_item("🖶", tr("Plot")))
+        self.table.setHorizontalHeaderItem(8, self._header_item(
+            "", tr("Plot"), layer_state_icon("plot", True)))
         self.table.setHorizontalHeaderItem(9, self._header_item(tr("Description"), tr("Description")))
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -240,10 +248,12 @@ class LayersPanel(QWidget):
         return btn
 
     @staticmethod
-    def _header_item(text: str, tooltip: str) -> QTableWidgetItem:
+    def _header_item(text: str, tooltip: str, icon=None) -> QTableWidgetItem:
         item = QTableWidgetItem(text)
         item.setToolTip(tooltip)
         item.setTextAlignment(Qt.AlignCenter)
+        if icon is not None:
+            item.setIcon(icon)
         return item
 
     # -- data -----------------------------------------------------------------
@@ -370,8 +380,7 @@ class LayersPanel(QWidget):
         self.table.setItem(row, 1, name)
 
         for col, on in ((2, info.is_on), (3, not info.is_frozen), (4, not info.is_locked)):
-            item = QTableWidgetItem(self._state_glyph(col, on))
-            item.setTextAlignment(Qt.AlignCenter)
+            item = self._state_item(col, on)
             item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table.setItem(row, col, item)
 
@@ -392,8 +401,9 @@ class LayersPanel(QWidget):
         lw.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
         self.table.setItem(row, 7, lw)
 
-        plot = QTableWidgetItem("🖶" if info.plot else "🚫")
-        plot.setTextAlignment(Qt.AlignCenter)
+        plot = QTableWidgetItem()
+        plot.setIcon(layer_state_icon("plot", info.plot))
+        plot.setData(_STATE_ROLE, info.plot)
         plot.setToolTip(tr("Plot") if info.plot else tr("Do not plot"))
         plot.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
         self.table.setItem(row, 8, plot)
@@ -402,12 +412,22 @@ class LayersPanel(QWidget):
         self.table.setItem(row, 9, descr)
 
     @staticmethod
-    def _state_glyph(col: int, active: bool) -> str:
-        if col == 2:   # on
-            return "💡" if active else "🌑"
-        if col == 3:   # thawed (not frozen)
-            return "☀" if active else "❄"
-        return "🔓" if active else "🔒"   # unlocked
+    def _state_item(col: int, active: bool) -> QTableWidgetItem:
+        """On (col 2), thawed (3) or unlocked (4): a painted icon, the
+        state itself kept as the item's data. They were emoji, empty boxes
+        on a machine without a desktop's fonts (#100)."""
+        item = QTableWidgetItem()
+        if col == 2:
+            item.setIcon(layer_state_icon("on", active))
+            item.setToolTip(tr("On") if active else tr("Off"))
+        elif col == 3:
+            item.setIcon(layer_state_icon("thaw", active))
+            item.setToolTip(tr("Thawed") if active else tr("Frozen"))
+        else:
+            item.setIcon(layer_state_icon("lock", not active))
+            item.setToolTip(tr("Unlocked") if active else tr("Locked"))
+        item.setData(_STATE_ROLE, active)
+        return item
 
     def _row_layer(self, row: int) -> str:
         rows = getattr(self, "_rows", [])
@@ -514,8 +534,7 @@ class LayersPanel(QWidget):
         name = self._row_layer(row)
         if col in (2, 3, 4):
             prop = {2: "on", 3: "frozen", 4: "locked"}[col]
-            glyph = self.table.item(row, col).text()
-            active = glyph in ("💡", "☀", "🔓")
+            active = bool(self.table.item(row, col).data(_STATE_ROLE))
             # toggling: on->off, thawed->frozen, unlocked->locked
             if prop == "on":
                 self._execute(

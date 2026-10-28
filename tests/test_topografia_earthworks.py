@@ -75,7 +75,7 @@ def test_a_polyline_on_the_profile_becomes_the_grade_line_and_the_volumes_follow
     assert actions.is_grade(design) and design.dxf.layer == "TOPO-RASANTE"
     assert actions.grade_profile_anchor(document, design) is anchor
     grade = actions.grade_of(design, frame)
-    assert grade == pytest.approx([(0.0, 101.0), (100.0, 99.0)])
+    assert [c for p in grade for c in p] == pytest.approx([0.0, 101.0, 100.0, 99.0])
     assert "-2.00 %" in _texts(document)
     template = profile.Template(width=6.0, cut_hv=1.0, fill_hv=1.0)
     rows = actions.earthworks_rows(tin, axis, grade, frame.step, template)

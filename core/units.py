@@ -216,6 +216,8 @@ def _fraction_text(whole: int, rest: Fraction) -> str:
 def format_length(value: float, lunits: int = DECIMAL, luprec: int = 4) -> str:
     """One length, in the drawing's linear format."""
     luprec = max(0, min(8, int(luprec)))
+    if round(value, luprec) == 0:
+        value = 0.0          # float noise is not "-0.000"
     sign = "-" if value < 0 else ""
     magnitude = abs(value)
 

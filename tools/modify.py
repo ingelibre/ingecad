@@ -12,7 +12,7 @@ Deliberate deviations, each a smaller menu rather than a different one:
 * ARRAY runs the classic ``-ARRAY`` prompts and produces plain copies. The
   modern associative array is a parametric object a colleague's AutoCAD
   would have to understand coming back; the round trip matters more here.
-* PEDIT offers Close/Open, Width, Reverse and Undo. Fit, Spline, Decurve,
+* PEDIT offers Close/Open, Join, Width, Reverse and Undo. Fit, Spline, Decurve,
   Ltype gen and Edit vertex are not listed, because a prompt that accepts a
   keyword and does nothing with it is worse than one that never offered it.
 """
@@ -600,7 +600,7 @@ class ArrayTool(Tool):
     def _place(self, col_spacing: float) -> bool:
         self.ctx.execute(modify.array_rect(
             self._entities, self._rows, self._cols,
-            self._row_spacing, col_spacing))
+            self._row_spacing, col_spacing, self.ucs().angle))
         self.ctx.echo(tr("{count} copies placed.",
                          count=(self._rows * self._cols - 1)
                          * len(self._entities)))
@@ -689,8 +689,21 @@ class PeditTool(Tool):
     def _menu(self) -> None:
         closed = bool(getattr(self._entity, "closed", False))
         first = tr("Open") if closed else tr("Close")
-        self.prompt("Enter an option [{first}/Width/Reverse/Undo/eXit] <eXit>:",
-               first=first)
+        self.prompt("Enter an option [{first}/Join/Width/Reverse/Undo/eXit] "
+                    "<eXit>:", first=first)
+
+    def selection_prompt(self) -> str:
+        return tr("Select objects:")
+
+    def on_selection(self, entities: list) -> None:
+        """Join: the objects picked after the J option."""
+        self._await = None
+        command, added = modify.pedit_join(self._entity, entities)
+        if command is not None:
+            self.ctx.execute(command)
+            self._entity = command.new_entities[0]
+        self.ctx.echo(tr("{count} segments added to polyline", count=added))
+        self._menu()
 
     def on_point(self, point: Point) -> None:
         if self._entity is not None:
@@ -763,6 +776,14 @@ class PeditTool(Tool):
         if token in ("O", "OPEN"):
             self.ctx.execute(modify.polyline_edit(self._entity, "open"))
             self._menu()
+            return True
+        if token in ("J", "JOIN"):
+            if self._entity.closed:
+                self.ctx.echo(tr("Cannot join to a closed polyline."))
+                self._menu()
+                return True
+            self._await = "join"
+            self.ctx.services.request_selection()
             return True
         if token in ("W", "WIDTH"):
             self._await = "width"

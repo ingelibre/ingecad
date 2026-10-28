@@ -76,10 +76,18 @@ class CompositeCommand(Command):
     def do(self, document) -> None:
         for command in self.commands:
             command.do(document)
+            # a member recorded by History brings its associative
+            # dimensions along (a script folded into one step, #90)
+            followup = getattr(command, "dimassoc_followup", None)
+            if followup is not None:
+                followup.do(document)
 
     def undo(self, document) -> None:
         removed = []
         for command in reversed(self.commands):
+            followup = getattr(command, "dimassoc_followup", None)
+            if followup is not None:
+                followup.undo(document)
             command.undo(document)
             removed.extend(getattr(command, "removed_handles", ()) or ())
         self.removed_handles = removed
@@ -104,19 +112,31 @@ class History:
 
     def execute(self, command: Command) -> None:
         self._gate()
-        # associative dimensions follow their objects in the same undo step
+        state = self.dimassoc_state()
+        command.do(self.document)
+        self.record(command, state)
+
+    def dimassoc_state(self):
+        """The associative dimensions as they are now (core.dimassoc), to
+        hand to ``record`` once the command has mutated the drawing."""
         from core import dimassoc
 
-        state = dimassoc.before(self.document) if self.document is not None else None
-        command.do(self.document)
-        command.dimassoc_followup = dimassoc.react(self.document, state)
-        if command.dimassoc_followup is not None:
-            command.dimassoc_followup.do(self.document)
-        self.record(command)
+        return dimassoc.before(self.document) if self.document is not None else None
 
-    def record(self, command: Command) -> None:
+    def record(self, command: Command, dimassoc_state=None) -> None:
         """Put an already-applied command on the undo stack (execute's last
-        step; grips and in-place edits, which mutate first, call it alone)."""
+        step; grips and in-place edits, which mutate first, call it alone).
+
+        With the ``dimassoc_state`` taken before the mutation, associative
+        dimensions follow their objects in the same undo step. Grips called
+        this without one and a dimension stayed behind its line (#90)."""
+        if dimassoc_state is not None:
+            from core import dimassoc
+
+            command.dimassoc_followup = dimassoc.react(self.document,
+                                                       dimassoc_state)
+            if command.dimassoc_followup is not None:
+                command.dimassoc_followup.do(self.document)
         self._undo.append(command)
         self._redo.clear()
         self._mark_blocks(command, applied=True)

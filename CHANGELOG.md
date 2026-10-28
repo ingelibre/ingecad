@@ -1,5 +1,72 @@
 # Changelog
 
+## v0.6.8.2 — 2026-10-21
+
+- **Plot opens again in a layout whose page setup has a scale outside
+  the list** (1:37, a custom ratio from another program...). The dialog
+  failed while it was being built and nothing appeared; it now opens on
+  Custom with that page setup's ratio.
+
+## v0.6.8.1 — 2026-10-20
+
+- **A drawing opened from the file manager while IngeCAD runs becomes a
+  tab of its window**, instead of a second IngeCAD with a window of its
+  own. Several drawings opened together arrive as a tab each; IngeCAD
+  started from the menu with nothing to open still gets its own window.
+
+## v0.6.8 — 2026-10-20
+
+What testers found while recording tutorials, fixed first; data that
+Save as DWG lost, kept; and two tools a drafter reaches for every
+day: PEDIT Join and the UCS.
+
+### Two tools of the daily flow
+- **PEDIT Join** (#89): lines, arcs and open polylines that touch become
+  one polyline, closed when the contour closes, so AREA and HATCH take
+  it. It keeps the properties of the object picked first.
+- **UCS** (#91): a moved and turned origin, three points, Named
+  (Restore/Save/Delete/?), Object, Previous, View, World and Z, plus
+  Tools ▸ New UCS. Typed coordinates, the coordinate readout, snap,
+  ORTHO, POLAR, tracking, the grid and the cursor follow it, and so do
+  RECTANG, POLYGON, XLINE, ARRAY, INSERT, TEXT, MTEXT, the hatch angle,
+  DIMLINEAR, DIMORDINATE, ID and DIST. It travels in the DXF and the DWG.
+  A plan UCS only; sheets and the block editor stay in world coordinates.
+
+### What testers ran into
+- **A dimension too narrow for its text sets the text beside it**, as
+  ISO 129 does (#102).
+- **The status-bar toggles come back as you left them** (#103).
+- **Annotative text styles scale dimension text** with the annotation
+  scale (#85); **associative dimensions follow grip and Properties
+  edits** (#90).
+- **A hatch's scale and angle set in Properties redraw its pattern** (#86).
+- **The dots of DASHDOT, CENTER and PHANTOM are drawn**, on screen and
+  on paper (#87).
+- **An attribute definition can be edited, and BLOCK keeps its
+  attributes** (#88).
+- **Zoom Extents frames what was just drawn** (#96).
+- **A click, window or crossing no longer takes objects on hidden
+  layers** (#97).
+- **Construction lines look infinite** and stay out of the extents (#98).
+- **The Layers panel's state icons** are painted, not font glyphs (#100).
+
+### Data kept
+- **Justified text no longer jumps to 0,0 after Save as DWG** (#95; fixed
+  in LibreDWG, upstream #1463).
+- **Save as DWG no longer warns about every recent plan** (LibreDWG,
+  upstream #1464 and #1465).
+
+### Screen and paper
+- **A large text is no longer hidden** with its layer's small ones.
+- **Polylines with a lineweight close their corners.**
+- **Plotted TrueType text and solid hatches** get no outline.
+- **PLOT in a layout starts from that layout's page setup**, in its units.
+- **Typed DRAWORDER** and its undo redraw at once.
+
+### For plugin authors
+- A plugin's toolbar takes separators; a plugin tags XDATA under its own
+  APPID (`docs/plugins.md`).
+
 ## v0.6.7 — 2026-10-11
 
 The colleague's drawing, edited as its author would: every dimension of a

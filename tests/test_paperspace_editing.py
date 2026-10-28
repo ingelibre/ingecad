@@ -376,7 +376,7 @@ def test_the_in_place_editor_opens_for_every_text_kind_on_the_sheet(qapp):
         win.switch_layout("Layout1")
         _wait_regen(qapp, win)
 
-        for entity in (text, mtext, attrib, attdef):
+        for entity in (text, mtext, attrib):
             t._mtext_editor = None
             assert t.open_text_editor_for(entity), entity.dxftype()
             editor = t._mtext_editor
@@ -386,6 +386,28 @@ def test_the_in_place_editor_opens_for_every_text_kind_on_the_sheet(qapp):
                 "PLANIMETRIA" if entity.dxftype() == "MTEXT"
                 else ("PLANO" if entity is text else "A01")), entity.dxftype()
             editor.cancel(ask=False)
+
+        # a definition opens Edit Attribute Definition: tag, prompt and
+        # default (DDEDIT, p. 523; #88)
+        from PySide6.QtCore import QTimer
+
+        from views import attribute_dialogs
+
+        opened = []
+
+        class Seen(attribute_dialogs.EditAttDefDialog):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                opened.append(self.tag.text())
+                QTimer.singleShot(0, self.reject)
+
+        real = attribute_dialogs.EditAttDefDialog
+        attribute_dialogs.EditAttDefDialog = Seen
+        try:
+            assert t.open_text_editor_for(attdef)
+        finally:
+            attribute_dialogs.EditAttDefDialog = real
+        assert opened == ["SHEET"]
 
         # and the inverse: a kind DDEDIT does not edit is declined, so the
         # double-click falls through to the layout's enter/leave rule

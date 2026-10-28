@@ -345,3 +345,63 @@ def test_each_group_draws_whole_before_the_next():
     assert scene.lines.visible_runs(rect, 1.0, 0.0, -1)
     assert not scene.lines.visible_runs(rect, 1.0, 0.0, 0)
     assert scene.triangles.visible_runs(rect, 1.0, 0.0, 0)
+
+
+def test_typed_draworder_and_its_undo_redraw_at_once(qapp):
+    """DRAWORDER typed (not the menu with a selection) changed the order in
+    the drawing but redrew nothing until REGEN; nor did its undo."""
+    import time
+
+    import numpy as np
+    from PySide6.QtGui import QGuiApplication, QImage
+    from PySide6.QtTest import QTest
+
+    if QGuiApplication.platformName() in ("offscreen", "minimal"):
+        pytest.skip("no OpenGL on this platform: the pixels need a real context")
+    from views.main_window import MainWindow
+
+    win = MainWindow()
+
+    def settle():
+        t0 = time.monotonic()
+        while win._regen_worker is not None and time.monotonic() - t0 < 20:
+            qapp.processEvents()
+        for _ in range(5):
+            qapp.processEvents()
+            QTest.qWait(10)
+
+    def red_in_the_middle():
+        win.viewport.grabFramebuffer()
+        img = win.viewport.grabFramebuffer().convertToFormat(QImage.Format_RGB888)
+        w, h = img.width(), img.height()
+        arr = np.frombuffer(img.constBits(), np.uint8)
+        arr = arr.reshape(h, img.bytesPerLine())[:, :w * 3].reshape(h, w, 3)
+        centre = arr[h // 2 - 3:h // 2 + 4, w // 2 - 3:w // 2 + 4].reshape(-1, 3)
+        return int(((centre[:, 0] > 150) & (centre[:, 2] < 80)).sum())
+
+    try:
+        win.new_document("m")
+        win.resize(900, 700)
+        win.show()
+        QTest.qWaitForWindowExposed(win, 5000)
+        win.viewport.grid_on = False
+        msp = win.document.modelspace()
+        hatch = msp.add_hatch(color=5)
+        hatch.paths.add_polyline_path([(-20, -20), (20, -20), (20, 20), (-20, 20)])
+        line = msp.add_line((-50, 0), (50, 0), dxfattribs={"color": 1})
+        win.regen_in_memory(zoom_after=True)
+        settle()
+        assert red_in_the_middle() > 0          # the line over the fill
+
+        win.tools.selection = {line.dxf.handle}
+        win._on_command_submitted("DRAWORDER")
+        win._on_command_submitted("B")
+        settle()
+        assert red_in_the_middle() == 0, "typed DRAWORDER did not redraw"
+
+        win._on_command_submitted("U")
+        settle()
+        assert red_in_the_middle() > 0, "its undo did not redraw"
+    finally:
+        win.document.dirty = False
+        win.close()

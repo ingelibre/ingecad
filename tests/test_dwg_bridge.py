@@ -311,3 +311,25 @@ def test_the_quick_count_agrees_with_ezdxf_on_what_counts(tmp_path):
     path = tmp_path / "count.dxf"
     doc.saveas(path)
     assert dwg_bridge._modelspace_count(path) == len(ezdxf.readfile(path).modelspace()) == 4
+
+
+def test_verify_dwg_names_the_errors_in_the_users_language(tmp_path, monkeypatch):
+    # The warning said "internal errors" and nothing else, in English under
+    # the Spanish UI: name them, most frequent first, each once.
+    from core import i18n
+
+    src = _dxf_with(3, tmp_path / "src.dxf")
+    back = _dxf_with(3, tmp_path / "back.dxf")
+    monkeypatch.setattr(dwg_bridge, "_convert_dwg", lambda p: back)
+    stderr = ("ERROR: MLINE no lines\n" * 3 + "ERROR: TABLE bad row\n"
+              + "ERROR: a\nERROR: b\n")
+    i18n.set_language("es")
+    try:
+        (warning,) = dwg_bridge.verify_dwg(src, tmp_path / "out.dwg",
+                                           stderr=stderr)
+    finally:
+        i18n.set_language("en")
+    assert warning.startswith("el escritor de DWG informó errores internos")
+    assert "«MLINE no lines» (×3)" in warning
+    assert warning.index("MLINE") < warning.index("TABLE")
+    assert warning.endswith(" y 1 más")

@@ -64,7 +64,7 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `tools` | joins the one registry `ToolController.start_tool` reads, counted per plugin so several windows can share it; a name the core or another plugin owns refuses the whole activation |
 | `aliases` | added unless the user's `acad.pgp` or the core already answers to the token — an alias always wins over a command name, so a plugin can never take one |
 | `menu` | one top-level menu per plugin, between *Modify* and *Tools*; labels go through `tr()` when the menu is built |
-| `toolbar` | a `QToolBar` named `plugin_<id>_toolbar`, top area, movable |
+| `toolbar` | a `QToolBar` named `plugin_<id>_toolbar`, top area, movable; `SEPARATOR` between buttons as in a menu |
 | `options_page` | `callable(dialog, window) -> QWidget` added as a tab to Options after the core ones; if the widget has `apply()`, it runs with the core pages on OK and on Apply |
 | `i18n_dir` | `<dir>/<lang>/ui.json` strings merge after the app's catalog (the app wins a clash); `<dir>/<lang>/commands.json` adds localized command names, English always kept |
 | `requires` | module names; a missing one lists the plugin as *unavailable: needs X* instead of breaking start-up |
@@ -79,9 +79,13 @@ They are the project's own, not extra ones:
    `core/actions.py`). Tools are thin shells over actions.
 2. **The ezdxf document is the model.** A plugin writes plain DXF entities
    in named layers; what it must remember (which 3DFACEs form one surface,
-   which UTM zone the drawing is in) goes into XDATA under the `INGECAD`
-   APPID (`core/xdata.py` owns the name and `ensure_appid`) or the root
-   dictionary's `INGECAD` dictionary. What several plugins need to agree on
+   which UTM zone the drawing is in) goes into XDATA. The bundled plugins
+   write under the `INGECAD` APPID (`core/xdata.py`); a third-party plugin
+   registers its own, `ensure_appid(doc, "MYPLUGIN")`, and never writes
+   under `INGECAD`: `set_xdata` replaces everything under an APPID, so it
+   would wipe the survey and terrain tags of the same entity. Drawing-wide
+   data goes in the root dictionary, under the plugin's own name too (the
+   `INGECAD` one holds the core's georeference). What several plugins need to agree on
    lives in the core, once: the drawing's UTM zone, hemisphere and datum (or
    its EPSG coordinate system) are
    `core/georef.py` (`read_georef`, `SetGeorefCommand`), declared by the

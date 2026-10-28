@@ -150,7 +150,8 @@ class _DimTextMixin:
             return True
         if self._pending == "textangle":
             try:
-                self._text_rotation = float(raw)
+                # from the UCS's X, as typed angles are (#91)
+                self._text_rotation = float(raw) + self.ucs().degrees
             except ValueError:
                 self.ctx.echo(tr("Requires a numeric angle."))
                 return True
@@ -289,7 +290,12 @@ class _TwoPointDim(_DimTextMixin, Tool):
         return tools.px_to_space(SNAP_PX)
 
     def _align_angle(self, point: Point):
-        """0/90 when this tool draws an axis-parallel dimension line."""
+        """0/90 when this tool draws an axis-parallel dimension line.
+
+        In a turned UCS the lines are not parallel to the world's axes,
+        which is what the magnet compares: it stays off there."""
+        if self.ucs().angle != 0.0:
+            return None
         angle = getattr(self, "_forced_angle", None)
         if angle is None and hasattr(self, "_angle_for"):
             angle = self._angle_for(point)
@@ -424,15 +430,22 @@ class DimLinearTool(_TwoPointDim):
             return
         super().on_enter()
 
+    def _world_forced(self):
+        """Horizontal, Vertical and Rotated are the UCS's (#91)."""
+        if self._forced_angle is None:
+            return None
+        return self._forced_angle + self.ucs().degrees
+
     def _angle_for(self, cursor: Point) -> float:
         if self._forced_angle is not None:
-            return self._forced_angle
-        return actions.linear_dim_angle(self._p1, self._p2, cursor)
+            return self._world_forced()
+        return actions.linear_dim_angle(self._p1, self._p2, cursor, self.ucs())
 
     def _make(self, location: Point):
         return actions.dim_linear(self._p1, self._p2, location,
-                                  angle=self._forced_angle, text=self._text,
-                                  text_rotation=self._text_rotation)
+                                  angle=self._world_forced(), text=self._text,
+                                  text_rotation=self._text_rotation,
+                                  frame=self.ucs())
 
     def _frame(self, cursor: Point):
         a = math.radians(self._angle_for(cursor))
@@ -449,12 +462,14 @@ class DimLinearTool(_TwoPointDim):
                    + (self._p2[1] - self._p1[1]) * math.sin(a))
 
     def _measured(self) -> float:
-        dx = abs(self._p2[0] - self._p1[0])
-        dy = abs(self._p2[1] - self._p1[1])
+        frame = self.ucs()
+        p1, p2 = frame.to_ucs(*self._p1), frame.to_ucs(*self._p2)
+        dx = abs(p2[0] - p1[0])
+        dy = abs(p2[1] - p1[1])
         if self._forced_angle is not None:
             a = math.radians(self._forced_angle)
-            return abs((self._p2[0] - self._p1[0]) * math.cos(a)
-                       + (self._p2[1] - self._p1[1]) * math.sin(a))
+            return abs((p2[0] - p1[0]) * math.cos(a)
+                       + (p2[1] - p1[1]) * math.sin(a))
         return dx if dx >= dy else dy
 
 
@@ -866,7 +881,8 @@ class DimOrdinateTool(_DimTextMixin, Tool):
     def _measured(self) -> float:
         if self._feature is None:
             return 0.0
-        return self._feature[1] if self._dtype == "Y" else self._feature[0]
+        x, y = self.ucs().to_ucs(*self._feature)       # from the UCS origin
+        return y if self._dtype == "Y" else x
 
     def on_option(self, text: str) -> bool:
         if self._text_options(text, ready=self._feature is not None):
@@ -902,7 +918,8 @@ class DimOrdinateTool(_DimTextMixin, Tool):
             return
         self.ctx.execute(actions.dim_ordinate(
             self._feature, point, dtype=self._dtype,
-            text=self._text, text_rotation=self._text_rotation))
+            text=self._text, text_rotation=self._text_rotation,
+            frame=self.ucs()))
         self.ctx.finish()
 
     def preview_segments(self, cursor: Point):
