@@ -50,6 +50,7 @@ def apply() -> None:
     _patch_arc_length_symbol_text()
     _patch_dms_angular_text()
     _patch_linetype_dots()
+    _patch_viewport_linetype_scale()
 
 
 def dms_text(degrees: float, dimadec: int, dimdsep: str = ".",
@@ -801,6 +802,9 @@ def _patch_mtext_mask_rendering() -> None:
     """
     from ezdxf.addons.drawing import frontend as _frontend
 
+    if not hasattr(_frontend, "is_complex_mtext"):
+        return
+
     original = _frontend.is_complex_mtext
 
     def is_complex_mtext(mtext) -> bool:
@@ -1534,3 +1538,51 @@ def _patch_linetype_dots() -> None:
     draw_line._ingecad_patch = True
     LinetypeStage2d.draw_line = draw_line
     LinetypeStage2d.draw_path = draw_path
+
+
+def _patch_viewport_linetype_scale() -> None:
+    """Paperspace viewports must keep linetypes to paper units ($PSLTSCALE=1).
+
+    In AutoCAD ($PSLTSCALE=1, default), dashed and dotted lines appear at
+    a constant size in paper units on the printed sheet across all viewports,
+    regardless of viewport scale.
+
+    ezdxf's RenderPipeline2d applies the viewport transformation matrix in
+    ClippingStage2d before LinetypeStage2d runs, so coordinates are already
+    in paper units. But RenderPipeline2d.get_vp_ltype_scale() then multiplied
+    the pattern scale by 1.0 / viewport_scale, inverting the scale and
+    making dashes in zoomed-out viewports (e.g. 1:50, 1:100) balloon up by
+    50x or 100x instead of staying uniform on the sheet (ezdxf #1386, #1461).
+
+    With coordinates already in paper units, the scale factor for $PSLTSCALE=1
+    is 1.0 (constant paper units), and for $PSLTSCALE=0 is current_vp_scale.
+    """
+    from ezdxf.addons.drawing.pipeline import RenderPipeline2d
+
+    if getattr(RenderPipeline2d.get_vp_ltype_scale, "_ingecad_patch", False):
+        return
+
+    orig_enter_vp = RenderPipeline2d.enter_viewport
+    orig_exit_vp = RenderPipeline2d.exit_viewport
+
+    def enter_viewport(self, vp) -> bool:
+        doc = getattr(vp, "doc", None)
+        self._ingecad_psltscale = int(doc.header.get("$PSLTSCALE", 1)) if doc else 1
+        return orig_enter_vp(self, vp)
+
+    def exit_viewport(self):
+        res = orig_exit_vp(self)
+        self._ingecad_psltscale = 1
+        return res
+
+    def get_vp_ltype_scale(self) -> float:
+        psltscale = getattr(self, "_ingecad_psltscale", 1)
+        if psltscale == 0:
+            return float(self.current_vp_scale)
+        return 1.0
+
+    get_vp_ltype_scale._ingecad_patch = True
+    RenderPipeline2d.enter_viewport = enter_viewport
+    RenderPipeline2d.exit_viewport = exit_viewport
+    RenderPipeline2d.get_vp_ltype_scale = get_vp_ltype_scale
+

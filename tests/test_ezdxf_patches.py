@@ -195,3 +195,47 @@ def test_fixed_height_text_style_is_not_scaled_by_dimscale():
     heights = [e.dxf.char_height for e in d.blocks.get(other.dxf.geometry)
                if e.dxftype() == "MTEXT"]
     assert heights and abs(heights[0] - 25.0) < 1e-9
+
+
+def test_viewport_linetype_scale_respects_psltscale() -> None:
+    """Paperspace viewports must keep linetypes to paper units ($PSLTSCALE=1).
+
+    At viewport scale 1:20, dashes must stay constant on the sheet (1.0 factor)
+    when $PSLTSCALE=1, and scale with the viewport (0.05 factor) when $PSLTSCALE=0.
+    """
+    from unittest.mock import MagicMock
+    import ezdxf
+    from ezdxf.addons.drawing.pipeline import RenderPipeline2d
+    from core import ezdxf_patches
+
+    ezdxf_patches.apply()
+    assert getattr(RenderPipeline2d.get_vp_ltype_scale, "_ingecad_patch", False)
+
+    doc = ezdxf.new("R2010")
+    layout = doc.layouts.get("Layout1")
+    layout.page_setup(size=(297, 210), units="mm")
+    vp = layout.add_viewport(
+        center=(100, 100), size=(100, 100),
+        view_center_point=(1000, 1000), view_height=2000,
+    )
+    scale = vp.get_scale()
+
+    p = RenderPipeline2d(MagicMock())
+
+    # Outside viewport:
+    assert p.get_vp_ltype_scale() == 1.0
+
+    # With $PSLTSCALE = 1 (default in AutoCAD and ezdxf):
+    doc.header["$PSLTSCALE"] = 1
+    p.enter_viewport(vp)
+    assert p.get_vp_ltype_scale() == 1.0
+    p.exit_viewport()
+    assert p.get_vp_ltype_scale() == 1.0
+
+    # With $PSLTSCALE = 0 (model-space scaling):
+    doc.header["$PSLTSCALE"] = 0
+    p.enter_viewport(vp)
+    assert abs(p.get_vp_ltype_scale() - scale) < 1e-6
+    p.exit_viewport()
+    assert p.get_vp_ltype_scale() == 1.0
+
