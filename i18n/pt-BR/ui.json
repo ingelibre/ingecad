@@ -2243,7 +2243,7 @@
   "Enable": "Habilitar",
   "Update to {version}": "Atualizar para {version}",
   "Uninstall": "Desinstalar",
-  "Requires IngeCAD {version} or later.": "Requer IngeCAD {versão} ou posterior.",
+  "Requires IngeCAD {version} or later.": "Requer IngeCAD {version} ou posterior.",
   "Install extension": "Instalar extensão",
   "{name} has not been reviewed. It is Python code that runs with the same access as IngeCAD. Install it anyway?": "{name} não foi revisado. É um código Python que é executado com o mesmo nível de acesso que o IngeCAD. Deseja instalá-lo mesmo assim?",
   "Could not uninstall {name}: {reason}": "Não foi possível desinstalar {name}: {reason}",
