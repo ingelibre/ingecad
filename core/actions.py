@@ -3173,6 +3173,15 @@ def _restore_entity(entity, snapshot) -> None:
         if key in keep:
             continue
         entity.dxf.set(key, value)
+    # XDATA is part of the state too: MIRROR reflects its world points and
+    # directions (1011-1013) and undoes through this snapshot, so the
+    # entity came back in place with its application's points still
+    # mirrored. A copy, so that a later undo of the same snapshot finds
+    # it unchanged.
+    if snapshot.xdata is not None or entity.xdata is not None:
+        import copy
+
+        entity.xdata = copy.deepcopy(snapshot.xdata)
     # Geometry that is NOT a DXF attribute has to be restored by hand, or
     # the undo silently keeps the new shape. Each of these was a real bug:
     # the first two found by using them, the last three by sweeping every
