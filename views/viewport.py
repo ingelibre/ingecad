@@ -1613,8 +1613,7 @@ class Viewport(QOpenGLWidget):
         if self.tool_delegate is not None:
             self._draw_selection(p)
             self._draw_grips(p)
-            if self.tool_delegate.active():
-                self._draw_tool_preview(p)
+            self._draw_tool_feedback(p)
             grip_marker = getattr(self.tool_delegate,
                                   "grip_align_marker", None)
             if grip_marker is not None:
@@ -1885,6 +1884,20 @@ class Viewport(QOpenGLWidget):
                 x1, y1 = self._space_to_screen(ax, ay)
                 x2, y2 = self._space_to_screen(bx, by)
                 p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+        self._draw_snap_feedback(p, delegate)
+
+    def _draw_tool_feedback(self, p: QPainter) -> None:
+        """What a point being given shows: a command's whole preview, or,
+        with a grip hot, the object snap marker and the tracking paths --
+        the grip snapped, but nothing on screen said where (a plugin
+        repainted the grips to show it)."""
+        delegate = self.tool_delegate
+        if delegate.active():
+            self._draw_tool_preview(p)
+        elif getattr(delegate, "grip_hot", lambda: False)():
+            self._draw_snap_feedback(p, delegate)
+
+    def _draw_snap_feedback(self, p: QPainter, delegate) -> None:
         self._draw_tracking(p, delegate)
         hit = delegate.snap_hit
         if hit is not None:

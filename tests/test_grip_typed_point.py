@@ -35,7 +35,8 @@ def _type(win, *answers):
 def _hot_end_grip(win):
     """A line 0,0-10,0, selected, its end grip taken as a click takes it."""
     _type(win, "LINE", "0,0", "10,0", "", "ZOOM", "E")
-    (line,) = win.document.modelspace().query("LINE")
+    line = next(e for e in win.document.modelspace().query("LINE")
+                if (e.dxf.start.x, e.dxf.start.y) == (0, 0))
     tools = win.tools
     tools.on_hover(5, 0, threshold_world=0.5)
     tools.on_click(5, 0)
@@ -83,3 +84,28 @@ def test_exit_lets_the_grip_go(win):
     _type(win, "X")
     assert not win.tools.grip_hot()
     assert (line.dxf.end.x, line.dxf.end.y) == pytest.approx((10.0, 0.0))
+
+
+def _marker_pixels(win) -> int:
+    """Pixels of the object snap marker's colour the tool layer paints."""
+    from PySide6.QtGui import QColor, QImage, QPainter
+
+    vp = win.viewport
+    image = QImage(vp.width(), vp.height(), QImage.Format_ARGB32)
+    image.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(image)
+    vp._draw_tool_feedback(painter)
+    painter.end()
+    marker = vp.MARKER_COLOR.rgb()
+    return sum(1 for y in range(image.height()) for x in range(image.width())
+               if image.pixel(x, y) == marker)
+
+
+def test_a_hot_grip_shows_where_it_snaps(win):
+    win.tools.osnap_on = True
+    _type(win, "LINE", "20,10", "30,10", "")
+    _hot_end_grip(win)
+    _type(win, "ZOOM", "E")
+    win.tools.on_hover(20.05, 10.05)
+    assert win.tools.snap_hit is not None
+    assert _marker_pixels(win) > 0
