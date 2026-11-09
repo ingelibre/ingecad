@@ -798,6 +798,7 @@ def _patch_arc_length_symbol_text() -> None:
     __init__._ingecad_arc_prefix = True
     ArcLengthMeasurement.__init__ = __init__
     _patch_arc_length_symbol()
+    _patch_arc_length_extension_lines()
 
 
 def _patch_arc_length_symbol() -> None:
@@ -845,6 +846,78 @@ def _patch_arc_length_symbol() -> None:
 
     add_measurement_text._ingecad_patch = True
     ArcLengthDimension.add_measurement_text = add_measurement_text
+
+
+def _patch_arc_length_extension_lines() -> None:
+    """An arc length dimension of an arc under 90 degrees has orthogonal
+    extension lines: both parallel to the arc's bisector, as classic CAD
+    and UNE-EN ISO 129-1 draw them. ezdxf drew them radial at every angle.
+    From 90 degrees up they stay radial.
+
+    The dimension line stays concentric with the arc; it ends where each
+    extension line meets it, and the arrows sit there. If the dimension
+    line is too far inside the arc for a parallel line to reach it, the
+    lines stay radial.
+    """
+    from ezdxf.math import Vec2
+    from ezdxf.render.dim_curved import ArcLengthDimension
+
+    if getattr(ArcLengthDimension.get_ext1_dir, "_ingecad_patch", False):
+        return
+    radial_add = ArcLengthDimension._add_ext_line
+
+    def _meets(self, leg: Vec2):
+        """Where a line from ``leg`` parallel to the bisector meets the
+        dimension line, or None when the lines go radial."""
+        center = self.center_of_arc
+        p1 = self.leg1_start - center
+        p2 = self.leg2_start - center
+        span = abs(p1.angle_between(p2))
+        if not (1e-9 < span < math.pi / 2.0 - 1e-9):
+            return None
+        bisector = (p1.normalize() + p2.normalize()).normalize()
+        reach = self.get_dim_line_radius()
+        p = leg - center
+        along = p.dot(bisector)
+        disc = along * along - p.dot(p) + reach * reach
+        if disc < 0.0:
+            return None
+        return center + p + bisector * (-along + math.sqrt(disc)), bisector
+
+    def _dir(self, leg: Vec2) -> Vec2:
+        met = _meets(self, leg)
+        if met is None:
+            return (leg - self.center_of_arc).normalize()
+        return (met[0] - self.center_of_arc).normalize()
+
+    def get_ext1_dir(self) -> Vec2:
+        return _dir(self, self.leg1_start)
+
+    def get_ext2_dir(self) -> Vec2:
+        return _dir(self, self.leg2_start)
+
+    def _add_ext_line(self, start: Vec2, direction: Vec2, dxfattribs) -> None:
+        met = _meets(self, Vec2(start))
+        if met is None:
+            radial_add(self, start, direction, dxfattribs)
+            return
+        end, bisector = met
+        ext_lines = self.extension_lines
+        toward = end - Vec2(start)
+        if toward.magnitude < 1e-12:
+            return
+        sense = bisector if toward.dot(bisector) >= 0.0 else -bisector
+        if ext_lines.has_fixed_length:
+            begin = end - sense * ext_lines.length_below
+        else:
+            begin = Vec2(start) + sense * ext_lines.offset
+        self.add_line(begin, end + sense * ext_lines.extension_above,
+                      dxfattribs=dxfattribs)
+
+    get_ext1_dir._ingecad_patch = True
+    ArcLengthDimension.get_ext1_dir = get_ext1_dir
+    ArcLengthDimension.get_ext2_dir = get_ext2_dir
+    ArcLengthDimension._add_ext_line = _add_ext_line
 
 
 def _patch_single_vertex_leader() -> None:
