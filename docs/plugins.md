@@ -140,6 +140,23 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `api_version` | the plugin contract level it was written for (default 1); see below |
 | `on_regen_done` | `callable(ctx, layout)` when a regenerated drawing is on screen (level 2) |
 | `on_selection_changed` | `callable(ctx)` once per new selection; `ctx.selection` has it (level 2) |
+| `grip_handlers` | `{"DXFTYPE": handler}`: grips of its own for a type (level 2, below) |
+
+### Grips of its own (`grip_handlers`, level 2)
+
+A handler is any object with:
+
+- `grips(entity)` → a list of `(x, y, role)`, or `None` to keep the core's grips;
+- `move(entity, index, role, point)` → edits the entity in place and returns
+  `True`, or `False` to let the core move that grip. It runs on every mouse
+  move while the grip is hot and once more at the drop;
+- optionally `drop(ctx, entity, index, role, point)` → a `Command` to run at
+  the drop instead (its own undo); `None` keeps the core's.
+
+The core keeps everything around it: the snapshot and the one undo step,
+Esc, the object snap and tracking, typed points (`@5,0`), and the other
+selected objects whose grips share the spot. The first plugin to register a
+type wins; turning the plugin off gives the core's grips back.
 
 ### What the context answers (level 2)
 
@@ -170,7 +187,7 @@ written for level 1 keeps working on every later IngeCAD.
 | level | IngeCAD | what it added |
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
-| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
+| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
 
 ## The rules a plugin lives by
 

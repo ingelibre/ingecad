@@ -3835,7 +3835,10 @@ class ToolController(QObject):
             # size. 0 means "always show", as the variable documents.
             return []
         # per-frame AND per-hover (grip_at): cache per (version, selection)
-        key = (self.index.version, frozenset(self.selection))
+        from core import select as _select
+
+        key = (self.index.version, frozenset(self.selection),
+               _select.grip_handlers_revision)
         cached = self._grips_cache
         if cached is not None and cached[0] == key:
             return cached[1]
@@ -4107,6 +4110,9 @@ class ToolController(QObject):
             self._execute(command)
             self.changed.emit()
             return
+        if entity is not None and self._plugin_grip_drop(
+                entity, index, role, (wx, wy), snap):
+            return
         if entity is not None:
             apply_grip_edit(entity, index, role, (wx, wy))
             partners = []
@@ -4162,6 +4168,32 @@ class ToolController(QObject):
             self._base_handles.discard(handle)
             self._refresh_overlay()
             self._merge_timer.start()
+
+    def _plugin_grip_drop(self, entity, index, role, point, snap) -> bool:
+        """A plugin's grip handler with a ``drop`` gives the command the
+        drop runs (its own undo): the live edit is taken back and that
+        command executed. True when it did."""
+        from core.select import grip_handler
+
+        handler = grip_handler(entity)
+        drop = getattr(handler, "drop", None)
+        if drop is None:
+            return False
+        plugins = getattr(self.window, "plugins", None)
+        ctx = plugins.context() if plugins is not None else None
+        try:
+            command = drop(ctx, entity, index, role, point)
+        except Exception as exc:            # noqa: BLE001 - a plugin's fault
+            self.window.command_line.echo(f"{type(exc).__name__}: {exc}")
+            command = None
+        if command is None:
+            return False
+        self._grip_partners = []
+        snap.undo(self.window.document)     # the live edit, taken back
+        self.window.viewport.unhide_handles([entity.dxf.handle])
+        self._execute(command)
+        self.changed.emit()
+        return True
 
     def _sync_image_quad(self, entity) -> bool:
         """Reposition a raster image's pixels surgically; True on success.

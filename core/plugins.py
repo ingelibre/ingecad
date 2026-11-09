@@ -96,6 +96,7 @@ class PluginSpec:
     api_version: int = 1
     on_regen_done: Optional[Callable] = None
     on_selection_changed: Optional[Callable] = None
+    grip_handlers: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -255,6 +256,7 @@ class _Activation:
     aliases: list[str] = field(default_factory=list)
     pack_dir: Optional[Path] = None
     toolbar: bool = False
+    grip_types: list[str] = field(default_factory=list)
 
 
 # -- where plugins live --------------------------------------------------------
@@ -544,6 +546,12 @@ class PluginManager:
             for alias, command in spec.aliases.items():
                 if host.add_alias(alias, command):
                     record.aliases.append(alias.upper())
+            if spec.grip_handlers:
+                from core import select
+
+                for dxftype, handler in spec.grip_handlers.items():
+                    select.register_grip_handler(dxftype, handler, spec.id)
+                    record.grip_types.append(dxftype)
             if spec.i18n_dir is not None and Path(spec.i18n_dir).is_dir():
                 host.add_pack_dir(Path(spec.i18n_dir))
                 record.pack_dir = Path(spec.i18n_dir)
@@ -568,6 +576,11 @@ class PluginManager:
             host.unregister_command(name)
         for alias in record.aliases:
             host.remove_alias(alias)
+        if record.grip_types:
+            from core import select
+
+            for dxftype in record.grip_types:
+                select.unregister_grip_handler(dxftype, plugin_id)
         if record.tools:
             host.unregister_tools(record.tools, plugin_id)
         if record.pack_dir is not None:

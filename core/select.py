@@ -1520,7 +1520,74 @@ def _hatch_move_vertex(entity, path_index: int, old, new) -> bool:
     return moved
 
 
+# -- grips that plugins supply ---------------------------------------------------
+#
+# A plugin may give an entity type grips of its own (PluginSpec.grip_handlers):
+# an object with ``grips(entity)`` -> [(x, y, role)] or None for the core's,
+# and ``move(entity, index, role, point)`` -> True when it moved that grip.
+# Per process, counted: several windows activate the same plugin.
+_GRIP_HANDLERS: dict[str, list] = {}       # dxftype -> [[owner, handler, n]]
+#: Bumped on every change of the handlers: what caches grips keys on it.
+grip_handlers_revision = 0
+
+
+def _bump() -> None:
+    global grip_handlers_revision
+    grip_handlers_revision += 1
+
+
+def register_grip_handler(dxftype: str, handler, owner: str) -> None:
+    _bump()
+    entries = _GRIP_HANDLERS.setdefault(dxftype.upper(), [])
+    for entry in entries:
+        if entry[0] == owner:
+            entry[2] += 1
+            return
+    entries.append([owner, handler, 1])
+
+
+def unregister_grip_handler(dxftype: str, owner: str) -> None:
+    _bump()
+    entries = _GRIP_HANDLERS.get(dxftype.upper(), [])
+    for entry in list(entries):
+        if entry[0] == owner:
+            entry[2] -= 1
+            if entry[2] <= 0:
+                entries.remove(entry)
+    if not entries:
+        _GRIP_HANDLERS.pop(dxftype.upper(), None)
+
+
+def _log_plugin_error(what: str) -> None:
+    import logging
+
+    logging.getLogger("ingecad.plugins").exception(
+        "a plugin's grip handler failed in %s()", what)
+
+
+def grip_handler(entity):
+    """The plugin handler that answers for this entity's grips, or None.
+    The first plugin to register for a type wins."""
+    entries = _GRIP_HANDLERS.get(entity.dxftype())
+    return entries[0][1] if entries else None
+
+
 def entity_grips(entity) -> list[tuple[float, float, str]]:
+    """Grip points of an entity: (x, y, role), a plugin's if it gives
+    them (:func:`grip_handler`), the core's otherwise."""
+    handler = grip_handler(entity)
+    if handler is not None:
+        try:
+            grips = handler.grips(entity)
+        except Exception:                  # noqa: BLE001 - a plugin's fault
+            _log_plugin_error("grips")
+            grips = None
+        if grips is not None:
+            return [(float(x), float(y), str(role)) for x, y, role in grips]
+    return core_entity_grips(entity)
+
+
+def core_entity_grips(entity) -> list[tuple[float, float, str]]:
     """Grip points of an entity: (x, y, role).
 
     Roles drive editing: 'end'/'mid'/'vertex' move that point, 'center'
@@ -1669,7 +1736,20 @@ def entity_grips(entity) -> list[tuple[float, float, str]]:
 def apply_grip_edit(entity, grip_index: int, role: str, new_point):
     """Move the grip at ``grip_index`` to ``new_point``, editing the entity
     in place. Returns True on success (undo is handled by the caller through
-    a snapshot Command)."""
+    a snapshot Command). A plugin's handler goes first."""
+    handler = grip_handler(entity)
+    if handler is not None:
+        try:
+            if handler.move(entity, grip_index, role, new_point):
+                return True
+        except Exception:                  # noqa: BLE001 - a plugin's fault
+            _log_plugin_error("move")
+            return False
+    return core_apply_grip_edit(entity, grip_index, role, new_point)
+
+
+def core_apply_grip_edit(entity, grip_index: int, role: str, new_point):
+    """The core's own grip edit (see :func:`apply_grip_edit`)."""
     import math
 
     t = entity.dxftype()
@@ -1749,7 +1829,7 @@ def apply_grip_edit(entity, grip_index: int, role: str, new_point):
             walk = list(_hatch_vertices(entity))
             # The offset is measured, not assumed: the control grip is
             # absent when the bounding box cannot be computed.
-            offset = len(entity_grips(entity)) - len(walk)
+            offset = len(core_entity_grips(entity)) - len(walk)
             i = grip_index - offset
             if not 0 <= i < len(walk):
                 return False
