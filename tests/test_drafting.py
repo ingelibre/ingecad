@@ -528,3 +528,49 @@ def test_the_canvas_never_hands_the_os_a_cursor_while_panning(qapp):
     finally:
         win.document.dirty = False
         win.close()
+
+
+# -- SNAPANG: ORTHO and the snap grid along something not square to the sheet ----
+
+def test_snapang_lives_in_the_drawings_vport_and_undoes():
+    doc = Document.new()
+    drawing = doc.doc
+    assert drafting.snap_angle(drawing) == 0.0
+    history = History()
+    history.document = doc
+    history.execute(drafting.SetGridCommand(angle=390.0))
+    assert drafting.snap_angle(drawing) == pytest.approx(30.0)
+    assert drafting.active_vport(drawing).dxf.snap_rotation == pytest.approx(30.0)
+    history.undo()
+    assert drafting.snap_angle(drawing) == 0.0
+
+
+def test_ortho_follows_snapang(qapp):
+    win, t = _line_started(qapp)
+    try:
+        t.ortho_on = True
+        win.dispatcher.submit("SNAPANG")
+        win.dispatcher.submit("30")
+        assert drafting.snap_angle(win.document.doc) == pytest.approx(30.0)
+        c, s = math.cos(math.radians(30)), math.sin(math.radians(30))
+        # a cursor near the 30 degree direction lands on it ...
+        x, y = t.resolved_point(10 * c + 0.3, 10 * s - 0.2)
+        assert math.degrees(math.atan2(y, x)) == pytest.approx(30.0)
+        # ... and one near its normal, on the normal
+        x, y = t.resolved_point(-5 * s + 0.2, 5 * c + 0.1)
+        assert math.degrees(math.atan2(y, x)) == pytest.approx(120.0)
+        # the snap grid turns with it, and the grid on screen too
+        t.ortho_on = False
+        t.snap_on = True
+        win.history.execute(drafting.SetGridCommand(snap=1.0))
+        x, y = t.resolved_point(2 * c - 0.1, 2 * s + 0.15)
+        assert (x, y) == pytest.approx((2 * c, 2 * s))
+        assert math.degrees(win.viewport._grid_frame().angle) == pytest.approx(30.0)
+        t.snap_on = False
+        win.history.undo()
+        win.history.undo()
+        assert drafting.snap_angle(win.document.doc) == 0.0
+        t.ortho_on = True
+        assert t.resolved_point(10.0, 1.0) == pytest.approx((10.0, 0.0))
+    finally:
+        win.close()

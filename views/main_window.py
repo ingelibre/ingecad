@@ -1031,7 +1031,8 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
     def _cmd_drafting_var(self, name: str, *args) -> Prompt | None:
         """The Drafting Settings variables, typed: POLARANG (degrees),
         POLARADDANG (angles separated by ;), POLARMODE (bits), GRIDUNIT,
-        SNAPUNIT (0 = follow the grid on screen) and GRIDMAJOR."""
+        SNAPUNIT (0 = follow the grid on screen), GRIDMAJOR and SNAPANG
+        (degrees from the UCS's X axis)."""
         from core import drafting
 
         drawing = self.document.doc if self.document is not None else None
@@ -1042,6 +1043,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             "GRIDUNIT": drafting.grid_unit(drawing) if drawing is not None else 0,
             "SNAPUNIT": drafting.snap_unit(drawing) if drawing is not None else 0,
             "GRIDMAJOR": drafting.grid_major(drawing) if drawing is not None else 5,
+            "SNAPANG": f"{drafting.snap_angle(drawing):g}" if drawing is not None else 0,
         }[name]
         text = str(args[0]).strip() if args and str(args[0]).strip() else ""
         if not text:
@@ -1071,6 +1073,15 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
                 return
             if self.document is not None:
                 self.history.execute(drafting.SetGridCommand(major=value))
+        elif name == "SNAPANG":
+            try:
+                value = float(text.replace(",", ".")) % 360.0
+            except ValueError:
+                self.command_line.echo(tr("Requires a numeric value."))
+                return
+            if self.document is not None:
+                self.history.execute(drafting.SetGridCommand(angle=value))
+            value = f"{value:g}"
         else:
             try:
                 value = float(text.replace(",", "."))
@@ -4494,7 +4505,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         d.register("DSETTINGS", lambda *a: self._drafting_settings(0))
         d.register("OSNAP", lambda *a: self._osnap_settings())
         for var in ("POLARANG", "POLARADDANG", "POLARMODE",
-                    "GRIDUNIT", "SNAPUNIT", "GRIDMAJOR"):
+                    "GRIDUNIT", "SNAPUNIT", "GRIDMAJOR", "SNAPANG"):
             d.register(var, lambda *a, v=var: self._cmd_drafting_var(v, *a))
         for var in ("CENTEREXE", "CENTERLTYPE", "CENTERCROSSSIZE",
                     "CENTERCROSSGAP", "CENTERLAYER", "CENTERMARKEXE"):

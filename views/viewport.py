@@ -1423,7 +1423,7 @@ class Viewport(QOpenGLWidget):
         # The grid is the UCS's (#91): its lines run along the UCS axes
         # through the UCS origin. Cells are counted in the UCS over the
         # view rect's bounding box there.
-        frame = self._ucs()
+        frame = self._grid_frame()
         if not frame.is_world:
             corners = [frame.to_ucs(x, y)
                        for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
@@ -2108,6 +2108,14 @@ class Viewport(QOpenGLWidget):
             return fn() if fn is not None else ucs.WORLD
         except Exception:
             return ucs.WORLD
+
+    def _grid_frame(self):
+        """The UCS turned by SNAPANG: the grid is drawn as the snap uses it."""
+        fn = getattr(self.tool_delegate, "snap_frame", None)
+        try:
+            return fn() if fn is not None else self._ucs()
+        except Exception:
+            return self._ucs()
 
     def _draw_ucs_icon(self, p: QPainter) -> None:
         """Classic UCS icon: red X / green Y arrows at the UCS origin, along

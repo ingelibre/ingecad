@@ -3638,13 +3638,15 @@ class ToolController(QObject):
             return (self.snap_hit.x, self.snap_hit.y)
         self.track_hint = None
         frame = self.current_ucs()
+        grid = self.snap_frame()
         if self.snap_on:
             step = self.snap_spacing()
             if step:
-                # the snap grid is the UCS's, as the grid on screen is
-                ux, uy = frame.to_ucs(wx, wy)
-                wx, wy = frame.to_world(round(ux / step) * step,
-                                        round(uy / step) * step)
+                # the snap grid is the UCS's turned by SNAPANG, as the
+                # grid on screen is
+                ux, uy = grid.to_ucs(wx, wy)
+                wx, wy = grid.to_world(round(ux / step) * step,
+                                       round(uy / step) * step)
         ortho = self.ortho_on != self.shift_held
         if ortho and self.tool is not None and not self.tool.ortho_applies():
             ortho = False
@@ -3656,8 +3658,8 @@ class ToolController(QObject):
                 self.track_hint = ((source[0], source[1]), point, label)
                 return point
         if anchor is not None and ortho:
-            # along the UCS's X or Y through the anchor
-            c, s = math.cos(frame.angle), math.sin(frame.angle)
+            # along the UCS's X or Y (turned by SNAPANG) through the anchor
+            c, s = math.cos(grid.angle), math.sin(grid.angle)
             dx, dy = wx - anchor[0], wy - anchor[1]
             along_x, along_y = dx * c + dy * s, -dx * s + dy * c
             if abs(along_x) >= abs(along_y):
@@ -4103,6 +4105,21 @@ class ToolController(QObject):
         from core import ucs
 
         return ucs.current(self.window.document)
+
+    def snap_frame(self):
+        """The current UCS turned by SNAPANG: what the snap grid, the grid
+        on screen and ORTHO follow. Without a SNAPANG it is the UCS."""
+        from core import drafting, ucs
+
+        frame = self.current_ucs()
+        document = getattr(self.window, "document", None)
+        try:
+            turn = drafting.snap_angle(document.doc) if document is not None else 0.0
+        except Exception:
+            turn = 0.0
+        if not turn:
+            return frame
+        return ucs.Ucs(frame.ox, frame.oy, frame.angle + math.radians(turn))
 
     def anchor_point(self):
         """The point ORTHO, POLAR, tracking and PERpendicular measure from:
