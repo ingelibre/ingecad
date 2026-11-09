@@ -168,6 +168,19 @@ pressing one calls `tool.on_key("F5")`; return True if the tool used it
 (the viewport repaints). Without a running tool the keys do nothing, and
 the core's keys (F1-F3, F7-F12) are never offered.
 
+### Object snaps of a tool's own (`Tool.extra_osnaps`, level 2)
+
+`extra_osnaps()` returns snap keys (`"END"`, `"MID"`, `"INT"`... as in
+`core.osnap`) added to the user's running snaps while the tool asks for a
+point. A one-shot snap typed or picked (END, INT...) still replaces them
+all, and OSNAP off (F3) drops them unless the tool sets
+`extra_osnaps_always = True`. A key IngeCAD does not have is ignored.
+
+`LINE` and `PLINE` answer `last_segment_direction()`: the direction in
+degrees of the segment drawn last (for PLINE the tangent at the current
+vertex, arcs included), or None before the first one. Every other tool
+answers None.
+
 ### Reading the keyboard first (`input_filters`, level 2)
 
 Each filter is called with what the user typed — `""` for Enter, and
@@ -300,7 +313,7 @@ written for level 1 keeps working on every later IngeCAD.
 | level | IngeCAD | what it added |
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
-| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, `properties_sections` with `Row`, `toolbars` with `ToolbarSpec`, `ToolbarItem.key`, the tool's `overlay`, `preview_entities`, `on_key` and `suppress_selection_highlight`, and the context's `toolbar`, `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
+| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, `properties_sections` with `Row`, `toolbars` with `ToolbarSpec`, `ToolbarItem.key`, the tool's `overlay`, `preview_entities`, `on_key`, `extra_osnaps`, `extra_osnaps_always`, `last_segment_direction` and `suppress_selection_highlight`, and the context's `toolbar`, `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
 
 ## The rules a plugin lives by
 

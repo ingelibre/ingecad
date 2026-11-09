@@ -65,6 +65,14 @@ def _parse_number(text: str):
 
 
 class LineTool(Tool):
+    def last_segment_direction(self):
+        """Direction (deg) of the segment drawn last, None before one."""
+        if len(self._points) >= 2:
+            (ax, ay), (bx, by) = self._points[-2][:2], self._points[-1][:2]
+            if math.hypot(bx - ax, by - ay) > 1e-12:
+                return math.degrees(math.atan2(by - ay, bx - ax))
+        return None
+
     def start(self) -> None:
         self.name = "LINE"
         self._points: list[Point] = []
@@ -1356,6 +1364,10 @@ class PlineTool(Tool):
         self._arc_prompt() if self._arc_mode else self._line_prompt()
 
     # -- geometry helpers ------------------------------------------------------
+    def last_segment_direction(self):
+        """Tangent at the current vertex of the segment drawn last."""
+        return self._prev_dir() if self._segs else None
+
     def _prev_dir(self):
         """Tangent direction (deg) at the current vertex, from the previous
         segment — the arc-mode tangent-continuation rule."""

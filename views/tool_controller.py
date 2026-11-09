@@ -2517,7 +2517,20 @@ class ToolController(QObject):
         there is one (even with OSNAP off), else the running modes."""
         if self.osnap_override is not None:
             return self.osnap_override
-        return frozenset(self.osnap_modes) if self.osnap_on else frozenset()
+        kinds = frozenset(self.osnap_modes) if self.osnap_on else frozenset()
+        tool = self.tool
+        if tool is None or not (self.osnap_on or tool.extra_osnaps_always):
+            return kinds
+        try:
+            extra = frozenset(tool.extra_osnaps())
+        except Exception as exc:          # noqa: BLE001 - a plugin's tool
+            self.window.command_line.echo(f"{type(exc).__name__}: {exc}")
+            return kinds
+        if not extra:
+            return kinds
+        from core import osnap as osnap_modes
+
+        return kinds | (extra & osnap_modes.AVAILABLE)
 
     def set_osnap_override(self, keys, typed: bool = False) -> bool:
         """Use only ``keys`` for the next point (empty: no snap at all).

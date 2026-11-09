@@ -184,6 +184,21 @@ class Tool:
         :meth:`preview_segments`."""
         return {}
 
+    #: True: :meth:`extra_osnaps` apply with OSNAP off too.
+    extra_osnaps_always = False
+
+    def extra_osnaps(self) -> frozenset:
+        """Object snap keys (``"END"``, ``"MID"``... as in ``core.osnap``)
+        this tool adds to the running ones while it asks for a point; a
+        one-shot snap (END, INT...) still replaces them all, and OSNAP off
+        (F3) drops them unless :attr:`extra_osnaps_always` (level 2)."""
+        return frozenset()
+
+    def last_segment_direction(self):
+        """The direction in degrees of the last segment drawn by this
+        tool, or None (no segment yet, or not a tool that draws them)."""
+        return None
+
     #: The function keys the core leaves free, offered to the running
     #: tool through :meth:`on_key`.
     FREE_KEYS = ("F4", "F5", "F6")
