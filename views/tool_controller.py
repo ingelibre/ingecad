@@ -2902,7 +2902,10 @@ class ToolController(QObject):
                 ax, ay = self._window_anchor
                 self._window_anchor = None
                 rect = (min(ax, wx), min(ay, wy), max(ax, wx), max(ay, wy))
-                handles = self._shown(self.index.crossing(rect))
+                enclosed = (wx > ax and getattr(
+                    self.tool, "target_windows_directional", False))
+                handles = self._shown(self.index.window(rect) if enclosed
+                                      else self.index.crossing(rect))
                 entities = [e for h in handles
                             if (e := self.index.entity(h)) is not None
                             and e.is_alive]

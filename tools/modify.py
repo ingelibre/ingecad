@@ -680,30 +680,51 @@ class ArrayTool(Tool):
 
 
 class MatchPropTool(Tool):
-    """MATCHPROP: one source, then every destination you click."""
+    """MATCHPROP: one source, then destinations until Enter -- each pick,
+    window (left to right) or crossing (right to left) painted at once.
+    One object selected beforehand is the source."""
 
     entity_picker = True
+    #: a window drawn left to right takes what it encloses, right to left
+    #: what it crosses, as at Select objects
+    target_windows_directional = True
 
     def start(self) -> None:
         self.name = "MATCHPROP"
         self._source = None
+        self.accepts_target_windows = False
+        services = self.ctx.services
+        chosen = services.selected_entities() if services else []
+        if len(chosen) == 1:
+            services.clear_selection()
+            self._take_source(chosen[0])
+            return
         self.prompt("Select source object:")
+
+    def _take_source(self, entity) -> None:
+        self._source = entity
+        # the destinations may come by window too
+        self.accepts_target_windows = True
+        self.ctx.echo(tr("Current active settings: Color Layer Ltype "
+                         "Ltscale Lineweight Thickness"))
+        self.prompt("Select destination object(s):")
 
     def on_point(self, point: Point) -> None:
         services = self.ctx.services
         entity = services.pick_entity(point) if services else None
         if entity is None:
-            self.prompt("Nothing selected. Select source object:")
+            if self._source is None:
+                self.prompt("Nothing selected. Select source object:")
             return
         if self._source is None:
-            self._source = entity
-            self.ctx.echo(tr("Current active settings: Color Layer Ltype "
-                             "Ltscale Lineweight Thickness"))
-            self.prompt("Select destination object(s):")
+            self._take_source(entity)
             return
-        if entity is self._source:
-            return
-        self.ctx.execute(modify.match_properties(self._source, [entity]))
+        self.on_target_entities([entity], None)
+
+    def on_target_entities(self, entities, rect) -> None:
+        targets = [e for e in entities if e is not self._source]
+        if targets:
+            self.ctx.execute(modify.match_properties(self._source, targets))
         # AutoCAD keeps painting until Enter.
 
 
