@@ -245,3 +245,47 @@ def test_hcurves_and_the_curve_table_undo_exactly(win):
     assert _fingerprint(win) == clean
     win.dispatcher.submit("REDO")
     assert _fingerprint(win) == fitted
+
+
+def _text_box(entity):
+    """A rough world box of a TEXT: its alignment point, as long as its
+    characters and as tall as its height, turned by its rotation."""
+    from ezdxf.math import Vec2
+
+    h = entity.dxf.height
+    length = 0.8 * h * len(entity.dxf.text)
+    p = Vec2(entity.dxf.align_point if entity.dxf.halign or entity.dxf.valign
+             else entity.dxf.insert)
+    u = Vec2.from_deg_angle(entity.dxf.rotation)
+    v = u.orthogonal()
+    align = entity.get_align_enum().name
+    start = p - u * length if align.endswith("RIGHT") else p
+    corners = [start + v * (-h / 2), start + v * (h / 2),
+               start + u * length + v * (-h / 2), start + u * length + v * (h / 2)]
+    xs, ys = [c.x for c in corners], [c.y for c in corners]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _overlap(a, b) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def test_pc_and_pt_labels_stay_clear_of_the_stations_on_a_right_turn(win):
+    # the mirror of TANGENTS: 40° right, the outside of the curve is the
+    # left of travel, where the station labels are
+    right = [(x, -y) for x, y in TANGENTS]
+    tangents = _draw(win, right)
+    _fit(win, tangents, "100")
+    win.dispatcher.submit("STATIONING")
+    _pick(win, (ARC_MIDDLE[0], -ARC_MIDDLE[1]))
+    _type(win, "10", "", "")
+    msp = win.document.modelspace()
+    marks = [e for e in msp if e.dxftype() == "TEXT"
+             and e.dxf.layer == "CAR-CURVAS" and e.dxf.text[:2] in ("PC", "PT")]
+    stations = [e for e in msp if e.dxftype() == "TEXT"
+                and e.dxf.layer == "CAR-PROGRESIVAS"]
+    assert len(marks) == 2 and stations
+    for mark in marks:
+        for station in stations:
+            assert not _overlap(_text_box(mark), _text_box(station)), \
+                (mark.dxf.text, station.dxf.text)

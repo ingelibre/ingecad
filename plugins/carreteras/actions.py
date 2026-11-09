@@ -253,7 +253,10 @@ def stationing_commands(alignment: geometry.Alignment, params: AxisParams, link)
 
 def curve_mark_commands(alignment: geometry.Alignment, params: AxisParams, link) -> list[Command]:
     """At each PI its name; at each curve's PC and PT a radial mark with
-    its station, written on the outside of the curve."""
+    its station, written on the right of the direction of travel -- the
+    side the stationing leaves free. They went on the outside of the
+    curve, which on a right turn is the stationing's side: the PC and PT
+    labels lay over the station labels next to them."""
     out: list[Command] = []
     layer = LAYERS["curves"][0]
     h = params.height
@@ -272,9 +275,8 @@ def curve_mark_commands(alignment: geometry.Alignment, params: AxisParams, link)
             _, angle = alignment.at_station(station)
             rad = math.radians(angle)
             nx, ny = -math.sin(rad), math.cos(rad)
-            # the outside of a left turn is the right
-            side = -1.0 if pi.left else 1.0
-            ox, oy = nx * side, ny * side
+            # (nx, ny) is the left of travel, where the stations are
+            ox, oy = -nx, -ny
             a = point
             b = (point[0] + ox * params.tick, point[1] + oy * params.tick)
             out.append(_line(a, b, layer, CURVES, link))
