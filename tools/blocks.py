@@ -97,6 +97,9 @@ class BlockTool(Tool):
 class InsertTool(Tool):
     """INSERT: choose a defined block, then place it (Scale/Rotate options)."""
 
+    #: Set by the Palette to start INSERT on the block picked in its list.
+    _preset_name: str | None = None
+
     def start(self) -> None:
         self.name = "INSERT"
         self._block_name: str | None = None
@@ -110,6 +113,12 @@ class InsertTool(Tool):
         self._verify_pass = False
         self._text_state = False
         names = self.ctx.services.block_names() if self.ctx.services else []
+        preset, InsertTool._preset_name = InsertTool._preset_name, None
+        if preset in names:
+            # picked in the Palette's block list: straight to its placement
+            self._block_name = preset
+            self.prompt("Specify insertion point [Scale/Rotate]:")
+            return
         # AutoCAD's Insert dialog: the defined blocks, or Browse... for a
         # drawing file (#70: with no block defined there was no way on)
         browse = tr("Browse...")

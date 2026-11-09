@@ -3946,6 +3946,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         self.tools.changed.connect(self._properties_panel.refresh)
         self._styles_panel = StylesPanel(self)
         self._styles_panel.changed.connect(self.viewport.update)
+        self.tools.changed.connect(self._styles_panel.sync_blocks)
         from views.xrefs_panel import XrefsPanel
 
         self._xrefs_panel = XrefsPanel(self)     # External References (#33)

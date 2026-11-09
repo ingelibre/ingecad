@@ -51,6 +51,13 @@ def _tile(w: int, h: int) -> tuple[QPixmap, QPainter]:
     return pm, p
 
 
+def blank_pixmap(w: int, h: int) -> QPixmap:
+    """An empty tile, shown while a thumbnail is still to be drawn."""
+    pm, p = _tile(w, h)
+    p.end()
+    return pm
+
+
 def text_style_pixmap(props: dict, w: int = 150, h: int = 34,
                       sample: str = _SAMPLE) -> QPixmap:
     pm, p = _tile(w, h)
@@ -124,5 +131,91 @@ def dim_style_pixmap(props: dict, w: int = 150, h: int = 60) -> QPixmap:
     fm = p.fontMetrics()
     tx = (left + right) / 2 - fm.horizontalAdvance(label) / 2
     p.drawText(QPointF(tx, dim_y - a - 2), label)
+    p.end()
+    return pm
+
+
+#: Entities read for one block thumbnail: a title block of a real plan has
+#: thousands, and the tile is 60 pixels tall.
+_BLOCK_ENTITY_LIMIT = 3000
+
+
+def block_pixmap(doc, name: str, w: int = 150, h: int = 60) -> QPixmap:
+    """A block definition drawn to fit the tile, nested references and all.
+
+    Outlines only (a text is its box, a hatch its boundary): enough to tell
+    one block from another in a list, and cheap enough to draw while the
+    list is on screen."""
+    from itertools import islice
+
+    from ezdxf import disassemble
+
+    pm, p = _tile(w, h)
+    lines: list = []
+    points: list = []
+    try:
+        block = doc.blocks.get(name)
+        entities = islice(disassemble.recursive_decompose(block),
+                          _BLOCK_ENTITY_LIMIT) if block is not None else ()
+        for primitive in disassemble.to_primitives(entities):
+            try:
+                path = primitive.path
+                if path is not None and len(path):
+                    lines.append(path)
+                else:
+                    pts = [(v.x, v.y) for v in
+                           islice(primitive.vertices(), 2000)]
+                    if len(pts) == 1:
+                        points.append(pts[0])
+                    elif pts:
+                        lines.append(pts)
+            except Exception:             # noqa: BLE001 - one odd entity
+                continue
+    except Exception:                     # noqa: BLE001 - a broken block
+        lines, points = [], []
+
+    xs: list = []
+    ys: list = []
+    for item in lines:
+        if isinstance(item, list):
+            pts = item
+        else:
+            pts = [(v.x, v.y) for v in item.control_vertices()]
+        xs.extend(x for x, _ in pts)
+        ys.extend(y for _, y in pts)
+    xs.extend(x for x, _ in points)
+    ys.extend(y for _, y in points)
+    finite = [v for v in xs + ys if math.isfinite(v)]
+    if not xs or len(finite) != len(xs) + len(ys):
+        p.end()
+        return pm
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    span = max(x1 - x0, y1 - y0)
+    margin = 5.0
+    if span <= 0:
+        scale = 1.0
+    else:
+        scale = min((w - 2 * margin) / max(x1 - x0, span * 1e-9),
+                    (h - 2 * margin) / max(y1 - y0, span * 1e-9))
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+
+    def to_tile(x: float, y: float) -> QPointF:
+        return QPointF(w / 2 + (x - cx) * scale, h / 2 - (y - cy) * scale)
+
+    pen = QPen(_FG)
+    pen.setWidthF(1.0)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+    distance = (span / 200.0) if span > 0 else 0.01
+    for item in lines:
+        if isinstance(item, list):
+            pts = item
+        else:
+            pts = [(v.x, v.y) for v in item.flattening(distance)]
+        if len(pts) >= 2:
+            p.drawPolyline(QPolygonF([to_tile(x, y) for x, y in pts]))
+    p.setBrush(QBrush(_FG))
+    for x, y in points:
+        p.drawEllipse(to_tile(x, y), 1.2, 1.2)
     p.end()
     return pm

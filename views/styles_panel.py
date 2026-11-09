@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
-"""Palette panel — AutoCAD-style Tool Palettes for hatch / text / dimension.
+"""Palette panel — Tool Palettes for text / dimension / hatch / blocks.
 
 A gallery of styles with preview thumbnails, one category at a time. Single
 click makes a style current (safe, no drawing); double click *uses* it — hatch
@@ -8,10 +8,13 @@ starts HATCH straight into point-picking with that pattern, text starts DTEXT
 with that style. Editing a style is one step back (the ✎ button or right-click
 → Edit) so it never crowds the palette. Everything routes through the style
 Commands for exact undo.
+
+Blocks are the fourth category: every definition of the drawing with a
+thumbnail; double click starts INSERT on it, Edit opens the Block Editor.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -40,7 +43,11 @@ COMMON_FONTS = ["txt.shx", "simplex.shx", "romans.shx", "isocp.shx",
                 "arial.ttf", "arialbd.ttf", "times.ttf", "LiberationSans.ttf"]
 
 _ICON = QSize(150, 34)
-_TEXT, _DIM, _HATCH = "TEXT", "DIM", "HATCH"
+_BLOCK_ICON = QSize(150, 60)
+_TEXT, _DIM, _HATCH, _BLOCK = "TEXT", "DIM", "HATCH", "BLOCK"
+#: Block thumbnails drawn per turn of the event loop: a plan with hundreds
+#: of definitions must not hold the window while its list fills.
+_THUMBS_PER_TICK = 6
 
 _STYLE = """
 StylesPanel { background: #26262a; }
@@ -160,7 +167,7 @@ class StylesPanel(QWidget):
         bar.setSpacing(2)
         self._cat_btns = {}
         for cat, label in ((_TEXT, tr("Text")), (_DIM, tr("Dimension")),
-                           (_HATCH, tr("Hatch"))):
+                           (_HATCH, tr("Hatch")), (_BLOCK, tr("Blocks"))):
             b = QToolButton(self)
             b.setText(label)
             b.setCheckable(True)
@@ -191,6 +198,11 @@ class StylesPanel(QWidget):
         layout.addLayout(bar)
         layout.addWidget(self.list, 1)
 
+        self._thumbs: dict = {}           # block name -> QIcon
+        self._thumbs_key = None
+        self._thumb_timer = QTimer(self)
+        self._thumb_timer.setInterval(0)
+        self._thumb_timer.timeout.connect(self._draw_thumbs)
         self.refresh()
 
     @property
@@ -209,8 +221,12 @@ class StylesPanel(QWidget):
         keep = self._selected()
         self.list.clear()
         self._current_item = None
+        self._thumb_timer.stop()
+        self.list.setIconSize(_BLOCK_ICON if self._cat == _BLOCK else _ICON)
         if self._document is not None or self._cat == _HATCH:
-            if self._cat == _TEXT:
+            if self._cat == _BLOCK:
+                self._fill_blocks()
+            elif self._cat == _TEXT:
                 self._fill_text()
             elif self._cat == _DIM:
                 self._fill_dim()
@@ -249,6 +265,62 @@ class StylesPanel(QWidget):
         for name in HatchDialog.COMMON:
             self._add_item(name, QIcon(_pattern_pixmap(name)), name == cur)
 
+    # -- blocks ----------------------------------------------------------------
+    def _blocks_key(self):
+        """What the block list was drawn from: it is stale when this moves."""
+        document = self._document
+        if document is None:
+            return None
+        return (id(document), getattr(document, "blocks_revision", 0),
+                len(document.doc.blocks),
+                getattr(document, "edit_block", None))
+
+    def _fill_blocks(self) -> None:
+        key = self._blocks_key()
+        if key != self._thumbs_key:
+            self._thumbs = {}
+            self._thumbs_key = key
+        blank = QIcon(prev.blank_pixmap(_BLOCK_ICON.width(),
+                                        _BLOCK_ICON.height()))
+        for name in self.window.tools.block_names():
+            self._add_item(name, self._thumbs.get(name, blank), False)
+        self._thumb_timer.start()
+
+    def _draw_thumbs(self, everything: bool = False) -> None:
+        """Draw the thumbnails still missing, a few per turn."""
+        document = self._document
+        if document is None or self._cat != _BLOCK:
+            self._thumb_timer.stop()
+            return
+        left = None if everything else _THUMBS_PER_TICK
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            name = item.data(Qt.UserRole)
+            if name in self._thumbs:
+                continue
+            icon = QIcon(prev.block_pixmap(
+                document.doc, name, _BLOCK_ICON.width(), _BLOCK_ICON.height()))
+            self._thumbs[name] = icon
+            item.setIcon(icon)
+            if left is not None:
+                left -= 1
+                if left <= 0:
+                    return                # the rest on the next turn
+        self._thumb_timer.stop()
+
+    def sync_blocks(self) -> None:
+        """After any command: redraw the block list if a definition was
+        added, removed or edited while it is the one on screen."""
+        if self._cat != _BLOCK or not self.isVisible():
+            return
+        if self._blocks_key() != self._thumbs_key:
+            self.refresh()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._cat == _BLOCK and self._blocks_key() != self._thumbs_key:
+            self.refresh()
+
     def _add_item(self, name: str, icon: QIcon, current: bool,
                   annotative: bool = False) -> None:
         label = name
@@ -279,14 +351,18 @@ class StylesPanel(QWidget):
             return
         name = item.data(Qt.UserRole)
         menu = QMenu(self)
-        use = menu.addAction(tr("Use (draw)"))
-        setcur = menu.addAction(tr("Set current"))
+        blocks = self._cat == _BLOCK
+        use = menu.addAction(tr("Insert") if blocks else tr("Use (draw)"))
+        setcur = None if blocks else menu.addAction(tr("Set current"))
         menu.addSeparator()
         edit = menu.addAction(tr("Edit..."))
         newa = menu.addAction(tr("New..."))
-        dele = menu.addAction(tr("Delete"))
-        dele.setEnabled(self._cat != _HATCH and name != "Standard")
+        dele = None if blocks else menu.addAction(tr("Delete"))
+        if dele is not None:
+            dele.setEnabled(self._cat != _HATCH and name != "Standard")
         chosen = menu.exec(self.list.viewport().mapToGlobal(pos))
+        if chosen is None:
+            return
         if chosen is use:
             self._activate(name)
         elif chosen is setcur:
@@ -302,6 +378,8 @@ class StylesPanel(QWidget):
     def _set_current(self, name) -> None:
         if self._loading or name is None:
             return
+        if self._cat == _BLOCK:
+            return                        # no "current block": a click picks
         if self._cat == _HATCH:
             from tools.blocks import HatchTool
             HatchTool._last["pattern"] = name
@@ -340,6 +418,13 @@ class StylesPanel(QWidget):
     def _activate(self, name) -> None:
         if name is None:
             return
+        if self._cat == _BLOCK:
+            if self._document is None:
+                return
+            from tools.blocks import InsertTool
+            InsertTool._preset_name = name        # no "which block?" dialog
+            self._start_tool("INSERT")
+            return
         if self._cat == _HATCH:
             from tools.blocks import HatchTool
             HatchTool._last["pattern"] = name
@@ -369,6 +454,10 @@ class StylesPanel(QWidget):
             name = self._selected()
         if name is None:
             return
+        if self._cat == _BLOCK:
+            if self._document is not None:
+                self.window._cmd_bedit(name)      # the Block Editor
+            return
         if self._cat == _HATCH:
             from tools.blocks import HatchTool
             from views.hatch_dialog import HatchDialog
@@ -397,6 +486,9 @@ class StylesPanel(QWidget):
         self.changed.emit()
 
     def _new(self) -> None:
+        if self._cat == _BLOCK:
+            self.window._invoke_command("BLOCK")
+            return
         if self._cat == _HATCH:
             self._edit(self._selected() or "SOLID")   # opens the pattern dialog
             return
@@ -423,8 +515,9 @@ class StylesPanel(QWidget):
 
     def _delete(self) -> None:
         name = self._selected()
-        if name is None or name == "Standard" or self._cat == _HATCH:
-            return
+        if name is None or name == "Standard" \
+                or self._cat in (_HATCH, _BLOCK):
+            return                        # an unused block goes with PURGE
         if self._document is None:
             return
         if self._cat == _TEXT:
