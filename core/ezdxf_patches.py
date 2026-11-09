@@ -51,6 +51,7 @@ def apply() -> None:
     _patch_arc_length_symbol_text()
     _patch_dms_angular_text()
     _patch_linetype_dots()
+    _patch_caret_decode()
 
 
 def dms_text(degrees: float, dimadec: int, dimdsep: str = ".",
@@ -290,6 +291,36 @@ def _patch_dimension_unit_format() -> None:
 
     format_text._ingecad_patch = True
     cls.format_text = format_text
+
+
+def _patch_caret_decode() -> None:
+    """Caret notation is ``^@`` to ``^_`` only: ``^`` before anything else
+    is the character itself.
+
+    ezdxf decoded every ``^x`` as ``chr((ord(x) - 64) % 126)``, so the
+    tolerance stack ``\\S+0,1^-0,2;`` -- where ``^`` divides the two
+    numbers -- read "+0,1k0,2": "-" is 45, and (45 - 64) % 126 is "k"
+    (UNE-EN ISO 129-1 in a tester's eighth review). The control characters
+    (``^I`` a tab, ``^J`` a line break) still decode, and ``^`` plus a
+    space is still a caret.
+    """
+    import re
+
+    from ezdxf.tools import text as ezdxf_text
+
+    if getattr(ezdxf_text.caret_decode, "_ingecad_patch", False):
+        return
+
+    def decode(match) -> str:
+        c = match.group(1)
+        return "^" if c == " " else chr(ord(c) - 64)
+
+    def caret_decode(text: str) -> str:
+        # "^ " stays the caret itself, as before (ezdxf writes "\\SA^ B;")
+        return re.sub(r"\^([@-_ ])", decode, text)
+
+    caret_decode._ingecad_patch = True
+    ezdxf_text.caret_decode = caret_decode
 
 
 def _patch_dimension_number_format() -> None:
