@@ -1161,11 +1161,14 @@ class CreateBlockCommand(Command):
     touches_blocks = True
 
     def __init__(self, block_name: str, base_point, entities,
-                 redefine: bool = False) -> None:
+                 redefine: bool = False, keep_reference: bool = True) -> None:
         self.block_name = block_name
         self.base = base_point
         self.sources = list(entities)
         self.insert = None
+        # -BLOCK: the objects leave the drawing once defined, as the
+        # command-line form always did (the dialog's "Delete").
+        self.keep_reference = keep_reference
         self._defined = False
         # A name the drawing already has, answered Yes to "Redefine it?":
         # the definition takes the selection and every reference shows it.
@@ -1199,6 +1202,10 @@ class CreateBlockCommand(Command):
                 blk.add_entity(e.copy())
         for e in self.sources:
             msp.unlink_entity(e)
+        if not self.keep_reference:
+            self.removed_handles = [e.dxf.handle for e in self.sources]
+            document.dirty = True
+            return
         self.insert = msp.add_blockref(
             self.block_name, (self.base[0], self.base[1]))
         # a new object: on the current layer with the current properties,
@@ -1236,9 +1243,10 @@ class CreateBlockCommand(Command):
         document.dirty = True
 
 
-def create_block(block_name, base_point, entities,
-                 redefine: bool = False) -> CreateBlockCommand:
-    return CreateBlockCommand(block_name, base_point, entities, redefine)
+def create_block(block_name, base_point, entities, redefine: bool = False,
+                 keep_reference: bool = True) -> CreateBlockCommand:
+    return CreateBlockCommand(block_name, base_point, entities, redefine,
+                              keep_reference)
 
 
 class DefineBlockFromFileCommand(Command):

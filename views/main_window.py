@@ -4545,7 +4545,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
                      "ELLIPSE", "POINT", "TEXT", "MTEXT",
                      "ERASE", "MOVE", "COPY", "ROTATE", "SCALE", "MIRROR",
                      "OFFSET", "TRIM", "EXTEND", "FILLET",
-                     "BLOCK", "INSERT", "EXPLODE", "HATCH", "-HATCH",
+                     "BLOCK", "-BLOCK", "INSERT", "-INSERT", "EXPLODE", "HATCH", "-HATCH",
                      "DIMLINEAR", "DIMALIGNED", "DIMRADIUS", "DIMDIAMETER",
                      "DIMANGULAR", "DIMARC", "DIMORDINATE", "DIMCENTER",
                      "CENTERMARK", "CENTERLINE",

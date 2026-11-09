@@ -194,6 +194,8 @@
   "Enter an annotation option [Tolerance/Copy/Block/None/Mtext] <Mtext>:": "Indique una opción de anotación [Tolerancia(T)/Copiar(C)/Bloque(B)/Ninguna(N)/textoM(M)] <textoM>:",
   "Enter an option [Leader type/leader lAnding/Content type/Maxpoints/First angle/Second angle/eXit options] <eXit options>:": "Indique una opción [tipo de Línea(L)/línea de referenciA(A)/tipo de Contenido(C)/Máximo de puntos(M)/primer ángulo(F)/Segundo ángulo(S)/salir de opciones(X)] <salir de opciones>:",
   "Enter block name:": "Indique el nombre del bloque:",
+  "Enter block name or [?]:": "Indique el nombre del bloque o [?]:",
+  "Enter X scale factor <1>:": "Indique factor de escala X <1>:",
   "Enter first line of annotation text <Mtext>:": "Indique la primera línea del texto de anotación <textoM>:",
   "Enter first line of annotation text or <options>:": "Indique la primera línea del texto de anotación o <opciones>:",
   "Enter leader format option [Spline/STraight/Arrow/None] <Exit>:": "Indique una opción de formato de directriz [Spline(S)/rec(ST)/Flecha(A)/Ninguna(N)] <Salir>:",
