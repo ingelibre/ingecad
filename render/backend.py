@@ -334,9 +334,9 @@ class VertexBackend(Backend):
         """Capture the pixels and the world-space quad; GL textures them.
 
         The transform maps pixel coordinates (top-left origin, y down) to
-        WCS. Non-rectangular clip boundaries still show the full quad — the
-        clip FRAME is drawn by the frontend either way; pixel-exact clipping
-        can come later without touching the format.
+        WCS. A clip boundary arrives already applied: ezdxf's pipeline
+        turns the pixels it removes transparent (``_mask_image``), and the
+        blend hides them over a whole quad.
         """
         corners = _image_quad_corners(image_data)
         if corners is None:
