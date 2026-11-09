@@ -38,6 +38,7 @@ def apply() -> None:
     _patch_dimrnd_zero()
     _patch_fixed_height_dimension_text()
     _patch_dimension_number_format()
+    _patch_dimension_unit_format()
     _patch_underscored_arrow_names()
     _patch_suppressed_dimension_line_arrows()
     _patch_narrow_linear_dimension_text()
@@ -190,6 +191,105 @@ def _in_paper_space(entity) -> bool:
     record = doc.entitydb.get(owner)
     return record is not None and record.dxftype() == "BLOCK_RECORD" \
         and record.is_any_paperspace
+
+
+def length_unit_text(value: float, dimlunit: int, dimdec: int = 4,
+                     dimzin: int = 0, dimdsep: str = ".") -> str | None:
+    """A length as the Unit format of a dimension style writes it, or None
+    for Decimal (2) and anything unknown -- the decimal path formats those.
+
+    1 Scientific (5.15E+01), 3 Engineering (feet and decimal inches,
+    4'-3.50"), 4 Architectural (feet and fractional inches, 4'-3 1/2"),
+    5 Fractional (51 1/2). The drawing unit is the inch, as the classic
+    formats assume. For the fractional ones DIMDEC is the precision as a
+    power of two (4 = 1/16). DIMZIN 0 drops zero feet and exactly zero
+    inches, 1 keeps both, 2 keeps zero feet and drops zero inches, 3 keeps
+    zero inches and drops zero feet. Fractions are written unstacked.
+    """
+    if not math.isfinite(value):
+        return None
+    dimdec = max(0, int(dimdec or 0))
+    sign = "-" if value < 0 else ""
+    value = abs(value)
+    if dimlunit == 1:
+        text = f"{value:.{dimdec}E}"
+        return sign + text.replace(".", dimdsep)
+    if dimlunit not in (3, 4, 5):
+        return None
+    zin = int(dimzin or 0) & 3
+
+    if dimlunit == 3:
+        step = 10.0 ** -dimdec
+        inches = round(value / step) * step
+        feet = int(inches // 12.0 + 1e-9)
+        rest = inches - feet * 12.0
+        if rest >= 12.0 - step / 2:
+            feet, rest = feet + 1, 0.0
+        rest_text = f"{rest:.{dimdec}f}".replace(".", dimdsep)
+    else:
+        den = 2 ** min(dimdec, 8)
+        units = int(round(value * den))
+        if dimlunit == 5:
+            whole, num = divmod(units, den)
+            return sign + _with_fraction(whole, num, den, keep_whole=True)
+        feet, rest_units = divmod(units, 12 * den)
+        whole, num = divmod(rest_units, den)
+        rest = rest_units / den
+        rest_text = _with_fraction(whole, num, den, keep_whole=True)
+
+    keep_feet = zin in (1, 2)
+    keep_inches = zin in (1, 3)
+    parts = []
+    if feet or keep_feet:
+        parts.append(f"{feet}'")
+    if rest or keep_inches or not parts:
+        parts.append(f'{rest_text}"')
+    return sign + "-".join(parts)
+
+
+def _with_fraction(whole: int, num: int, den: int, keep_whole: bool) -> str:
+    """``whole`` and ``num``/``den`` reduced, as 3 1/2, 1/2 or 3."""
+    if num == 0:
+        return str(whole)
+    g = math.gcd(num, den)
+    frac = f"{num // g}/{den // g}"
+    return f"{whole} {frac}" if whole or not keep_whole else frac
+
+
+def _patch_dimension_unit_format() -> None:
+    """A dimension's length follows its style's Unit format (DIMLUNIT).
+
+    ezdxf reads DIMLUNIT and says "not supported - ezdxf behaves like 2":
+    every dimension came out decimal, Architectural in the Dimension Style
+    dialog changed nothing (#122). Scientific, Engineering, Architectural
+    and Fractional are written by :func:`length_unit_text`; Decimal keeps
+    the decimal path (rounding as classic CAD, :func:`_patch_dimension_
+    number_format`). DIMRND and DIMPOST apply as they do there.
+    """
+    from ezdxf.render import dim_base
+
+    cls = dim_base.LengthMeasurement
+    if getattr(cls.format_text, "_ingecad_patch", False):
+        return
+    original = cls.format_text
+
+    def format_text(self, value: float) -> str:
+        unit = int(getattr(self, "length_unit", 2) or 2)
+        if unit != 2:
+            if self.text_round:
+                value = dim_base.xround(value, self.text_round)
+            text = length_unit_text(value, unit, self.decimal_places,
+                                    self.suppress_zeros,
+                                    self.decimal_separator)
+            if text is not None:
+                if self.text_post_process_format:
+                    text = dim_base.apply_dimpost(
+                        text, self.text_post_process_format)
+                return text
+        return original(self, value)
+
+    format_text._ingecad_patch = True
+    cls.format_text = format_text
 
 
 def _patch_dimension_number_format() -> None:
