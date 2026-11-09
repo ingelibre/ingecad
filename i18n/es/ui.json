@@ -1308,6 +1308,7 @@
   "Requires a number.": "Requiere un número.",
   "Requires a numeric angle.": "Se requiere un ángulo numérico.",
   "Requires a positive number.": "Requiere un número positivo.",
+  "Hatch spacing too dense, or dash size too small for object.": "Espaciado de sombreado demasiado denso, o tamaño de guion demasiado pequeño para el objeto.",
   "Requires an angle.": "Requiere un ángulo.",
   "Requires an integer between 0 and 8.": "Requiere un entero entre 0 y 8.",
   "Requires an integer between 1 and 5.": "Requiere un entero entre 1 y 5.",

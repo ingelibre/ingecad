@@ -550,6 +550,13 @@ def _set_hatch_pattern(panel, what: str, value: float) -> None:
     if what == "scale" and value <= 0:
         panel.window.command_line.echo(tr("Requires a positive number."))
         return
+    if what == "scale":
+        from core import actions
+
+        if any(e.dxftype() == "HATCH" and actions.hatch_entity_too_dense(e, value)
+               for e in panel._active()):
+            panel.window.command_line.echo(actions.too_dense_message())
+            return
 
     def mutate():
         for e in panel._active():

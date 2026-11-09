@@ -1219,6 +1219,10 @@ class ToolController(QObject):
         after = dialog.settings()
         if after == before:
             return True
+        if actions.hatch_too_dense([entity], after.get("pattern", "SOLID"),
+                                   after.get("scale", 1.0)):
+            self.window.command_line.echo(actions.too_dense_message())
+            return True
         snap = actions.SnapshotCommand([entity])
         snap.name = "HATCHEDIT"
         actions.apply_hatch_settings(entity, after)

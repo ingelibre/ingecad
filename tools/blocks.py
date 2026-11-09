@@ -413,6 +413,17 @@ class HatchTool(Tool):
         self.prompt(
             "Pick internal point or [Select objects/seTtings], Enter to apply:")
 
+    def _too_dense(self, boundaries, settings, user_def) -> bool:
+        """Past HPMAXLINES the hatch is not created (it froze the window
+        and came out half drawn): say so and keep the boundaries picked, for
+        another scale from the settings and Enter again."""
+        if not actions.hatch_too_dense(boundaries, settings["pattern"],
+                                       settings["scale"], 0.0, user_def):
+            return False
+        self.ctx.echo(actions.too_dense_message())
+        self._prompt()
+        return True
+
     def on_option(self, text: str) -> bool:
         # The resolver first: it turns the localized keyword, or
         # AutoCAD's _global form, into the English key the
@@ -458,6 +469,8 @@ class HatchTool(Tool):
             self.ctx.finish()
             return
         s = self.settings
+        if self._too_dense(boundaries, s, None):
+            return
         self.ctx.execute(actions.add_hatch(
             boundaries, s["pattern"], s["scale"], self._world_angle(s["angle"]),
             color=s.get("color", 256), islands=self.islands))
@@ -738,6 +751,8 @@ class HatchCliTool(HatchTool):
         user_def = self._user_def
         if user_def is not None:
             user_def = (self._world_angle(user_def[0]),) + tuple(user_def[1:])
+        if self._too_dense(boundaries, s, user_def):
+            return
         self.ctx.execute(actions.add_hatch(
             boundaries, s["pattern"], s["scale"], self._world_angle(s["angle"]),
             color=s.get("color", 256), islands=self.islands,

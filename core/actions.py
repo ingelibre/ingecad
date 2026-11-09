@@ -1435,6 +1435,108 @@ def pattern_definition(name: str):
     return None
 
 
+#: Most hatch line segments one hatch may generate (classic CAD's
+#: HPMAXLINES, initial value 1 000 000). A pattern far too fine for its area
+#: would otherwise generate millions of dashes: the GUI froze while drawing
+#: it, and the drawing gave up halfway, leaving the hatch partly drawn.
+HPMAXLINES = 1_000_000
+
+
+def too_dense_message() -> str:
+    """What is said when a hatch would pass :data:`HPMAXLINES`."""
+    return tr("Hatch spacing too dense, or dash size too small for object.")
+
+
+def hatch_segment_estimate(boundaries, pattern="SOLID", scale=1.0,
+                           angle=0.0, user_def=None) -> float:
+    """How many line segments ``pattern`` at ``scale`` puts over the
+    boundaries' extents (an upper bound: the extents' diagonal crossed at
+    every spacing). 0 for SOLID. Same arguments as :func:`add_hatch`."""
+    if user_def is not None:
+        u_angle, u_spacing, u_double = user_def
+        families = user_pattern_definition(u_angle, u_spacing, bool(u_double))
+        scale = 1.0
+    elif str(pattern).upper() == "SOLID":
+        return 0.0
+    else:
+        families = pattern_definition(pattern)
+    if not families:
+        return 0.0
+    del angle               # turns every family alike: see _segments_over
+    return _segments_over(_extents_diagonal(boundaries), families, scale)
+
+
+def _extents_diagonal(boundaries) -> float:
+    """The diagonal of the extents of point lists and entities."""
+    import math
+
+    xs, ys = [], []
+    for b in boundaries:
+        if isinstance(b, (list, tuple)):
+            xs += [p[0] for p in b]
+            ys += [p[1] for p in b]
+            continue
+        from ezdxf import bbox
+
+        box = bbox.extents([b])
+        if box.has_data:
+            xs += [box.extmin.x, box.extmax.x]
+            ys += [box.extmin.y, box.extmax.y]
+    if not xs:
+        return 0.0
+    return math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+
+
+def _segments_over(diag: float, families, scale: float) -> float:
+    """Line segments of pattern ``families`` (angle, base, offset, dashes)
+    at ``scale`` over a region whose extents' diagonal is ``diag``: every
+    spacing crossed by a line as long as the diagonal, an upper bound. The
+    pattern's own angle turns every family alike and changes neither."""
+    import math
+
+    if diag <= 0.0:
+        return 0.0
+    scale = abs(float(scale)) or 1.0
+    total = 0.0
+    for fam_angle, _base, offset, dashes in families:
+        # The offset is stored rotated with its family: across the lines
+        # is its component normal to the line's direction.
+        a = math.radians(float(fam_angle))
+        across = abs(offset[1] * math.cos(a) - offset[0] * math.sin(a))
+        across *= scale
+        if across <= 0.0:
+            return math.inf
+        lines = diag / across + 1.0
+        period = sum(abs(d) for d in dashes) * scale
+        drawn = sum(1 for d in dashes if d >= 0)
+        per_line = (diag / period * drawn + 1.0) if period > 0 and drawn \
+            else 1.0
+        total += lines * per_line
+    return total
+
+
+def hatch_entity_too_dense(hatch, scale: float) -> bool:
+    """An existing hatch given another pattern scale (Properties): its own
+    pattern lines — a colleague's custom pattern too — at the new scale,
+    over its boundaries."""
+    pattern = getattr(hatch, "pattern", None)
+    if pattern is None or not pattern.lines:
+        return False
+    old = float(hatch.dxf.get("pattern_scale", 1.0) or 1.0)
+    families = [(ln.angle, ln.base_point, ln.offset, ln.dash_length_items)
+                for ln in pattern.lines]
+    return _segments_over(_extents_diagonal([hatch]), families,
+                          float(scale) / old) > HPMAXLINES
+
+
+def hatch_too_dense(boundaries, pattern="SOLID", scale=1.0, angle=0.0,
+                    user_def=None) -> bool:
+    """True when the hatch would pass :data:`HPMAXLINES`: classic CAD then
+    refuses it with :func:`too_dense_message` instead of creating it."""
+    return hatch_segment_estimate(boundaries, pattern, scale, angle,
+                                  user_def) > HPMAXLINES
+
+
 def canonical_pattern_name(name: str) -> str:
     """The library's own spelling of a pattern name (case-insensitive)."""
     patterns = _std_patterns()
