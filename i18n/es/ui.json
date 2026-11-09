@@ -1825,6 +1825,7 @@
   "{name} was saved, but the DWG check found a possible problem:\n\n{detail}\n\nIf a colleague cannot open it, save as DXF instead — DXF is always exact.": "{name} se guardó, pero la comprobación del DWG detectó un posible problema:\n\n{detail}\n\nSi un colega no puede abrirlo, guárdelo como DXF — el DXF siempre es exacto.",
   "{name}: not available yet (arrives in Phase {phase}).": "{name}: aún no disponible (llega en la Fase {phase}).",
   "{n} exploded.": "{n} descompuesto(s).",
+  "{n} could not be exploded.": "{n} no se pudo(pudieron) descomponer.",
   "{n} h ago": "hace {n} h",
   "{n} min ago": "hace {n} min",
   "{n} placed.": "{n} colocados.",

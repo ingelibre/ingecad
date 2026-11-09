@@ -2010,8 +2010,10 @@ class ToolController(QObject):
                 old_handles = [e.dxf.handle for e in command.entities]
             elif isinstance(command, actions.ReplaceEntitiesCommand):
                 old_handles = [e.dxf.handle for e in command.old_entities]
-            elif isinstance(command, (actions.CreateBlockCommand,
-                                      actions.ExplodeCommand)):
+            elif isinstance(command, actions.ExplodeCommand):
+                # what was broken up; a solid hatch left whole stays shown
+                old_handles = [e.dxf.handle for e, _parts in command.pieces]
+            elif isinstance(command, actions.CreateBlockCommand):
                 old_handles = [e.dxf.handle for e in command.sources]
             if old_handles:
                 self._drop_conflicting_stamps(old_handles)

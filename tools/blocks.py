@@ -347,18 +347,28 @@ class ExplodeTool(Tool):
     """EXPLODE: break block references and polylines into their components."""
 
     wants_selection = True
-    _EXPLODABLE = ("INSERT", "LWPOLYLINE", "POLYLINE")
+    _EXPLODABLE = ("INSERT", "LWPOLYLINE", "POLYLINE", "HATCH")
 
     def start(self) -> None:
         self.name = "EXPLODE"
 
     def on_selection(self, entities: list) -> None:
         targets = [e for e in entities if e.dxftype() in self._EXPLODABLE]
-        if targets:
-            self.ctx.execute(actions.explode_entities(targets))
-            self.ctx.echo(tr("{n} exploded.", n=len(targets)))
-        else:
+        if not targets:
             self.ctx.echo(tr("Nothing that can be exploded was selected."))
+            self.ctx.finish()
+            return
+        command = actions.explode_entities(targets)
+        self.ctx.execute(command)
+        done = len(command.pieces)
+        if done:
+            self.ctx.echo(tr("{n} exploded.", n=done))
+        if command.not_exploded:
+            # a solid or gradient fill has no lines to break into
+            self.ctx.echo(tr("{n} could not be exploded.",
+                             n=len(command.not_exploded)))
+        if command.too_dense:
+            self.ctx.echo(actions.too_dense_message())
         self.ctx.finish()
 
 

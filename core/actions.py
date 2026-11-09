@@ -1337,7 +1337,8 @@ def insert_block(name, point, xscale=1.0, yscale=None,
 
 
 class ExplodeCommand(Command):
-    """EXPLODE: replace INSERT/POLYLINE with their component entities.
+    """EXPLODE: replace INSERT/POLYLINE with their component entities, and a
+    pattern HATCH with the lines of its pattern.
 
     Component entities come from ``virtual_entities`` (already placed in world
     coordinates); the originals are unlinked (kept alive for exact undo).
@@ -1348,12 +1349,32 @@ class ExplodeCommand(Command):
     def __init__(self, entities) -> None:
         self.sources = list(entities)
         self.pieces: list = []
+        #: hatches left whole: solid or gradient fill (nothing to break
+        #: into lines), and patterns past HPMAXLINES
+        self.not_exploded: list = []
+        self.too_dense: list = []
 
     def do(self, document) -> None:
         msp = self.space(document)
         self.pieces = []
+        self.not_exploded, self.too_dense = [], []
         for e in self.sources:
-            if e.dxftype() not in ("INSERT", "LWPOLYLINE", "POLYLINE"):
+            kind = e.dxftype()
+            if kind == "HATCH":
+                lines = hatch_pattern_lines(e)
+                if lines is None:
+                    self.too_dense.append(e)
+                    continue
+                if not lines:
+                    self.not_exploded.append(e)
+                    continue
+                parts = _hatch_line_entities(e, lines)
+                for v in parts:
+                    msp.add_entity(v)
+                msp.unlink_entity(e)
+                self.pieces.append((e, parts))
+                continue
+            if kind not in ("INSERT", "LWPOLYLINE", "POLYLINE"):
                 continue
             parts = []
             for v in e.virtual_entities():
@@ -1381,6 +1402,43 @@ class ExplodeCommand(Command):
             msp.add_entity(original)
         self.pieces = []
         document.dirty = True
+
+
+def hatch_pattern_lines(hatch, limit: int | None = None):
+    """The lines a hatch's pattern draws, in WCS, as ``(start, end)``
+    pairs (a dot is a pair with start == end). Empty for a solid or
+    gradient fill; None past ``limit`` (HPMAXLINES by default)."""
+    from ezdxf.render import hatching
+
+    if hatch.dxf.get("solid_fill", 0) or hatch.has_gradient_data:
+        return []
+    limit = HPMAXLINES if limit is None else limit
+    lines = []
+    try:
+        for start, end in hatching.hatch_entity(hatch):
+            lines.append((start, end))
+            if len(lines) > limit:
+                return None
+    except hatching.HatchingError:
+        return []
+    return lines
+
+
+def _hatch_line_entities(hatch, lines) -> list:
+    """LINE (POINT for a dot) entities, not yet in a layout, carrying the
+    hatch's layer, colour and lineweight."""
+    from ezdxf.entities import factory
+
+    attribs = hatch.graphic_properties()
+    out = []
+    for start, end in lines:
+        if start.isclose(end):
+            out.append(factory.new("POINT", dxfattribs={
+                **attribs, "location": start}, doc=hatch.doc))
+        else:
+            out.append(factory.new("LINE", dxfattribs={
+                **attribs, "start": start, "end": end}, doc=hatch.doc))
+    return out
 
 
 def _exploded_attdefs(insert) -> list:
