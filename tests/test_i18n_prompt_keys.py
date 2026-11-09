@@ -102,11 +102,20 @@ def test_translated_prompts_keep_english_keys(lang: str, catalog: dict) -> None:
             continue
         checked += 1
         failures.extend(check(source, translation))
-    assert checked, f"{lang}: no prompt with options was checked -- is the glob right?"
+    if not checked:
+        # a young pack (a few menu words) has no prompt with options yet;
+        # the glob itself is guarded by the maintained language below
+        pytest.skip(f"{lang}: no prompt with options translated yet")
     assert not failures, (
         f"{lang}.json: {len(failures)} prompt(s) hide the key the parser wants.\n"
         "Translate the word, keep the English key: [Suprimir(D)].\n\n"
         + "\n".join(failures))
+
+
+def test_the_maintained_language_has_prompts_to_check() -> None:
+    catalogs = dict(_catalogs())
+    assert "es" in catalogs, "is the glob right?"
+    assert any(_bracket(source) is not None for source in catalogs["es"])
 
 
 LAYOUT = "Enter layout option [Copy/Delete/New/Template/Rename/SAveas/Set/?] <set>:"
