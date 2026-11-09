@@ -1884,7 +1884,36 @@ class Viewport(QOpenGLWidget):
                 x1, y1 = self._space_to_screen(ax, ay)
                 x2, y2 = self._space_to_screen(bx, by)
                 p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+        overlay = getattr(delegate, "tool_overlay", lambda: {})()
+        if overlay:
+            self._draw_tool_overlay(p, overlay, pen)
         self._draw_snap_feedback(p, delegate)
+
+    def _draw_tool_overlay(self, p: QPainter, overlay: dict, preview_pen) -> None:
+        """A tool's :meth:`Tool.overlay`, role by role."""
+        ghost = QColor(140, 140, 140, 140)
+        pens = {"preview": preview_pen,
+                "chosen": QPen(self.HIGHLIGHT_COLOR, 2),
+                "ghost": QPen(ghost, 1)}
+        p.save()
+        for role, pen in pens.items():
+            segments = overlay.get(role) or ()
+            if not segments:
+                continue
+            p.setPen(pen)
+            for (ax, ay), (bx, by) in segments:
+                x1, y1 = self._space_to_screen(ax, ay)
+                x2, y2 = self._space_to_screen(bx, by)
+                p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+        points = overlay.get("points") or ()
+        if points:
+            p.setPen(QPen(self.HIGHLIGHT_COLOR, 1))
+            half = self.MARKER_SIZE / 3.0
+            for x, y in points:
+                sx, sy = self._space_to_screen(x, y)
+                p.drawLine(QPointF(sx - half, sy), QPointF(sx + half, sy))
+                p.drawLine(QPointF(sx, sy - half), QPointF(sx, sy + half))
+        p.restore()
 
     def _draw_tool_feedback(self, p: QPainter) -> None:
         """What a point being given shows: a command's whole preview, or,

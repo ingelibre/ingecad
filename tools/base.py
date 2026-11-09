@@ -170,6 +170,26 @@ class Tool:
         """Rubber-band segments from committed points to the cursor."""
         return []
 
+    #: True hides the selection's highlight while this tool runs: a tool
+    #: that paints what it chose in its own way (:meth:`overlay`).
+    suppress_selection_highlight = False
+
+    def overlay(self, cursor: Point) -> dict:
+        """What the tool paints over the drawing besides its rubber band,
+        by role: ``"preview"`` (dashed, as the rubber band), ``"chosen"``
+        (the selection's colour) and ``"ghost"`` (faint) take a list of
+        segments ``((x1, y1), (x2, y2))``; ``"points"`` a list of
+        ``(x, y)`` marked with a small cross. Plugins' tools use it
+        (contract level 2); the core's tools answer through
+        :meth:`preview_segments`."""
+        return {}
+
+    def preview_entities(self, cursor: Point) -> list:
+        """Virtual entities (built for the drawing, never added to it)
+        rendered as what the next click leaves, through the real styles.
+        Empty for none."""
+        return []
+
     def ghost_placement(self, cursor: Point):
         """(angle_degrees, factor) for a ghost that turns or grows.
 

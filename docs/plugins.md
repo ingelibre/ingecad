@@ -143,6 +143,19 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `grip_handlers` | `{"DXFTYPE": handler}`: grips of its own for a type (level 2, below) |
 | `input_filters` | `callable(ctx, text, state)` that reads typed input first (level 2, below) |
 
+### A tool's own overlay and preview (level 2)
+
+A plugin's `Tool` subclass may answer, besides `preview_segments(cursor)`:
+
+- `overlay(cursor)` → `{"preview": [...], "chosen": [...], "ghost": [...],
+  "points": [...]}`: segments `((x1, y1), (x2, y2))` painted dashed, in the
+  selection's colour, or faint; points marked with a small cross;
+- `preview_entities(cursor)` → virtual entities (made with
+  `ezdxf.entities.factory.new(..., doc=ctx.document.doc)`, never added to
+  the drawing) rendered through the real styles as what the click leaves;
+- `suppress_selection_highlight = True` to hide the selection's highlight
+  while it runs, when the tool shows what it chose itself.
+
 ### Reading the keyboard first (`input_filters`, level 2)
 
 Each filter is called with what the user typed — `""` for Enter, and
@@ -198,7 +211,7 @@ written for level 1 keeps working on every later IngeCAD.
 | level | IngeCAD | what it added |
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
-| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
+| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, the tool's `overlay`, `preview_entities` and `suppress_selection_highlight`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
 
 ## The rules a plugin lives by
 

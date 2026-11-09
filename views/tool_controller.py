@@ -2625,6 +2625,10 @@ class ToolController(QObject):
         and taken back at once, and the entity's picture is kept."""
         tool = self.tool
         fn = getattr(tool, "preview_command", None) if tool is not None else None
+        if fn is None and tool is not None and self.window.document is not None \
+                and type(tool).preview_entities is not Tool.preview_entities:
+            self._sync_entity_preview(tool, wx, wy)
+            return
         if fn is None or self.window.document is None:
             self._clear_preview()
             return
@@ -2641,6 +2645,24 @@ class ToolController(QObject):
         try:
             scene = self._preview_scene_for(command)
         except Exception:
+            scene = None
+        self._preview_key = key
+        self.window.viewport.set_preview_scene(scene)
+
+    def _sync_entity_preview(self, tool, wx: float, wy: float) -> None:
+        """A tool's :meth:`Tool.preview_entities`, rendered."""
+        from render.backend import build_scene_for_entities
+
+        point = self.resolved_point(wx, wy)
+        key = ("entities", id(tool), round(point[0], 9), round(point[1], 9))
+        if key == self._preview_key:
+            return
+        try:
+            entities = list(tool.preview_entities(point) or ())
+            scene = (build_scene_for_entities(
+                self.window.document, entities, self._flatten,
+                self.canvas_space()) if entities else None)
+        except Exception:                   # noqa: BLE001 - a plugin's tool
             scene = None
         self._preview_key = key
         self.window.viewport.set_preview_scene(scene)
@@ -3800,6 +3822,18 @@ class ToolController(QObject):
             return []
         return self.tool.preview_segments(self.resolved_point(*self._cursor))
 
+    def tool_overlay(self) -> dict:
+        """The running tool's :meth:`Tool.overlay` at the cursor."""
+        if self.tool is None or self._cursor is None:
+            return {}
+        fn = getattr(self.tool, "overlay", None)
+        if fn is None:
+            return {}
+        try:
+            return fn(self.resolved_point(*self._cursor)) or {}
+        except Exception:                   # noqa: BLE001 - a plugin's tool
+            return {}
+
     def preview_dimension(self):
         """Rich dimension preview (frame + measurement) for the dim tools."""
         if self.tool is None or self._cursor is None:
@@ -4242,7 +4276,8 @@ class ToolController(QObject):
         the isin sweep over a cadastre's 1.35 M rows costs ~40 ms and must
         not run per frame.
         """
-        if not self.selection or self.index is None:
+        if not self.selection or self.index is None or getattr(
+                self.tool, "suppress_selection_highlight", False):
             empty = np.empty((0, 4))
             return empty, empty, empty
         bucket = self._curve_bucket()
