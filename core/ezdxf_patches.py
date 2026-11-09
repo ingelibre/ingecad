@@ -1075,7 +1075,18 @@ def _patch_polygon_transform() -> None:
     Reported upstream: https://github.com/mozman/ezdxf/issues/1399 (still
     present on master/1.4.5b0 — the scale half was fixed there, the angle
     half was not). Drop this patch once a fixed release ships.
+
+    The same transform never MOVES the pattern either: its lines keep
+    their base points while the boundary goes, so a hatch inside a block
+    is drawn with the pattern anchored where the block's origin is in the
+    world, not where the block was inserted. A colleague's plan whose
+    walls are blocks, each hatch lined up with the next by its author,
+    showed the pattern cut and doubled at every joint; MOVE, COPY and
+    EXPLODE slid the pattern under the hatch the same way. The base
+    points now follow the image of the hatch's OCS origin.
     """
+    from ezdxf.math import OCSTransform, Vec3
+
     original = DXFPolygon.transform
 
     def transform(self, m):
@@ -1083,6 +1094,10 @@ def _patch_polygon_transform() -> None:
         snapshot = pattern.as_list() if pattern and pattern.lines else None
         old_scale = self.dxf.pattern_scale
         old_angle = self.dxf.pattern_angle
+        if snapshot is not None:
+            # where the OCS origin goes, in the hatch's new OCS
+            shift = OCSTransform(self.dxf.extrusion, m).transform_vertex(
+                Vec3(0, 0, Vec3(self.dxf.elevation).z))
         result = original(self, m)
         if snapshot is not None and self.pattern:
             factor = (self.dxf.pattern_scale / old_scale
@@ -1094,8 +1109,10 @@ def _patch_polygon_transform() -> None:
                 rebuilt = _pattern_tools.scale_pattern(
                     snapshot, factor=factor, angle=delta)
             self.pattern.clear()
-            for line in rebuilt:
-                self.pattern.add_line(*line)
+            for angle, base, offset, dashes in rebuilt:
+                self.pattern.add_line(
+                    angle, (base[0] + shift.x, base[1] + shift.y),
+                    offset, dashes)
         return result
 
     transform._ingecad_patch = True  # marker for tests / idempotence

@@ -26,13 +26,16 @@ def _hatch_doc():
 
 
 def test_hatch_translation_keeps_pattern():
+    # the pattern keeps its angle and travels with the hatch, as the big
+    # MOVE's stamp already drew it (test_hatch_pattern_follows)
     _doc, h = _hatch_doc()
     angle0 = h.pattern.lines[0].angle
     base0 = h.pattern.lines[0].base_point
     h.transform(Matrix44.translate(500, 500, 0))
     h.transform(Matrix44.translate(-100, 30, 0))
     assert h.pattern.lines[0].angle == pytest.approx(angle0)
-    assert h.pattern.lines[0].base_point.x == pytest.approx(base0.x)
+    assert h.pattern.lines[0].base_point.x == pytest.approx(base0.x + 400)
+    assert h.pattern.lines[0].base_point.y == pytest.approx(base0.y + 530)
 
 
 def test_hatch_rotation_applies_delta_once():
