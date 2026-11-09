@@ -109,3 +109,50 @@ def test_a_hot_grip_shows_where_it_snaps(win):
     win.tools.on_hover(20.05, 10.05)
     assert win.tools.snap_hit is not None
     assert _marker_pixels(win) > 0
+
+
+def test_selected_objects_sharing_the_grip_stretch_together(win):
+    _type(win, "LINE", "10,0", "10,10", "")       # meets the other at 10,0
+    _type(win, "LINE", "0,0", "10,0", "", "ZOOM", "E")
+    lines = list(win.document.modelspace().query("LINE"))
+    first = next(e for e in lines if (e.dxf.start.x, e.dxf.start.y) == (0, 0))
+    second = next(e for e in lines if e is not first)
+    tools = win.tools
+    tools.select_entities(lines)
+    grip = next(g for g in tools.grip_points()
+                if g[3] == first.dxf.handle
+                and (round(g[0], 6), round(g[1], 6)) == (10.0, 0.0))
+    tools.begin_grip_drag(grip)
+    tools.update_grip_drag(12, 3)
+    tools.finish_grip_drag(12, 3)
+    assert (first.dxf.end.x, first.dxf.end.y) == pytest.approx((12.0, 3.0))
+    assert (second.dxf.start.x, second.dxf.start.y) == pytest.approx((12, 3))
+    assert (second.dxf.end.x, second.dxf.end.y) == pytest.approx((10, 10))
+    _type(win, "U")                               # one undo for both
+    assert (first.dxf.end.x, first.dxf.end.y) == pytest.approx((10.0, 0.0))
+    assert (second.dxf.start.x, second.dxf.start.y) == pytest.approx((10, 0))
+
+
+def test_an_unselected_object_on_the_spot_stays(win):
+    _type(win, "LINE", "10,0", "10,10", "")
+    _hot_end_grip(win)                            # selects only 0,0-10,0
+    win.tools.finish_grip_drag(12, 3)
+    other = next(e for e in win.document.modelspace().query("LINE")
+                 if (e.dxf.end.x, e.dxf.end.y) == (10, 10))
+    assert (other.dxf.start.x, other.dxf.start.y) == pytest.approx((10, 0))
+
+
+def test_esc_puts_every_partner_back(win):
+    _type(win, "LINE", "10,0", "10,10", "")
+    _type(win, "LINE", "0,0", "10,0", "", "ZOOM", "E")
+    lines = list(win.document.modelspace().query("LINE"))
+    tools = win.tools
+    tools.select_entities(lines)
+    grip = next(g for g in tools.grip_points()
+                if (round(g[0], 6), round(g[1], 6)) == (10.0, 0.0))
+    tools.begin_grip_drag(grip)
+    tools.update_grip_drag(12, 3)
+    tools.cancel()
+    ends = sorted((round(p.x, 6), round(p.y, 6)) for e in lines
+                  for p in (e.dxf.start, e.dxf.end))
+    assert ends == [(0, 0), (10, 0), (10, 0), (10, 10)]

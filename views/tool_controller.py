@@ -472,6 +472,9 @@ class ToolController(QObject):
         self._pending_render: list = []
         # Grip drag state: (handle, grip_index, role, SnapshotCommand).
         self._grip_drag = None
+        #: (handle, index, role) of the other selected objects' grips on the
+        #: hot grip's spot: they stretch with it.
+        self._grip_partners: list = []
         #: Where the hot grip was grabbed: the base point of the grip edit,
         #: what ORTHO, POLAR and PERpendicular measure from (#60).
         self._grip_base = None
@@ -1588,6 +1591,7 @@ class ToolController(QObject):
             # for instant feedback while the async regen rebuilds the base.
             handle, _i, _r, snap = self._grip_drag
             self._grip_drag = None
+            self._grip_partners = []
             snap.undo(self.window.document)
             self._invalidate_geometry()
             self._pending_render.extend(
@@ -3934,20 +3938,53 @@ class ToolController(QObject):
         entity = self.index.entity(handle)
         if entity is None:
             return
-        snap = SnapshotCommand([entity])   # captures the pre-grab state
+        # Every other selected object with a grip on this very spot is
+        # stretched with it, as classic CAD does: two lines meeting at a
+        # corner keep meeting when the corner is dragged.
+        self._grip_partners = self._grips_sharing(grip, entity)
+        partners = [self.index.entity(h) for h, _i, _r in self._grip_partners]
+        snap = SnapshotCommand([entity] + partners)   # the pre-grab state
         # and the associative dimensions' (core.dimassoc), for the drop
         self._grip_dimassoc = self.window.history.dimassoc_state()
         self._grip_drag = (handle, index, role, snap)
         self._grip_base = (gx, gy)
         # Hide the base-scene copy ONCE (a full-scene re-upload); from here
         # the live entity rides the cheap 1-entity overlay each frame.
-        self.window.viewport.hide_handles([handle])
+        self.window.viewport.hide_handles(
+            [handle] + [h for h, _i, _r in self._grip_partners])
         if entity.dxftype() == "IMAGE":
             # hide_handles hides the frame AND the pixels; the pixels can
             # stay — the drag moves their quad surgically, no regen.
             self.window.viewport.show_image(handle)
         self._refresh_overlay()
         self._ask_grip_point()
+
+    def _grips_sharing(self, grip, entity) -> list:
+        """(handle, index, role) of the other selected objects' grips at
+        the taken grip's spot. Not for a dimension's grips (their own
+        commands re-render the dimension) nor an image's."""
+        gx, gy, role, handle, _index = grip
+        if role.startswith("dim_") or entity.dxftype() == "IMAGE":
+            return []
+        tol = max(1e-9, 1e-6 * max(1.0, abs(gx), abs(gy)))
+        out = []
+        for x, y, r, h, i in self.grip_points():
+            if h == handle or r.startswith("dim_"):
+                continue
+            if abs(x - gx) > tol or abs(y - gy) > tol:
+                continue
+            other = self.index.entity(h)
+            if other is None or not other.is_alive \
+                    or other.dxftype() == "IMAGE":
+                continue
+            if any(p[0] == h for p in out):
+                continue                    # one grip per object
+            out.append((h, i, r))
+        return out
+
+    def _partner_entities(self) -> list:
+        return [e for h, _i, _r in getattr(self, "_grip_partners", ())
+                if (e := self.index.entity(h)) is not None and e.is_alive]
 
     def current_ucs(self):
         """The UCS typed points, the readout, ORTHO, POLAR and the grid
@@ -4002,6 +4039,10 @@ class ToolController(QObject):
                 self.window.viewport.update()
                 return
             apply_grip_edit(entity, index, role, (wx, wy))
+            for h, i, r in getattr(self, "_grip_partners", ()):
+                other = self.index.entity(h)
+                if other is not None and other.is_alive:
+                    apply_grip_edit(other, i, r, (wx, wy))
             if entity.dxftype() == "IMAGE":
                 # the pixels ride along live (6 quad vertices per frame) and
                 # the vector overlay is skipped: the frontend cannot draw an
@@ -4068,19 +4109,32 @@ class ToolController(QObject):
             return
         if entity is not None:
             apply_grip_edit(entity, index, role, (wx, wy))
+            partners = []
+            for h, i, r in getattr(self, "_grip_partners", ()):
+                other = self.index.entity(h)
+                if other is not None and other.is_alive:
+                    apply_grip_edit(other, i, r, (wx, wy))
+                    partners.append(other)
+            self._grip_partners = []
             snap.commit(self.window.document)
             self.window.history.record(snap, self._grip_dimassoc)
             self._grip_dimassoc = None
             self._show_reacted(snap)
             # grips/snap see the new shape; both caches are patched, not
             # rebuilt (a full rebuild froze the next pick on big files)
-            self._drop_conflicting_stamps([handle])
+            moved = [entity] + partners
+            handles = [e.dxf.handle for e in moved]
+            self._drop_conflicting_stamps(handles)
             if self.snap_engine is not None:
-                self.snap_engine.remove_handles([handle])
-                self.snap_engine.add_entities([entity])
+                self.snap_engine.remove_handles(handles)
+                self.snap_engine.add_entities(moved)
             if self.index is not None:
-                self.index.remove_handles([handle])
-                self.index.add_entities([entity])
+                self.index.remove_handles(handles)
+                self.index.add_entities(moved)
+            for other in partners:
+                if other not in self._pending_render:
+                    self._pending_render.append(other)
+                self._base_handles.discard(other.dxf.handle)
             if entity.dxftype() == "IMAGE":
                 # The pixels are already at their new place (the live quad);
                 # the frame catches up at the deferred merge. The entity
@@ -4147,7 +4201,7 @@ class ToolController(QObject):
             # file, and the overlay built at grab time kept the OLD frame
             # on screen until the merge — the live quad is the feedback.
             return []
-        return [entity]
+        return [entity] + self._partner_entities()
 
     def highlight_geometry(self):
         """(segments, circles, boxes) of the current selection, world coords.
