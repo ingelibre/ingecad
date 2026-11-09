@@ -252,6 +252,7 @@
   "Align below previous attribute definition": "Alinear bajo la definición de atributo anterior",
   "Annotative attributes are not supported yet — the mode stays off.": "Los atributos anotativos aún no se admiten — el modo queda desactivado.",
   "Attribute": "Atributo",
+  "Attributes": "Atributos",
   "Attribute Definition": "Definición de atributo",
   "Attribute {tag} = \"{value}\"": "Atributo {tag} = \"{value}\"",
   "Block \"{name}\" has no attribute definitions.": "El bloque \"{name}\" no tiene definiciones de atributo.",

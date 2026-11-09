@@ -331,6 +331,10 @@ class PropertiesPanel(QWidget):
             builder = _TYPE_ROWS.get(next(iter(types)))
             if builder is not None:
                 sections.append(builder(self, entities[0]))
+            if types == {"INSERT"}:
+                attributes = _block_attribute_rows(self, entities)
+                if attributes:
+                    sections.append((tr("Attributes"), attributes))
         plugins = getattr(self.window, "plugins", None)
         if plugins is not None:
             sections.extend(plugins.properties_sections(entities))
@@ -803,6 +807,44 @@ def _attrib_rows(panel, e):
     ]
     rows += _pt_rows(panel, "insert", tr("Position"))
     return (tr("Text"), rows)
+
+
+def _attrib_of(insert, tag: str):
+    for attrib in insert.attribs:
+        if attrib.dxf.get("tag", "") == tag:
+            return attrib
+    return None
+
+
+def _block_attribute_rows(panel, inserts):
+    """One row per tag of the selected block references, its value
+    editable, as classic CAD's Properties shows them; with several
+    references a tag they do not all carry shows *varies*."""
+    tags = []
+    for insert in inserts:
+        for attrib in insert.attribs:
+            tag = attrib.dxf.get("tag", "")
+            if tag and tag not in tags:
+                tags.append(tag)
+
+    def value(tag):
+        def get(insert):
+            attrib = _attrib_of(insert, tag)
+            return None if attrib is None else attrib.dxf.get("text", "")
+        return get
+
+    def apply(tag):
+        def set_value(text):
+            from core import attributes as att
+
+            changes = [(a, "text", text) for a in
+                       (_attrib_of(i, tag) for i in panel._active())
+                       if a is not None]
+            if changes:
+                panel.window.tools._execute(att.EditAttribsCommand(changes))
+        return set_value
+
+    return [Row(tag, "str", value(tag), apply(tag)) for tag in tags]
 
 
 def _leader_rows(panel, e):
