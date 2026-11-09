@@ -2280,15 +2280,16 @@ class Viewport(QOpenGLWidget):
                 self._set_soft_cursor(None)
                 if self._rubber is not None:
                     self._rubber.hide()
-            elif self.tool_delegate._grip_drag is not None:
-                self.tool_delegate.cancel()      # drop the hot grip
             elif (event.modifiers() & (Qt.ShiftModifier | Qt.ControlModifier)
                     and window is not None
                     and hasattr(window, "show_osnap_menu")
-                    and self.tool_delegate.active()):
-                # AutoCAD: Shift (or Ctrl) + right-click, the object snap menu -- one
-                # snap for the next point only.
+                    and (self.tool_delegate.active()
+                         or self.tool_delegate._grip_drag is not None)):
+                # Shift (or Ctrl) + right-click, the object snap menu -- one
+                # snap for the next point only, a hot grip's drop included.
                 window.show_osnap_menu(event.globalPosition().toPoint())
+            elif self.tool_delegate._grip_drag is not None:
+                self.tool_delegate.cancel()      # drop the hot grip
             elif window is not None and hasattr(window, "on_canvas_right_click"):
                 # AutoCAD: Enter during a command, context menu when idle.
                 window.on_canvas_right_click(event.globalPosition().toPoint())

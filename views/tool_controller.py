@@ -1641,6 +1641,7 @@ class ToolController(QObject):
             # for instant feedback while the async regen rebuilds the base.
             handle, _i, _r, snap = self._grip_drag
             self._grip_drag = None
+            self.osnap_override = None    # a snap asked for this grip only
             self._grip_partners = []
             snap.undo(self.window.document)
             self._invalidate_geometry()
@@ -4175,6 +4176,7 @@ class ToolController(QObject):
             return
         handle, index, role, snap = self._grip_drag
         self._grip_drag = None
+        self.osnap_override = None        # a one-shot snap lasts one point
         entity = self.index.entity(handle)
         self.grip_dim_preview = None
         self.grip_align_marker = None
