@@ -63,9 +63,16 @@ SETTING_VSYNC = "display/vsync"
 SETTING_MSAA = "display/msaa"
 
 
-def right_click_mode() -> str:
-    """What the right button does on an idle canvas."""
-    value = str(QSettings().value(SETTING_RIGHT_CLICK, RIGHT_CLICK_MENU))
+#: The same choice with objects selected (the Edit mode of classic CAD's
+#: Right-click Customization): Enter then repeats the last command on them.
+SETTING_RIGHT_CLICK_EDIT = "input/right_click_edit"
+
+
+def right_click_mode(edit: bool = False) -> str:
+    """What the right button does on a canvas with no command running:
+    nothing selected (Default mode), or objects selected (``edit``)."""
+    key = SETTING_RIGHT_CLICK_EDIT if edit else SETTING_RIGHT_CLICK
+    value = str(QSettings().value(key, RIGHT_CLICK_MENU))
     return value if value in (RIGHT_CLICK_MENU, RIGHT_CLICK_ENTER) \
         else RIGHT_CLICK_MENU
 
@@ -379,6 +386,17 @@ class OptionsDialog(QDialog):
         index = self.right_click.findData(right_click_mode())
         self.right_click.setCurrentIndex(index if index >= 0 else 0)
         inner.addWidget(self.right_click)
+        inner.addWidget(QLabel(
+            tr("Right-click in the drawing area, with no command running "
+               "and objects selected:"), box))
+        self.right_click_edit = QComboBox(box)
+        self.right_click_edit.addItem(tr("Show the shortcut menu"),
+                                      RIGHT_CLICK_MENU)
+        self.right_click_edit.addItem(tr("Repeat the last command (Enter)"),
+                                      RIGHT_CLICK_ENTER)
+        index = self.right_click_edit.findData(right_click_mode(edit=True))
+        self.right_click_edit.setCurrentIndex(index if index >= 0 else 0)
+        inner.addWidget(self.right_click_edit)
         outer.addWidget(box)
         outer.addStretch(1)
         return page
@@ -462,6 +480,8 @@ class OptionsDialog(QDialog):
         self.window._save_osnap_modes()
 
         settings.setValue(SETTING_RIGHT_CLICK, self.right_click.currentData())
+        settings.setValue(SETTING_RIGHT_CLICK_EDIT,
+                          self.right_click_edit.currentData())
 
         from views.tool_controller import SETTING_GRIPOBJLIMIT
 

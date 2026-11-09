@@ -596,10 +596,12 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             return
         from views.options_dialog import RIGHT_CLICK_ENTER, right_click_mode
 
-        if right_click_mode() == RIGHT_CLICK_ENTER and not self.tools.selection:
+        if right_click_mode(edit=bool(self.tools.selection)) \
+                == RIGHT_CLICK_ENTER:
             # Options > User Preferences > Right-click Customization: the
             # drafters who set this want Enter, which repeats the last
-            # command exactly as pressing it would.
+            # command exactly as pressing it would -- with objects selected
+            # (Edit mode), on them.
             self.dispatcher.submit("")
             return
         self.show_canvas_context_menu(global_pos)

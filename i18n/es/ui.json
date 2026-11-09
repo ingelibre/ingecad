@@ -2313,5 +2313,6 @@
   "Enter number of items along path <{current}>:": "Indique el número de elementos a lo largo del camino <{current}>:",
   "Specify number of items or [Fill entire path] <{current}>:": "Precise el número de elementos o [Rellenar todo el camino(F)] <{current}>:",
   "{n} items fit on the path.": "Caben {n} elementos en el camino.",
-  "Path Array": "Matriz de camino"
+  "Path Array": "Matriz de camino",
+  "Right-click in the drawing area, with no command running and objects selected:": "Clic derecho en el área de dibujo, sin comando en curso y con objetos designados:"
 }
