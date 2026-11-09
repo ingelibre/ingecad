@@ -87,6 +87,28 @@ class InputState:
     prompt: str = ""          # the prompt on screen, as shown
 
 
+class Row:
+    """One line of the Properties panel: how to read it and write it back.
+
+    ``kind`` is ``"combo"`` (``items`` = [(label, data)]), ``"num"`` (the
+    value comes as a float; a decimal comma is accepted), ``"str"`` (the
+    text as typed) or ``"ro"`` (read only). ``get(entity)`` gives the
+    value; the panel shows it once when every selected object agrees, and
+    *varies* when not. ``apply(value)`` writes it for the whole selection;
+    ``apply_each(entity, value)`` instead is called once per selected
+    object, all of it one undo step. A plugin returns rows from its
+    ``properties_sections`` (contract level 2)."""
+
+    def __init__(self, label, kind, get, apply=None, items=None,
+                 apply_each=None):
+        self.label = label
+        self.kind = kind          # 'combo' | 'num' | 'str' | 'ro'
+        self.get = get            # (entity) -> value  (or ignored for common)
+        self.apply = apply        # (value) -> None
+        self.items = items        # combo: list[(label, data)]
+        self.apply_each = apply_each   # (entity, value) -> None
+
+
 @dataclass
 class PluginSpec:
     """Everything the host needs to know about a plugin.
@@ -125,6 +147,7 @@ class PluginSpec:
     on_before: Optional[Callable] = None
     on_double_click: Optional[Callable] = None
     reactors: tuple = ()
+    properties_sections: Optional[Callable] = None
 
 
 @dataclass
@@ -700,6 +723,23 @@ class PluginManager:
             except Exception as exc:
                 ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
         return False
+
+    def properties_sections(self, entities: list) -> list:
+        """The Properties panel's sections the active plugins add for the
+        selected ``entities``: each ``properties_sections(ctx, entities)``
+        returns ``[(title, [Row, ...]), ...]``, or an empty list."""
+        sections = []
+        ctx = None
+        for spec in self.active_specs():
+            hook = spec.properties_sections
+            if hook is None:
+                continue
+            ctx = ctx or self.context()
+            try:
+                sections.extend(hook(ctx, list(entities)) or ())
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+        return sections
 
     def regen_done(self, layout: str) -> None:
         """A regen of ``layout`` is now on screen."""

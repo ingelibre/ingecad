@@ -144,6 +144,7 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `input_filters` | `callable(ctx, text, state)` that reads typed input first (level 2, below) |
 | `on_before` | `callable(ctx, event) -> str or None` for `"undo"`, `"save"` and `"close"` (a drawing or the window): a text stops it and is shown as the reason (level 2) |
 | `on_double_click` | `callable(ctx, entity) -> bool`, asked before the core's own editor for that object; True means the plugin handled it (level 2) |
+| `properties_sections` | `callable(ctx, entities) -> [(title, [Row, ...])]`: sections of its own in the Properties panel (level 2, below) |
 | `reactors` | objects with `before(document)` and `react(document, state)`: keep derived objects true after any command, in its undo step (level 2, below) |
 
 ### A tool's own overlay and preview (level 2)
@@ -222,6 +223,30 @@ U undoes both, REDO and a folded script (`transaction`) replay both.
 as the drawing has nothing of yours. A reactor that raises is logged and
 skipped; the user's command still stands.
 
+### Sections in the Properties panel (`properties_sections`, level 2)
+
+```python
+from core.plugins import Row
+
+def sections(ctx, entities):
+    if not all(is_my_point(e) for e in entities):
+        return []
+    return [("Survey", [
+        Row("Code", "str", get=my_code, apply_each=set_my_code),
+        Row("Elevation", "num", get=my_z, apply=set_all_z),
+        Row("Source", "ro", get=my_source),
+    ])]
+```
+
+The core's sections come first, then each active plugin's, for whatever is
+selected. `get(entity)` is shown once when the selection agrees and as
+*varies* when not. `apply(value)` writes the whole selection; with
+`apply_each(entity, value)` instead the panel calls it once per object, all
+of it one undo step, which is how a row takes an operation on each
+object's own value (`"*0.9"` in a `"str"` row). A `"num"` row receives a
+float and accepts a decimal comma. Do not add the type's core section
+again: it is already there.
+
 ### What the context answers (level 2)
 
 A plugin never reads the window's private attributes: they change from one
@@ -251,7 +276,7 @@ written for level 1 keeps working on every later IngeCAD.
 | level | IngeCAD | what it added |
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
-| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, the tool's `overlay`, `preview_entities`, `on_key` and `suppress_selection_highlight`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
+| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, `properties_sections` with `Row`, the tool's `overlay`, `preview_entities`, `on_key` and `suppress_selection_highlight`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
 
 ## The rules a plugin lives by
 

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from core import actions, layers as layer_ops, pickfilter, text_justify
 from core.i18n import tr
+from core.plugins import Row   # one property line; public, plugins add rows
 
 BYLAYER_LW = -1          # AutoCAD's ByLayer lineweight sentinel
 
@@ -46,15 +47,6 @@ QTreeWidget QComboBox, QTreeWidget QLineEdit { background: #1e1e22;
 _VARIES = object()   # marker: property differs across the selection
 
 
-class Row:
-    """One property line: how to read it and how to write it back."""
-
-    def __init__(self, label, kind, get, apply=None, items=None):
-        self.label = label
-        self.kind = kind          # 'combo' | 'num' | 'str' | 'ro'
-        self.get = get            # (entity) -> value  (or ignored for common)
-        self.apply = apply        # (value) -> None
-        self.items = items        # combo: list[(label, data)]
 
 
 def _fmt(v) -> str:
@@ -253,13 +245,22 @@ class PropertiesPanel(QWidget):
 
     # -- edits ----------------------------------------------------------------
     def _edit(self, row: Row, value) -> None:
-        if self._loading or row.apply is None:
+        if self._loading or (row.apply is None and row.apply_each is None):
             return
-        row.apply(value)
+        self._apply(row, value)
         self._after_edit()
 
+    def _apply(self, row: Row, value) -> None:
+        """``apply(value)`` for the whole selection, or ``apply_each`` once
+        per object, all of it one undo step."""
+        if row.apply is not None:
+            row.apply(value)
+            return
+        ents = self._active()
+        self._in_place(lambda: [row.apply_each(e, value) for e in ents])
+
     def _edit_text(self, row: Row, editor: QLineEdit) -> None:
-        if self._loading or row.apply is None:
+        if self._loading or (row.apply is None and row.apply_each is None):
             return
         text = editor.text().strip()
         if text == "":
@@ -274,7 +275,7 @@ class PropertiesPanel(QWidget):
                 return
         else:
             value = text
-        row.apply(value)
+        self._apply(row, value)
         self._after_edit()
 
     def _after_edit(self) -> None:
@@ -330,6 +331,9 @@ class PropertiesPanel(QWidget):
             builder = _TYPE_ROWS.get(next(iter(types)))
             if builder is not None:
                 sections.append(builder(self, entities[0]))
+        plugins = getattr(self.window, "plugins", None)
+        if plugins is not None:
+            sections.extend(plugins.properties_sections(entities))
         return sections
 
     def _general_rows(self, types: set | None = None):
