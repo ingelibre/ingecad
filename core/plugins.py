@@ -63,6 +63,30 @@ class ToolbarItem:
     icon: Optional[Path] = None
 
 
+class _Consumed:
+    """An input filter's answer: "I took it, nothing else runs"."""
+
+    def __repr__(self) -> str:
+        return "CONSUMED"
+
+
+#: Returned by an input filter that handled the input itself.
+CONSUMED = _Consumed()
+
+#: The text an input filter receives when Esc is pressed.
+ESCAPE = "\x1b"
+
+
+@dataclass(frozen=True)
+class InputState:
+    """Where the input arrives, for an input filter to decide on."""
+
+    tool: str = ""            # the running command's tool name, "" if none
+    selecting: bool = False   # at a "Select objects:" prompt
+    grip_hot: bool = False    # a grip is held, no command running
+    prompt: str = ""          # the prompt on screen, as shown
+
+
 @dataclass
 class PluginSpec:
     """Everything the host needs to know about a plugin.
@@ -97,6 +121,7 @@ class PluginSpec:
     on_regen_done: Optional[Callable] = None
     on_selection_changed: Optional[Callable] = None
     grip_handlers: dict = field(default_factory=dict)
+    input_filters: tuple = ()
 
 
 @dataclass
@@ -602,6 +627,28 @@ class PluginManager:
                 hook(ctx, document)
             except Exception as exc:
                 ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+
+    def filter_input(self, text: str, state: InputState):
+        """Hand what was typed (``""`` for Enter, :data:`ESCAPE` for Esc)
+        to each active plugin's input filters in turn. A filter returns
+        None to leave it, a new text to pass on instead, or
+        :data:`CONSUMED` to take it. Returns the text to act on, or
+        CONSUMED."""
+        ctx = None
+        for spec in self.active_specs():
+            for keep in spec.input_filters:
+                if ctx is None:
+                    ctx = self.context()
+                try:
+                    answer = keep(ctx, text, state)
+                except Exception as exc:
+                    ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+                    continue
+                if answer is CONSUMED:
+                    return CONSUMED
+                if isinstance(answer, str):
+                    text = answer
+        return text
 
     def regen_done(self, layout: str) -> None:
         """A regen of ``layout`` is now on screen."""

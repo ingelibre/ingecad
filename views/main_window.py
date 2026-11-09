@@ -2158,6 +2158,11 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             self.command_line.echo_answer(text)     # "prompt: answer"
         else:
             self.command_line.echo_input(text)
+        from core.plugins import CONSUMED
+
+        text = self.plugins.filter_input(text, self._input_state())
+        if text is CONSUMED:
+            return
         stripped = text.strip()
         if stripped.startswith("'"):
             # Transparent command ('ZOOM, 'PAN, 'REDRAW) — runs without
@@ -2228,7 +2233,22 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         scrollbar.setValue(scrollbar.maximum())
         self._text_window = dlg
 
+    def _input_state(self):
+        """Where typed input lands now, for the plugins' input filters."""
+        from core.plugins import InputState
+
+        tools = self.tools
+        return InputState(
+            tool=getattr(tools.tool, "name", "") if tools.tool else "",
+            selecting=tools._selecting_for is not None,
+            grip_hot=tools.grip_hot(),
+            prompt=tools.current_prompt or "")
+
     def _on_prompt_cancelled(self) -> None:
+        from core.plugins import CONSUMED, ESCAPE
+
+        if self.plugins.filter_input(ESCAPE, self._input_state()) is CONSUMED:
+            return
         # tools.cancel() handles both cases: active tool, or idle selection
         if self.viewport._pan_mode:
             self.viewport.stop_pan_mode()
