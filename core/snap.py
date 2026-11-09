@@ -210,6 +210,18 @@ class SnapEngine:
                 SnapEngine._spline(e, oid, curves, curve_o, targets, target_o)
             elif t == "VIEWPORT":
                 SnapEngine._viewport_frame(e, oid, segs, seg_o)
+            elif t in ("IMAGE", "WIPEOUT"):
+                # its frame (the clip boundary when clipped): ENDpoints at
+                # the corners, MIDpoints, INTersections, PERpendicular...
+                frame = [(v.x, v.y) for v in e.boundary_path_wcs()]
+                for (x0, y0), (x1, y1) in zip(frame, frame[1:]):
+                    if (x0, y0) != (x1, y1):
+                        segs.append((x0, y0, x1, y1))
+                        seg_o.append(oid)
+                if t == "IMAGE" and targets is not None:
+                    anchor = e.dxf.insert
+                    targets.append((anchor.x, anchor.y, _TARGET_CODE["INS"]))
+                    target_o.append(oid)
             elif t in ("DIMENSION", "ARC_DIMENSION") and targets is not None:
                 SnapEngine._dimension(e, oid, segs, seg_o, points, point_o,
                                       targets, target_o)
