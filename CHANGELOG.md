@@ -1,5 +1,86 @@
 # Changelog
 
+## v0.8.0 — unreleased
+
+What users reported, fixed one by one, a wider contract for extensions,
+and a handful of commands asked for by name.
+
+### Hatches
+- **A hatch too dense for its area is refused** with "Hatch spacing too
+  dense, or dash size too small for object.", as the classic CAD does
+  past `HPMAXLINES`, instead of freezing the window; the boundary stays
+  picked for another scale. Properties refuses such a scale too.
+- **HATCH's internal point sees the curves inside block references**
+  (nested ones too): a room closed by door or wall blocks is found.
+- **A hatch's pattern moves, rotates and scales with its hatch** — also
+  inside a block, where walls drawn as blocks showed their pattern cut
+  at the joints.
+- **EXPLODE breaks a pattern hatch into its lines**, on the hatch's layer.
+
+### Construction lines and rays
+- **TRIM cuts xlines and rays** (an xline becomes a ray or a line, a ray a
+  line), and **FILLET** rounds them with lines.
+- **XLINE ▸ Offset and Angle ▸ Reference** accept xlines, rays and
+  polyline segments, not only lines.
+
+### Drawing and editing
+- **ARRAYPATH** lays copies along a line, polyline, arc, circle, ellipse
+  or spline: Measure or Divide, base point, aligned to the curve or not.
+- **COPY ▸ Array** lays a row of copies in one step: the number of items
+  and a second point, or Fit to spread them up to the point.
+- **Holding Ctrl turns an arc the other way round**, in ARC (start,
+  centre, end) and in PLINE's arc mode.
+- **-BLOCK and -INSERT** (`-B`, `-I`): the block commands answered wholly
+  at the prompt, for scripts and for the keyboard.
+- **The Palette lists the drawing's blocks** with a thumbnail: double
+  click inserts one, Edit opens the Block Editor.
+- **A distance or a point typed with a grip held is the grip's point**
+  (#125); a hot grip shows the object snap marker and tracking, and
+  selected objects sharing a grip stretch together.
+- **The coordinate readout adds `@distance<angle`** from the last point
+  while a command runs: a circle's radius is read as it is dragged (#118).
+- **The spacebar over the drawing is Enter** (#112), and a right-click
+  set to Enter is Enter with objects selected too.
+- **ERASE takes a member out of its group**; **MATCHPROP** takes its
+  destinations by window and crossing; an image's frame snaps.
+
+### Commands that did not answer
+- **SELECTSIMILAR, ISOLATEOBJECTS, HIDEOBJECTS, TEXTEDIT and HATCHEDIT**
+  were menu entries without a command behind them (#121).
+- **VIEWRES, CURSORSIZE, PICKBOX and the CENTER\* variables** wait for
+  their value instead of handing it to the command line (#132).
+- **DIMTXT and DIMASZ** can be typed, as DIMSCALE can.
+
+### Dimensions
+- **Dimension text follows the style's Unit format** — Architectural,
+  Engineering, Fractional (#122).
+- **Arc length dimensions** draw their arc symbol, and under 90° their
+  extension lines are orthogonal.
+- **A negative text gap frames the text** (a theoretically exact
+  dimension); a tolerance stack reads `+a` over `-b`.
+- **The Dimension Style dialog offers the twenty classic arrowheads.**
+- **DIMCONTINUE and DIMBASELINE** go on from an angular dimension.
+- **A double-click on a dimension** opens its text in the in-place editor.
+
+### Panels and languages
+- **Properties lists a block reference's attributes**, and its names are
+  no longer cut short.
+- **New languages: Lao and Thai** (community packs); Brazilian Portuguese
+  updated. The Attribute Definition dialog's Justification list is
+  translated.
+
+### Extensions
+- **The contract has a level** (`api_version`): an extension written for a
+  newer IngeCAD is refused with a clear notice instead of failing later.
+- **New hooks**, each asked for by a real extension: grips of its own for
+  an entity type, typed input read first, a tool's own overlay, preview
+  and object snaps, vetoes before undo, save and close, double-click,
+  transactions (one undo step for a whole operation), reactors that keep
+  derived objects true after any command, sections in the Properties
+  panel, several toolbars, the free function keys, copy and paste, and
+  the steps of a selection. Documented in `docs/plugins.md`.
+- **Roads**: PC and PT labels go on the side the stationing leaves free.
+
 ## v0.7.0 — 2026-10-29
 
 Extensions you install from a catalog with one click, a third bundled
