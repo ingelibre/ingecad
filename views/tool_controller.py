@@ -1372,6 +1372,8 @@ class ToolController(QObject):
                 entity.dxf.text = new
                 _rerender_dimension(document, entity)
             actions.apply_in_place(self.window.history, [entity], mutate)
+            # a longer word is picked by its new end at once
+            self.reindex_entities([entity])
             self.window.regen_in_memory()
             self.window.viewport.update()
 
@@ -1451,6 +1453,8 @@ class ToolController(QObject):
                 if new_style:
                     entity.dxf.style = new_style
             actions.apply_in_place(self.window.history, [entity], mutate)
+            # a longer word is picked by its new end at once
+            self.reindex_entities([entity])
             self.window.regen_in_memory()
             self.window.viewport.update()
 
@@ -4231,14 +4235,7 @@ class ToolController(QObject):
             # grips/snap see the new shape; both caches are patched, not
             # rebuilt (a full rebuild froze the next pick on big files)
             moved = [entity] + partners
-            handles = [e.dxf.handle for e in moved]
-            self._drop_conflicting_stamps(handles)
-            if self.snap_engine is not None:
-                self.snap_engine.remove_handles(handles)
-                self.snap_engine.add_entities(moved)
-            if self.index is not None:
-                self.index.remove_handles(handles)
-                self.index.add_entities(moved)
+            self.reindex_entities(moved)
             for other in partners:
                 if other not in self._pending_render:
                     self._pending_render.append(other)
@@ -4270,6 +4267,19 @@ class ToolController(QObject):
             self._base_handles.discard(handle)
             self._refresh_overlay()
             self._merge_timer.start()
+
+    def reindex_entities(self, entities) -> None:
+        """Entities edited in place (a grip, a text typed over): pick and
+        snap see their new shape. Both caches are patched, not rebuilt --
+        a full rebuild froze the next pick on big files."""
+        handles = [e.dxf.handle for e in entities]
+        self._drop_conflicting_stamps(handles)
+        if self.snap_engine is not None:
+            self.snap_engine.remove_handles(handles)
+            self.snap_engine.add_entities(entities)
+        if self.index is not None:
+            self.index.remove_handles(handles)
+            self.index.add_entities(entities)
 
     def _plugin_grip_drop(self, entity, index, role, point, snap) -> bool:
         """A plugin's grip handler with a ``drop`` gives the command the
