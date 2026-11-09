@@ -1201,8 +1201,50 @@ class _TrimExtendBase(Tool):
                 for s0, e0 in spans
             ]
             self._replace("TRIM", entity, factories)
+        elif t in ("XLINE", "RAY"):
+            self._trim_construction_line(entity, point, segs, circles)
         else:
             self.ctx.echo(tr("TRIM supports LINE, PLINE, CIRCLE, ARC and ELLIPSE for now."))
+
+    def _trim_construction_line(self, entity, point, segs, circles) -> None:
+        """Classic CAD's rule: what is left of an XLINE or a RAY with one
+        end still infinite is a RAY from the cut; a piece cut at both ends
+        is a LINE."""
+        from core.select import construction_line_segment
+
+        base, unit = entity.dxf.start, entity.dxf.unit_vector
+        length = math.hypot(unit.x, unit.y)
+        if length < 1e-12:
+            return
+        ux, uy = unit.x / length, unit.y / length
+        back = entity.dxftype() == "XLINE"
+        seg = construction_line_segment(entity)
+        pieces = editmath.trim_segment(seg, segs, circles,
+                                       _param_on_segment(seg, point))
+        if pieces is None:
+            self._nothing_crosses(entity)
+            return
+        far_start = (seg[0], seg[1]) if back else None
+        far_end = (seg[2], seg[3])
+
+        def at(p, q):
+            return math.isclose(p[0], q[0], abs_tol=1e-6) and \
+                math.isclose(p[1], q[1], abs_tol=1e-6)
+
+        factories = []
+        for x0, y0, x1, y1 in pieces:
+            a, b = (x0, y0), (x1, y1)
+            if at(b, far_end):
+                # from ``a`` on to infinity; an untouched RAY base stays it
+                factories.append(lambda msp, p=a: msp.add_ray(
+                    (p[0], p[1], base.z), (ux, uy, 0.0)))
+            elif far_start is not None and at(a, far_start):
+                factories.append(lambda msp, p=b: msp.add_ray(
+                    (p[0], p[1], base.z), (-ux, -uy, 0.0)))
+            else:
+                factories.append(lambda msp, p=a, q=b: msp.add_line(
+                    (p[0], p[1], base.z), (q[0], q[1], base.z)))
+        self._replace("TRIM", entity, factories)
 
     def _nothing_crosses(self, entity) -> None:
         """No cutting edge crosses the picked object. Standard says so;

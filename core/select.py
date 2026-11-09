@@ -62,6 +62,15 @@ MAX_CURVE_SEGMENTS = 512
 CONSTRUCTION_REACH = 1.0e6
 
 
+def construction_line_segment(entity) -> tuple:
+    """An XLINE or RAY as the finite chord picking, windows and TRIM/EXTEND
+    use: from far behind (an XLINE) or its base (a RAY) to far ahead."""
+    base, d = entity.dxf.start, entity.dxf.unit_vector
+    back = 0.0 if entity.dxftype() == "RAY" else CONSTRUCTION_REACH
+    return (base.x - d.x * back, base.y - d.y * back,
+            base.x + d.x * CONSTRUCTION_REACH, base.y + d.y * CONSTRUCTION_REACH)
+
+
 def _arc_record(e) -> tuple:
     """An ARC as the index stores it: (cx, cy, r, 1.0, a0, a1), WCS radians."""
     cx, cy, r, d0, d1 = ocs.arc_wcs(e)
@@ -228,12 +237,7 @@ class GeometryIndex:
                 # Infinite by definition: a long chord through the base point
                 # picks and crosses correctly, and never sits "fully inside"
                 # a window — which is the right answer for an infinite line.
-                base = e.dxf.start
-                d = e.dxf.unit_vector
-                reach = CONSTRUCTION_REACH
-                back = 0.0 if t == "RAY" else reach
-                segs.append((base.x - d.x * back, base.y - d.y * back,
-                             base.x + d.x * reach, base.y + d.y * reach))
+                segs.append(construction_line_segment(e))
                 seg_o.append(oid)
             elif t == "LEADER":
                 vertices = [(v[0], v[1]) for v in e.vertices]
