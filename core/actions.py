@@ -1024,15 +1024,21 @@ class EraseCommand(Command):
         self.entities = list(entities)
 
     def do(self, document) -> None:
+        from core import groups
+
         msp = self.space(document)
+        self._groups = groups.drop_members(document, self.entities)
         for e in self.entities:
             msp.unlink_entity(e)
         document.dirty = True
 
     def undo(self, document) -> None:
+        from core import groups
+
         msp = self.space(document)
         for e in self.entities:
             msp.add_entity(e)
+        groups.restore_members(getattr(self, "_groups", ()))
         document.dirty = True
 
 

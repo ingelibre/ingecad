@@ -226,3 +226,33 @@ class ChangeGroupMembersCommand(Command):
     def undo(self, document) -> None:
         if self._before is not None:
             self._apply(document, self._before)
+
+
+def drop_members(document, entities) -> list:
+    """Take ``entities`` out of every group they belong to, as ERASE does
+    in classic CAD; returns what :func:`restore_members` puts back. Left
+    in, an erased member was dropped by the next save and an undo brought
+    it back outside its group."""
+    try:
+        groups = list(document.doc.groups)
+    except Exception:
+        return []
+    if not groups:
+        return []
+    gone = {e.dxf.handle for e in entities}
+    saved = []
+    for _name, group in groups:
+        members = list(group)
+        if any(e.dxf.handle in gone for e in members):
+            saved.append((group, members))
+            with group.edit_data() as data:
+                data[:] = [e for e in members if e.dxf.handle not in gone]
+    return saved
+
+
+def restore_members(saved) -> None:
+    """Undo :func:`drop_members` (the entities back in their space first)."""
+    for group, members in saved:
+        if group.is_alive:
+            group.set_data([e for e in members if e.is_alive])
+
