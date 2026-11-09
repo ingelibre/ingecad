@@ -184,6 +184,11 @@ class Tool:
         :meth:`preview_segments`."""
         return {}
 
+    def on_selection_step(self, handles: frozenset) -> None:
+        """Each change of the selection while this tool asks "Select
+        objects:" (a pick, a window, Remove, Undo), before Enter ends it
+        with :meth:`on_selection` (contract level 2)."""
+
     #: True: :meth:`extra_osnaps` apply with OSNAP off too.
     extra_osnaps_always = False
 

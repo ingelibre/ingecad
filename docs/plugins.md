@@ -170,6 +170,15 @@ pressing one calls `tool.on_key("F5")`; return True if the tool used it
 (the viewport repaints). Without a running tool the keys do nothing, and
 the core's keys (F1-F3, F7-F12) are never offered.
 
+### Each step of "Select objects:" (`Tool.on_selection_step`, level 2)
+
+A tool with `wants_selection = True` (or one that called
+`ctx.services.request_selection()`) hears `on_selection_step(handles)`, a
+frozenset, after every change while the user is still picking: a pick, a
+window, Remove (R), Add (A), Undo (U). Enter then calls `on_selection`
+as always. The plugin-wide `on_selection_changed` is for the selection
+made with no command running.
+
 ### Object snaps of a tool's own (`Tool.extra_osnaps`, level 2)
 
 `extra_osnaps()` returns snap keys (`"END"`, `"MID"`, `"INT"`... as in
@@ -315,7 +324,7 @@ written for level 1 keeps working on every later IngeCAD.
 | level | IngeCAD | what it added |
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
-| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, `properties_sections` with `Row`, `toolbars` with `ToolbarSpec`, `on_paste`, `on_copy`, `ToolbarItem.key`, the tool's `overlay`, `preview_entities`, `on_key`, `extra_osnaps`, `extra_osnaps_always`, `last_segment_direction` and `suppress_selection_highlight`, and the context's `toolbar`, `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
+| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, `properties_sections` with `Row`, `toolbars` with `ToolbarSpec`, `on_paste`, `on_copy`, `ToolbarItem.key`, the tool's `overlay`, `preview_entities`, `on_key`, `extra_osnaps`, `extra_osnaps_always`, `last_segment_direction`, `on_selection_step` and `suppress_selection_highlight`, and the context's `toolbar`, `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
 
 ## The rules a plugin lives by
 

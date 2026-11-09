@@ -363,6 +363,29 @@ class ToolController(QObject):
     TRACK_DWELL_MS = 300          # pause on a snap point this long to acquire it
     TRACK_MAX = 8                 # acquired points kept, oldest dropped first
 
+    @property
+    def selection(self) -> set:
+        """The selected handles."""
+        return self._selection
+
+    @selection.setter
+    def selection(self, handles) -> None:
+        # every pick, window, Remove and Undo of a "Select objects" phase
+        # ends here: the tool asking hears each step (Tool.on_selection_step)
+        self._selection = handles
+        tool = getattr(self, "_selecting_for", None)
+        if tool is None:
+            return
+        # |= and -= change the set in place: compare with the last step told
+        step = frozenset(handles)
+        if step == self._step_told:
+            return
+        self._step_told = step
+        try:
+            tool.on_selection_step(step)
+        except Exception as exc:          # noqa: BLE001 - a plugin's tool
+            self.window.command_line.echo(f"{type(exc).__name__}: {exc}")
+
     def __init__(self, window) -> None:
         super().__init__(window)
         self.window = window
@@ -453,7 +476,8 @@ class ToolController(QObject):
         self._warmers: set = set()        # background cache builders
         # Selection state (idle noun set, or the set a tool is acquiring).
         self.index: Optional[GeometryIndex] = None
-        self.selection: set[str] = set()
+        self._step_told = frozenset()
+        self.selection = set()
         # typed answers at "Select objects:" (_selection_option)
         self._sel_remove = False          # Remove(R) mode until Add(A)
         self._sel_force: Optional[str] = None   # "W"/"C" for the next window
@@ -654,6 +678,7 @@ class ToolController(QObject):
                 self._previous_selection = set(self.selection)
                 self.tool.on_selection(entities)
             else:
+                self._step_told = frozenset(self.selection)
                 self._selecting_for = self.tool
                 self._sel_remove = False
                 self._sel_force = None
@@ -705,6 +730,7 @@ class ToolController(QObject):
         start of a ``wants_selection`` tool enters."""
         if self.tool is None:
             return
+        self._step_told = frozenset(self.selection)
         self._selecting_for = self.tool
         self.window.command_line.echo_prompt(self.tool.selection_prompt())
         self.changed.emit()
