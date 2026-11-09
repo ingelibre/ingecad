@@ -892,7 +892,11 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
     #: name: (kind, low, high) of the variables _cmd_sysvar answers
     _SYSVARS = {"DIMASSOC": (int, 0, 2), "CELTSCALE": (float, 1e-9, None),
                 "DIMSCALE": (float, 0.0, None), "LWDISPLAY": (int, 0, 1),
-                "ZOOMFACTOR": (int, 3, 100)}
+                "ZOOMFACTOR": (int, 3, 100),
+                "DIMTXT": (float, 1e-9, None), "DIMASZ": (float, 0.0, None)}
+    #: The variables that are the current dimension style's own: typed,
+    #: they change that style (the renderer reads them from it).
+    _DIMSTYLE_VARS = ("DIMSCALE", "DIMTXT", "DIMASZ")
 
     def _sysvar_value(self, name: str):
         from views import viewport as vp_prefs
@@ -902,17 +906,22 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             return int(self.viewport.lwt_on)
         if name == "ZOOMFACTOR":
             return vp_prefs.zoomfactor()
-        if name == "DIMSCALE":
+        if name in self._DIMSTYLE_VARS:
             from core import styles as style_ops
 
-            return style_ops.dim_style_attribs(
+            default = {"DIMSCALE": 1.0, "DIMTXT": 2.5, "DIMASZ": 2.5}[name]
+            if self.document is None:
+                return default
+            value = style_ops.dim_style_attribs(
                 self.document, header.get("$DIMSTYLE", "Standard")
-            ).get("dimscale", 1.0) if self.document is not None else 1.0
+            ).get(name.lower())
+            return default if value is None else value
         default = {"DIMASSOC": 2, "CELTSCALE": 1.0}[name]
         return header.get("$" + name, default)
 
     def _cmd_sysvar(self, name: str, *args) -> Prompt | None:
-        """DIMASSOC, CELTSCALE, DIMSCALE, LWDISPLAY and ZOOMFACTOR typed:
+        """DIMASSOC, CELTSCALE, DIMSCALE, DIMTXT, DIMASZ, LWDISPLAY and
+        ZOOMFACTOR typed:
         "Enter new value for NAME <current>:" as AutoCAD asks."""
         kind, low, high = self._SYSVARS[name]
         current = self._sysvar_value(name)
@@ -938,13 +947,13 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             from views import viewport as vp_prefs
 
             QSettings().setValue(vp_prefs.SETTING_ZOOMFACTOR, value)
-        elif name == "DIMSCALE":
-            # the renderer reads DIMSCALE from the current style
+        elif name in self._DIMSTYLE_VARS:
+            # the renderer reads these from the current style
             from core import styles as style_ops
 
             style = self.document.doc.header.get("$DIMSTYLE", "Standard")
             self.history.execute(
-                style_ops.SetDimStylePropsCommand(style, {"dimscale": value}))
+                style_ops.SetDimStylePropsCommand(style, {name.lower(): value}))
             self.after_style_change()
         elif self.document is not None:
             from core.attributes import SetHeaderCommand
@@ -4384,7 +4393,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         # Commands an AutoCAD user types and found unknown (a YouTuber's
         # drawing session): the sysvars, PROPERTIES and REDRAW
         for var in ("DIMASSOC", "CELTSCALE", "DIMSCALE", "LWDISPLAY",
-                    "ZOOMFACTOR"):
+                    "ZOOMFACTOR", "DIMTXT", "DIMASZ"):
             d.register(var, lambda *a, v=var: self._cmd_sysvar(v, *a))
         d.register("LWEIGHT", self._cmd_lweight)
         d.register("SETVAR", self._cmd_setvar)
