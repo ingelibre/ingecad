@@ -1343,7 +1343,10 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             and obj is getattr(self, "viewport", None)
             and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)
             and (event.text().strip() or event.key() in (
-                Qt.Key_Return, Qt.Key_Enter, Qt.Key_Escape, Qt.Key_Backspace))
+                Qt.Key_Return, Qt.Key_Enter, Qt.Key_Escape, Qt.Key_Backspace,
+                # Space is Enter at the prompt (#112): its text is blank,
+                # so over the canvas it used to be dropped
+                Qt.Key_Space))
         ):
             self.command_line.type_ahead(event)
             return True
