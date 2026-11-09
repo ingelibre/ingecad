@@ -943,6 +943,28 @@ class ToolController(QObject):
         self.changed.emit()
         return len(self.selection)
 
+    def selected_entities(self) -> list:
+        """The selected entities, live ones only (plugins, panels)."""
+        return list(self._selection_entities())
+
+    def select_entities(self, entities) -> int:
+        """Make ``entities`` the selection, through the same filter a pick
+        goes through; returns how many were kept."""
+        handles = {e.dxf.handle for e in entities if e.is_alive}
+        self.selection = self._filtered(handles)
+        self._highlight_cache = None
+        self._grips_cache = None
+        self.changed.emit()
+        return len(self.selection)
+
+    def pick_tolerance(self) -> float:
+        """The pickbox's half-size in drawing units at the current zoom
+        (worked out now: the hover's copy is from the last mouse move)."""
+        try:
+            return self.px_to_space(self.pickbox_px())
+        except Exception:                 # noqa: BLE001 - no view yet
+            return self._pick_tolerance
+
     def clear_selection(self) -> None:
         self.reset_pick_cycle()
         self.selection = set()

@@ -138,6 +138,22 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `requires` | module names; a missing one lists the plugin as *unavailable: needs X* instead of breaking start-up |
 | `on_document_open` | `callable(ctx, document)` after a drawing is created or opened |
 | `api_version` | the plugin contract level it was written for (default 1); see below |
+| `on_regen_done` | `callable(ctx, layout)` when a regenerated drawing is on screen (level 2) |
+
+### What the context answers (level 2)
+
+A plugin never reads the window's private attributes: they change from one
+release to the next. It asks the `PluginContext` instead.
+
+| member | answers |
+|---|---|
+| `ctx.run_command(*answers)` | types each answer at the command line, as the user would |
+| `ctx.active_layout` | `"Model"` or the name of the layout tab in view |
+| `ctx.selection` | the selected entities |
+| `ctx.select(entities)` | makes them the selection through the same filter as a pick (a locked layer's stay out); returns how many |
+| `ctx.pick_tolerance` | the pickbox's half-size in drawing units at the current zoom |
+| `ctx.redraw(entities=None)` | shows those entities again with their current look, no regen; with none, repaints |
+| `ctx.regen()` | REGEN in the background; `on_regen_done` hears when it is in view |
 
 ## Contract levels (`api_version`)
 
@@ -150,7 +166,8 @@ written for level 1 keeps working on every later IngeCAD.
 
 | level | IngeCAD | what it added |
 |---|---|---|
-| 1 | 0.5 | everything in the table above |
+| 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
+| 2 | 0.8 | `api_version`, `on_regen_done`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen` |
 
 ## The rules a plugin lives by
 

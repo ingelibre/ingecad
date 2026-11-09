@@ -30,7 +30,7 @@ from core.paths import app_root
 #: the reason and never activated half-working. Raised by one each time the
 #: contract grows (docs/plugins.md says what every level added); a level is
 #: never taken back, so a plugin for an older level keeps working.
-API_VERSION = 1
+API_VERSION = 2
 
 
 # -- what a plugin declares ----------------------------------------------------
@@ -93,11 +93,18 @@ class PluginSpec:
     i18n_dir: Optional[Path] = None
     on_document_open: Optional[Callable] = None
     api_version: int = 1
+    on_regen_done: Optional[Callable] = None
 
 
 @dataclass
 class PluginContext:
-    """What a plugin's command handler receives as its first argument."""
+    """What a plugin's command handler receives as its first argument.
+
+    Everything a plugin may ask of the running window goes through here,
+    so it never reads the window's private state (which changes from one
+    release to the next). Level 2 of the contract added everything after
+    :meth:`start_tool`.
+    """
 
     host: object                     # the main window, or a test double
     echo: Callable[[str], None]
@@ -112,6 +119,47 @@ class PluginContext:
 
     def start_tool(self, name: str) -> None:
         self.host.tools.start_tool(name)
+
+    # -- level 2 ---------------------------------------------------------------
+    def run_command(self, *answers) -> None:
+        """Type ``answers`` at the command line, one after the other, as
+        the user would: ``ctx.run_command("CIRCLE", "0,0", "5")``."""
+        for answer in answers:
+            self.host._on_command_submitted(str(answer))
+
+    @property
+    def active_layout(self) -> str:
+        """The tab in view: ``"Model"`` or a layout's name."""
+        return getattr(self.host, "_active_layout", "Model")
+
+    @property
+    def selection(self) -> list:
+        """The selected entities (live ones only)."""
+        tools = getattr(self.host, "tools", None)
+        return list(tools.selected_entities()) if tools is not None else []
+
+    def select(self, entities) -> int:
+        """Make ``entities`` the selection, as a pick would (a locked
+        layer's stay out with no command running); returns how many."""
+        return self.host.tools.select_entities(entities)
+
+    @property
+    def pick_tolerance(self) -> float:
+        """The pickbox's half-size in drawing units at the current zoom."""
+        return float(self.host.tools.pick_tolerance())
+
+    def redraw(self, entities=None) -> None:
+        """Show ``entities`` again with their current look, without a
+        regen; with none, just repaint the drawing area."""
+        if entities:
+            self.host.tools.redraw_entities(list(entities))
+        else:
+            self.host.viewport.update()
+
+    def regen(self) -> None:
+        """Rebuild the whole drawing in the background (REGEN); the
+        plugins' ``on_regen_done`` hear when it is in view."""
+        self.host.regen_in_memory()
 
 
 @dataclass
@@ -495,6 +543,18 @@ class PluginManager:
                 continue
             try:
                 hook(ctx, document)
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+
+    def regen_done(self, layout: str) -> None:
+        """A regen of ``layout`` is now on screen."""
+        ctx = self.context()
+        for spec in self.active_specs():
+            hook = spec.on_regen_done
+            if hook is None:
+                continue
+            try:
+                hook(ctx, layout)
             except Exception as exc:
                 ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
 

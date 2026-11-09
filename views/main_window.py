@@ -4311,6 +4311,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         elif self._regen_zoom:
             self._regen_zoom = False
             self.viewport.zoom_extents()
+        self.plugins.regen_done(layout)
 
     # -- each tab's own view (core/saved_views.py) -------------------------------
     def _current_view(self):
