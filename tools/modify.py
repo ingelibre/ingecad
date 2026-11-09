@@ -944,7 +944,10 @@ class MatchPropTool(Tool):
         self._source = None
         self.accepts_target_windows = False
         services = self.ctx.services
-        chosen = services.selected_entities() if services else []
+        # the object already selected is the source; headless services
+        # (scripts, tests) may have no selection to ask about
+        selected = getattr(services, "selected_entities", None)
+        chosen = selected() if callable(selected) else []
         if len(chosen) == 1:
             services.clear_selection()
             self._take_source(chosen[0])
