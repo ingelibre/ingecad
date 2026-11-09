@@ -8,6 +8,7 @@ and will never exist here.
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from PySide6.QtCore import (QEvent, QPoint, QSettings, Qt,
@@ -6374,6 +6375,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         if self._busy_text:
             return          # the coordinates line is showing progress
         vp = self._active_vp
+        relative = ""
         if vp is not None and vp.is_alive:
             # Inside a viewport the readout is the MODEL coordinate under
             # the pointer, not the millimetre of paper it lands on.
@@ -6385,9 +6387,24 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         else:
             from core import ucs
 
-            wx, wy = ucs.current(self.document).to_ucs(wx, wy)
+            frame = ucs.current(self.document)
+            # While a command measures from a point -- a line's last end,
+            # a circle's centre, a grip taken -- the readout adds where
+            # the cursor is from it, the way it is typed: @distance<angle.
+            # A circle's radius is read there as it is dragged (#118).
+            anchor = self.tools.anchor_point()
+            if anchor is not None:
+                sx, sy = self.tools.to_space(wx, wy)
+                dx, dy = sx - anchor[0], sy - anchor[1]
+                angle = (math.degrees(math.atan2(dy, dx))
+                         - frame.degrees) % 360.0
+                units = self.display_units()
+                relative = (f"   @{units.length(math.hypot(dx, dy))}"
+                            f"<{units.angle(angle)}")
+            wx, wy = frame.to_ucs(wx, wy)
         units = self.display_units()
-        self._coords_label.setText(f"{units.length(wx)}, {units.length(wy)}")
+        self._coords_label.setText(
+            f"{units.length(wx)}, {units.length(wy)}{relative}")
 
     # -- documents -------------------------------------------------------------
     def _open_dialog(self) -> None:
