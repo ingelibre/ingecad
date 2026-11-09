@@ -4397,7 +4397,14 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         d.register("BSAVE", self._cmd_bsave)
         d.register("BCLOSE", self._cmd_bclose)
         d.register("QUICKCALC", self._cmd_quickcalc)
-        d.register("ADDSELECTED", lambda *a: self._invoke_command("ADDSELECTED"))
+        # The shortcut-menu commands that are tools (#121): they had a tool
+        # and a menu entry but no command, so the menu and the keyboard both
+        # answered 'Unknown command "SELECTSIMILAR"' -- and ADDSELECTED
+        # submitted itself. tests/test_every_tool_is_a_command.py keeps the
+        # rest of the tools typed-reachable.
+        for name in ("SELECTSIMILAR", "ISOLATEOBJECTS", "HIDEOBJECTS",
+                     "ADDSELECTED", "TEXTEDIT", "HATCHEDIT"):
+            d.register(name, lambda *a, n=name: self.tools.start_tool(n))
         d.register("U", self._cmd_undo)
         d.register("UNDO", self._cmd_undo_count)
         d.register("REDO", self._cmd_redo)
