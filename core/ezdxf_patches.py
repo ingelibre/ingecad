@@ -1084,8 +1084,15 @@ def _patch_polygon_transform() -> None:
     showed the pattern cut and doubled at every joint; MOVE, COPY and
     EXPLODE slid the pattern under the hatch the same way. The base
     points now follow the image of the hatch's OCS origin.
+
+    ezdxf 1.4.5 moves the base points itself, reading them as vectors
+    (``base_point.x``): a pattern line holding a plain tuple -- what
+    ``add_line`` stores when handed one -- raises there. The lines are
+    vectors before the original runs, and the rebuilt ones are too; the
+    rebuild from the snapshot replaces whatever the original did, so the
+    result is the same on both versions.
     """
-    from ezdxf.math import OCSTransform, Vec3
+    from ezdxf.math import OCSTransform, Vec2, Vec3
 
     original = DXFPolygon.transform
 
@@ -1098,6 +1105,9 @@ def _patch_polygon_transform() -> None:
             # where the OCS origin goes, in the hatch's new OCS
             shift = OCSTransform(self.dxf.extrusion, m).transform_vertex(
                 Vec3(0, 0, Vec3(self.dxf.elevation).z))
+            for line in pattern.lines:
+                line.base_point = Vec2(line.base_point)
+                line.offset = Vec2(line.offset)
         result = original(self, m)
         if snapshot is not None and self.pattern:
             factor = (self.dxf.pattern_scale / old_scale
@@ -1111,8 +1121,8 @@ def _patch_polygon_transform() -> None:
             self.pattern.clear()
             for angle, base, offset, dashes in rebuilt:
                 self.pattern.add_line(
-                    angle, (base[0] + shift.x, base[1] + shift.y),
-                    offset, dashes)
+                    angle, Vec2(base[0] + shift.x, base[1] + shift.y),
+                    Vec2(offset), dashes)
         return result
 
     transform._ingecad_patch = True  # marker for tests / idempotence
