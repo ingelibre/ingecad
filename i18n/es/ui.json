@@ -1832,6 +1832,7 @@
   "DWG support needs LibreDWG's converter (dwg2dxf), and it was not found.": "El soporte DWG necesita el conversor de LibreDWG (dwg2dxf), y no se encontró.",
   "Manage extensions...": "Administrar extensiones...",
   "unavailable: {reason}": "no disponible: {reason}",
+  "needs plugin API {need}; this IngeCAD offers {have}. Update IngeCAD.": "necesita la API de complementos {need}; este IngeCAD ofrece la {have}. Actualice IngeCAD.",
   "Location: {path}": "Ubicación: {path}",
   "Snap to grid": "Forzar el cursor a la rejilla",
   "SNAP": "FORZC",

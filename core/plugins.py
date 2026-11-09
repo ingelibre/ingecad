@@ -24,6 +24,14 @@ from typing import Callable, Iterable, Optional
 
 from core.paths import app_root
 
+#: The level of the plugin contract this IngeCAD offers. A plugin states the
+#: level it was written for in ``PluginSpec.api_version``; one that needs a
+#: higher level uses hooks this IngeCAD does not have, so it is listed with
+#: the reason and never activated half-working. Raised by one each time the
+#: contract grows (docs/plugins.md says what every level added); a level is
+#: never taken back, so a plugin for an older level keeps working.
+API_VERSION = 1
+
 
 # -- what a plugin declares ----------------------------------------------------
 
@@ -66,7 +74,9 @@ class PluginSpec:
     ``<lang>/ui.json`` and ``<lang>/commands.json`` in the same shape as the
     app's ``i18n/``. ``requires`` names importable modules the plugin needs;
     a missing one lists the plugin as unavailable with the reason instead of
-    breaking the start-up.
+    breaking the start-up. ``api_version`` is the contract level the plugin
+    was written for (:data:`API_VERSION`); a level this IngeCAD does not
+    reach lists it as unavailable the same way.
     """
 
     id: str
@@ -82,6 +92,7 @@ class PluginSpec:
     options_page: Optional[Callable] = None
     i18n_dir: Optional[Path] = None
     on_document_open: Optional[Callable] = None
+    api_version: int = 1
 
 
 @dataclass
@@ -115,14 +126,26 @@ class LoadedPlugin:
     missing: tuple[str, ...] = ()
 
     @property
+    def too_new(self) -> bool:
+        """Written for a contract level this IngeCAD does not offer."""
+        return self.spec is not None and needed_api(self.spec) > API_VERSION
+
+    @property
     def available(self) -> bool:
-        return self.spec is not None and not self.missing and not self.error
+        return (self.spec is not None and not self.missing and not self.error
+                and not self.too_new)
 
     @property
     def reason(self) -> str:
         """Why it cannot be turned on, in plain words (empty when it can)."""
         if self.error:
             return self.error
+        if self.too_new:
+            from core.i18n import tr
+
+            return tr("needs plugin API {need}; this IngeCAD offers {have}. "
+                      "Update IngeCAD.", need=needed_api(self.spec),
+                      have=API_VERSION)
         if self.missing:
             return "needs " + ", ".join(self.missing)
         return ""
@@ -168,6 +191,13 @@ def plugin_screenshot(folder: Path) -> Optional[Path]:
         if path.is_file():
             return path
     return None
+
+
+def needed_api(spec: PluginSpec) -> int:
+    """The contract level ``spec`` asks for; a value that is not a whole
+    number reads as the first level."""
+    value = getattr(spec, "api_version", 1)
+    return value if isinstance(value, int) and value >= 1 else 1
 
 
 def missing_requirements(spec: PluginSpec) -> tuple[str, ...]:

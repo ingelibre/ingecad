@@ -137,6 +137,20 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `i18n_dir` | `<dir>/<lang>/ui.json` strings merge after the app's catalog (the app wins a clash); `<dir>/<lang>/commands.json` adds localized command names, English always kept |
 | `requires` | module names; a missing one lists the plugin as *unavailable: needs X* instead of breaking start-up |
 | `on_document_open` | `callable(ctx, document)` after a drawing is created or opened |
+| `api_version` | the plugin contract level it was written for (default 1); see below |
+
+## Contract levels (`api_version`)
+
+`core.plugins.API_VERSION` is the level of the contract this IngeCAD offers.
+A plugin sets `api_version` to the level whose hooks it uses. If that is
+higher than the running IngeCAD offers, the plugin is not imported half-way:
+the extension center lists it as *unavailable: needs plugin API N; this
+IngeCAD offers M. Update IngeCAD.* A level is never taken back, so a plugin
+written for level 1 keeps working on every later IngeCAD.
+
+| level | IngeCAD | what it added |
+|---|---|---|
+| 1 | 0.5 | everything in the table above |
 
 ## The rules a plugin lives by
 
