@@ -711,6 +711,7 @@
   "A line cannot join a closed polyline.": "Una línea no se puede unir a una polilínea cerrada.",
   "Radius is too large.": "El radio es demasiado grande.",
   "The polyline has no segment there.": "La polilínea no tiene un segmento ahí.",
+  "FILLET joins a construction line with a line or another construction line.": "EMPALME une una línea auxiliar con una línea u otra línea auxiliar.",
   "FILLET joins a polyline segment with a line or another polyline segment.": "EMPALME une un segmento de polilínea con una línea u otro segmento de polilínea.",
   "Select first line or [Undo/Polyline/Distance/Angle/Trim/mEthod/Multiple]:": "Designe la primera línea o [Deshacer(U)/Polilínea(P)/Distancia(D)/Ángulo(A)/Recortar(T)/Método(E)/Múltiple(M)]:",
   "Select second line or shift-select to apply corner or [Distance/Angle/Method]:": "Designe la segunda línea o pulse Mayús y designe para aplicar esquina o [Distancia(D)/Ángulo(A)/Método(M)]:",

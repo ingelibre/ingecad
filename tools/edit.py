@@ -1315,6 +1315,47 @@ class ExtendTool(_TrimExtendBase):
         self.name = "EXTEND"
 
 
+#: What FILLET rounds as straight lines: a line, an xline, a ray.
+_LINE_LIKE = {"LINE", "XLINE", "RAY"}
+
+
+def _line_like_segment(entity, reach: float | None = None) -> tuple:
+    """A line's ends; an xline or a ray as a chord ``reach`` long each way
+    from its base (a ray only forward). A chord of the selection index's
+    million units put the corner 1e-5 off: the reach follows the picks."""
+    kind = entity.dxftype()
+    if kind in ("XLINE", "RAY"):
+        base, d = entity.dxf.start, entity.dxf.unit_vector
+        back = 0.0 if kind == "RAY" else reach
+        return (base.x - d.x * back, base.y - d.y * back,
+                base.x + d.x * reach, base.y + d.y * reach)
+    return (entity.dxf.start.x, entity.dxf.start.y,
+            entity.dxf.end.x, entity.dxf.end.y)
+
+
+def _line_like_piece(entity, chord, piece):
+    """The factory of what is kept of ``entity`` (its ``chord``): ``piece``
+    as a line, or -- an end of it at an xline's or a ray's unbounded end --
+    a ray from the other end that way, as classic CAD leaves a filleted
+    xline."""
+    from core.modify import inherit_style
+
+    a, b = (piece[0], piece[1]), (piece[2], piece[3])
+    if entity.dxftype() in ("XLINE", "RAY"):
+        far = [(chord[2], chord[3])]
+        if entity.dxftype() == "XLINE":
+            far.append((chord[0], chord[1]))
+        tol = 1e-9 * max(1.0, math.dist((chord[0], chord[1]),
+                                        (chord[2], chord[3])))
+        for start, end in ((a, b), (b, a)):
+            if any(math.dist(end, f) <= tol for f in far):
+                d = math.dist(start, end)
+                u = ((end[0] - start[0]) / d, (end[1] - start[1]) / d, 0.0)
+                return (lambda msp, s=start, u=u: inherit_style(
+                    msp.add_ray((s[0], s[1], 0.0), u), entity))
+    return (lambda msp: inherit_style(msp.add_line(a, b), entity))
+
+
 class FilletTool(Tool):
     """FILLET, with AutoCAD's prompts and options (Command Reference,
     FILLET): Undo, Polyline, Radius, Trim, Multiple, and Shift on the
@@ -1470,7 +1511,7 @@ class FilletTool(Tool):
             self._fillet_polyline(entity)
             return
         if entity is None or entity.dxftype() not in (
-                "LINE", "ARC", "CIRCLE", "LWPOLYLINE"):
+                "LINE", "XLINE", "RAY", "ARC", "CIRCLE", "LWPOLYLINE"):
             self.ctx.echo(tr("FILLET joins lines, arcs, circles and "
                              "polyline segments."))
             return
@@ -1485,10 +1526,15 @@ class FilletTool(Tool):
         # Shift on the second pick: a sharp corner, radius 0 this once
         radius = 0.0 if getattr(self, "shift", False) else type(self).radius
         kinds = {entity.dxftype(), self._first.dxftype()}
-        if "LWPOLYLINE" in kinds:
-            done = self._fillet_segments(entity, point, radius)
-        elif "LINE" == entity.dxftype() == self._first.dxftype():
+        if kinds <= _LINE_LIKE:
             done = self._fillet_lines(entity, point, radius)
+        elif kinds & {"XLINE", "RAY"}:
+            # an xline or a ray rounds with a line, or another of its kind
+            self.ctx.echo(tr("FILLET joins a construction line with a line "
+                             "or another construction line."))
+            done = False
+        elif "LWPOLYLINE" in kinds:
+            done = self._fillet_segments(entity, point, radius)
         else:
             done = self._fillet_curves(entity, point, radius)
         if done:
@@ -1515,10 +1561,19 @@ class FilletTool(Tool):
         from core.modify import common_style_source, inherit_style
 
         first = self._first
-        s1 = (first.dxf.start.x, first.dxf.start.y,
-              first.dxf.end.x, first.dxf.end.y)
-        s2 = (entity.dxf.start.x, entity.dxf.start.y,
-              entity.dxf.end.x, entity.dxf.end.y)
+        # Far enough past both picks and both bases that the corner and
+        # the fillet always fall inside the chords.
+        spots = [self._first_pick, point]
+        for e in (first, entity):
+            if e.dxftype() in ("XLINE", "RAY"):
+                spots.append((e.dxf.start.x, e.dxf.start.y))
+            else:
+                spots += [(e.dxf.start.x, e.dxf.start.y),
+                          (e.dxf.end.x, e.dxf.end.y)]
+        reach = 4.0 * max(math.dist(a, b) for a in spots for b in spots) \
+            + 4.0 * radius + 1.0
+        s1 = _line_like_segment(first, reach)
+        s2 = _line_like_segment(entity, reach)
         source = common_style_source([first, entity])
         parallel = editmath.fillet_parallel(s1, self._first_pick, s2)
         if parallel is not None:
@@ -1526,8 +1581,7 @@ class FilletTool(Tool):
             # (the radius is half the distance, whatever it is set to).
             new_s2, (center, r, a0, a1) = parallel
             self._run([entity],
-                      [lambda msp, p=new_s2: inherit_style(
-                          msp.add_line((p[0], p[1]), (p[2], p[3])), entity)],
+                      [_line_like_piece(entity, s2, new_s2)],
                       lambda msp: inherit_style(
                           msp.add_arc(center, r, a0, a1), source))
             return True
@@ -1563,10 +1617,8 @@ class FilletTool(Tool):
         # new arc has no object of its own, so it takes them only when both
         # edges agree — otherwise the current settings decide.
         self._run([first, entity],
-                  [lambda msp, p=n1: inherit_style(
-                      msp.add_line((p[0], p[1]), (p[2], p[3])), first),
-                   lambda msp, p=n2: inherit_style(
-                      msp.add_line((p[0], p[1]), (p[2], p[3])), entity)],
+                  [_line_like_piece(first, s1, n1),
+                   _line_like_piece(entity, s2, n2)],
                   arc)
         return True
 
