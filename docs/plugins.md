@@ -145,6 +145,7 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `on_before` | `callable(ctx, event) -> str or None` for `"undo"`, `"save"` and `"close"` (a drawing or the window): a text stops it and is shown as the reason (level 2) |
 | `on_double_click` | `callable(ctx, entity) -> bool`, asked before the core's own editor for that object; True means the plugin handled it (level 2) |
 | `properties_sections` | `callable(ctx, entities) -> [(title, [Row, ...])]`: sections of its own in the Properties panel (level 2, below) |
+| `toolbars` | `(ToolbarSpec(id, title, items), ...)`: more bars beside `toolbar`, on and off with it (level 2) |
 | `reactors` | objects with `before(document)` and `react(document, state)`: keep derived objects true after any command, in its undo step (level 2, below) |
 
 ### A tool's own overlay and preview (level 2)
@@ -247,6 +248,29 @@ object's own value (`"*0.9"` in a `"str"` row). A `"num"` row receives a
 float and accepts a decimal comma. Do not add the type's core section
 again: it is already there.
 
+### More than one toolbar (`toolbars`, level 2)
+
+```python
+from core.plugins import ToolbarItem, ToolbarSpec
+
+PLUGIN = PluginSpec(
+    id="mi_disciplina", name="...",
+    toolbar=(ToolbarItem("Point", "MYPOINT"),),
+    toolbars=(ToolbarSpec("data", "Survey data", (
+        ToolbarItem("Import", "MYIMPORT", key="import"),
+        SEPARATOR,
+        ToolbarItem("Table", "MYTABLE"))),))
+```
+
+All of a plugin's bars come and go together with its toolbar setting (the
+extension manager; off by default). Hiding the main bar from the
+right-click list turns that setting off; hiding one of the `toolbars` hides
+only that bar, and it is remembered. Each button's QAction carries the
+`plugin_key` property (`key`, or the command when none is given), and
+`ctx.toolbar(plugin_id)` / `ctx.toolbar(plugin_id, "data")` return the bar
+on screen, or None while the bars are off. Never reach the window's own
+attributes for them.
+
 ### What the context answers (level 2)
 
 A plugin never reads the window's private attributes: they change from one
@@ -276,7 +300,7 @@ written for level 1 keeps working on every later IngeCAD.
 | level | IngeCAD | what it added |
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
-| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, `properties_sections` with `Row`, the tool's `overlay`, `preview_entities`, `on_key` and `suppress_selection_highlight`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
+| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, `properties_sections` with `Row`, `toolbars` with `ToolbarSpec`, `ToolbarItem.key`, the tool's `overlay`, `preview_entities`, `on_key` and `suppress_selection_highlight`, and the context's `toolbar`, `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
 
 ## The rules a plugin lives by
 

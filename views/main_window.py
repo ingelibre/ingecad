@@ -429,7 +429,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
 
         self.plugins = PluginManager(host=self)
         self.plugins.discover()
-        self._plugin_toolbars: dict = {}
+        self._plugin_bars: dict = {}     # plugin id -> {bar id: QToolBar}
 
         self._build_menus()
         self._build_status_bar()
@@ -2004,37 +2004,69 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         i18n.unregister_pack_dir(path)
 
     def add_toolbar(self, spec) -> None:
+        """Every toolbar of a plugin: its ``toolbar`` (bar id = the plugin's
+        id) and each of its ``toolbars``."""
+        bars = {}
+        if spec.toolbar:
+            bars[spec.id] = self._plugin_bar(
+                spec.id, f"plugin_{spec.id}_toolbar", spec.name, spec.toolbar)
+            # Hidden from the right-click list, it stays hidden: the
+            # plugin's own toolbar setting answers that (extension
+            # manager), one place. Later, not now -- the menu is still
+            # using the bar's action.
+            bars[spec.id].toggleViewAction().triggered.connect(
+                lambda checked, pid=spec.id: QTimer.singleShot(
+                    0, lambda: self.plugins.set_toolbar_enabled(pid, checked)))
+        for extra in spec.toolbars:
+            name = f"plugin_{spec.id}_{extra.id}_toolbar"
+            bar = self._plugin_bar(spec.id, name, extra.title, extra.items)
+            # One of several: the right-click list hides just this one,
+            # remembered as a core bar is (#107).
+            key = f"toolbars/{name}"
+            raw = QSettings().value(key, None)
+            if raw is not None and str(raw).lower() in ("false", "0", "no"):
+                bar.setVisible(False)
+            bar.toggleViewAction().triggered.connect(
+                lambda checked, k=key: QSettings().setValue(k, bool(checked)))
+            bars[extra.id] = bar
+        self._plugin_bars[spec.id] = bars
+
+    def _plugin_bar(self, plugin_id, name, title, items):
         from PySide6.QtGui import QIcon
         from PySide6.QtWidgets import QToolBar
 
         from core.plugins import SEPARATOR
         from views.icons import command_icon
 
-        bar = QToolBar(tr(spec.name), self)
-        bar.setObjectName(f"plugin_{spec.id}_toolbar")
+        bar = QToolBar(tr(title), self)
+        bar.setObjectName(name)
         bar.setMovable(True)
-        for entry in spec.toolbar:
+        for entry in items:
             if entry == SEPARATOR:          # as in a plugin's menu
                 bar.addSeparator()
                 continue
             icon = QIcon(str(entry.icon)) if entry.icon else command_icon(entry.command)
             act = QAction(icon, tr(entry.label), self)
             act.setToolTip(f"{tr(entry.label)} ({entry.command})")
+            act.setProperty("plugin_key", entry.key or entry.command)
             act.triggered.connect(
                 lambda _=False, n=entry.command: self._invoke_command(n))
             bar.addAction(act)
         self.addToolBar(Qt.TopToolBarArea, bar)
-        self._plugin_toolbars[spec.id] = bar
-        # Hidden from the right-click list, it stays hidden: the plugin's own
-        # toolbar setting answers that (extension manager), one place. Later,
-        # not now -- the menu is still using the bar's action.
-        bar.toggleViewAction().triggered.connect(
-            lambda checked, pid=spec.id: QTimer.singleShot(
-                0, lambda: self.plugins.set_toolbar_enabled(pid, checked)))
+        return bar
+
+    @property
+    def _plugin_toolbars(self) -> dict:
+        """Each plugin's main toolbar, by plugin id (read only; plugins ask
+        ``ctx.toolbar``)."""
+        return {pid: bars[pid] for pid, bars in self._plugin_bars.items()
+                if pid in bars}
+
+    def plugin_toolbar(self, plugin_id: str, bar_id=None):
+        return self._plugin_bars.get(plugin_id, {}).get(bar_id or plugin_id)
 
     def remove_toolbar(self, plugin_id: str) -> None:
-        bar = self._plugin_toolbars.pop(plugin_id, None)
-        if bar is not None:
+        for bar in self._plugin_bars.pop(plugin_id, {}).values():
             self.removeToolBar(bar)
             bar.setParent(None)        # gone from findChildren at once,
             bar.deleteLater()          # not at the next event-loop turn

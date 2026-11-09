@@ -61,6 +61,19 @@ class ToolbarItem:
     label: str
     command: str
     icon: Optional[Path] = None
+    #: Stable name of the button (its QAction's ``plugin_key`` property);
+    #: the command when not given.
+    key: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ToolbarSpec:
+    """One more toolbar of a plugin (``PluginSpec.toolbars``, level 2):
+    ``id`` unique within the plugin, ``items`` as ``PluginSpec.toolbar``."""
+
+    id: str
+    title: str
+    items: tuple = ()
 
 
 class _Consumed:
@@ -148,6 +161,7 @@ class PluginSpec:
     on_double_click: Optional[Callable] = None
     reactors: tuple = ()
     properties_sections: Optional[Callable] = None
+    toolbars: tuple = ()
 
 
 @dataclass
@@ -196,6 +210,12 @@ class PluginContext:
         """Make ``entities`` the selection, as a pick would (a locked
         layer's stay out with no command running); returns how many."""
         return self.host.tools.select_entities(entities)
+
+    def toolbar(self, plugin_id: str, bar_id: Optional[str] = None):
+        """The QToolBar on screen for a plugin: its ``toolbar`` with no
+        ``bar_id``, or one of its ``toolbars`` by id. None while the user
+        keeps the plugin's toolbars off."""
+        return self.host.plugin_toolbar(plugin_id, bar_id)
 
     @property
     def pick_tolerance(self) -> float:
@@ -523,7 +543,8 @@ class PluginManager:
     # -- the toolbar, the user's choice -----------------------------------------------
     def has_toolbar(self, plugin_id: str) -> bool:
         loaded = self.loaded.get(plugin_id)
-        return bool(loaded and loaded.spec is not None and loaded.spec.toolbar)
+        return bool(loaded and loaded.spec is not None
+                    and (loaded.spec.toolbar or loaded.spec.toolbars))
 
     def toolbar_enabled(self, plugin_id: str) -> bool:
         """Does the user want this plugin's toolbar shown? Off until asked."""
@@ -613,7 +634,8 @@ class PluginManager:
             if spec.i18n_dir is not None and Path(spec.i18n_dir).is_dir():
                 host.add_pack_dir(Path(spec.i18n_dir))
                 record.pack_dir = Path(spec.i18n_dir)
-            if spec.toolbar and self.toolbar_enabled(spec.id):
+            if (spec.toolbar or spec.toolbars) \
+                    and self.toolbar_enabled(spec.id):
                 host.add_toolbar(spec)
                 record.toolbar = True
             host.menus_changed()
