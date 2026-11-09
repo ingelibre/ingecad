@@ -26,13 +26,12 @@ from PySide6.QtWidgets import (
 )
 
 from core import attributes as att
+from core import text_justify
 from core.i18n import tr
 
-#: Justification names in the dialog's dropdown, in TEXT's order.
-JUSTIFICATIONS = ["LEFT", "CENTER", "RIGHT", "ALIGNED", "MIDDLE", "FIT",
-                  "TOP_LEFT", "TOP_CENTER", "TOP_RIGHT", "MIDDLE_LEFT",
-                  "MIDDLE_CENTER", "MIDDLE_RIGHT", "BOTTOM_LEFT",
-                  "BOTTOM_CENTER", "BOTTOM_RIGHT"]
+#: Justification names in the dialog's dropdown, in TEXT's order: the
+#: Properties panel's list (core.text_justify), labels translated alike.
+JUSTIFICATIONS = [name for _label, name in text_justify.JUSTIFICATIONS]
 
 #: The definition made last in this process, per document id: "Align below
 #: previous attribute definition" places the next one under it.
@@ -126,8 +125,8 @@ class AttDefDialog(QDialog):
         settings = QGroupBox(tr("Text Settings"), self)
         form = QFormLayout(settings)
         self.justification = QComboBox(settings)
-        for name in JUSTIFICATIONS:
-            self.justification.addItem(name.replace("_", " ").title(), name)
+        for label, name in text_justify.JUSTIFICATIONS:
+            self.justification.addItem(tr(label), name)
         self.style = QComboBox(settings)
         for name in sorted(s.dxf.name for s in document.doc.styles):
             self.style.addItem(name)
