@@ -2139,8 +2139,29 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         # F2: the classic expanded text window (command history).
         from PySide6.QtGui import QShortcut
         QShortcut(QKeySequence("F2"), self, self._toggle_text_window)
+        # F4-F6 are not the core's: the running tool may take them
+        # (Tool.on_key, plugins' level 2).
+        from tools.base import Tool as _Tool
+        for key in _Tool.FREE_KEYS:
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setObjectName(f"free_key_{key}")
+            shortcut.activated.connect(self._on_free_key)
         self.command_line.echo(tr("IngeCAD — type a command (L, C, Z, ...)"))
         self._build_mode_toggles()
+
+    def _on_free_key(self) -> None:
+        """A free function key goes to the running tool, if it wants it."""
+        key = self.sender().key().toString()
+        tool = self.tools.tool
+        if tool is None:
+            return
+        try:
+            used = tool.on_key(key)
+        except Exception as exc:          # noqa: BLE001 - a plugin's tool
+            self.command_line.echo(f"{key}: {type(exc).__name__}: {exc}")
+            return
+        if used:
+            self.tools.changed.emit()
 
     def _tell_plugins_selection(self) -> None:
         """Plugins' ``on_selection_changed`` hear a new selection, once:

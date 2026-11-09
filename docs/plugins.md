@@ -159,6 +159,13 @@ A plugin's `Tool` subclass may answer, besides `preview_segments(cursor)`:
 - `suppress_selection_highlight = True` to hide the selection's highlight
   while it runs, when the tool shows what it chose itself.
 
+### Function keys for a tool (`Tool.on_key`, level 2)
+
+F4, F5 and F6 are not the core's (`Tool.FREE_KEYS`). While a tool runs,
+pressing one calls `tool.on_key("F5")`; return True if the tool used it
+(the viewport repaints). Without a running tool the keys do nothing, and
+the core's keys (F1-F3, F7-F12) are never offered.
+
 ### Reading the keyboard first (`input_filters`, level 2)
 
 Each filter is called with what the user typed — `""` for Enter, and
@@ -244,7 +251,7 @@ written for level 1 keeps working on every later IngeCAD.
 | level | IngeCAD | what it added |
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
-| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, the tool's `overlay`, `preview_entities` and `suppress_selection_highlight`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
+| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, the tool's `overlay`, `preview_entities`, `on_key` and `suppress_selection_highlight`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
 
 ## The rules a plugin lives by
 

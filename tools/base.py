@@ -184,6 +184,15 @@ class Tool:
         :meth:`preview_segments`."""
         return {}
 
+    #: The function keys the core leaves free, offered to the running
+    #: tool through :meth:`on_key`.
+    FREE_KEYS = ("F4", "F5", "F6")
+
+    def on_key(self, key: str) -> bool:
+        """A free function key (:attr:`FREE_KEYS`, e.g. ``"F5"``) pressed
+        while the tool runs. True if the tool used it (contract level 2)."""
+        return False
+
     def preview_entities(self, cursor: Point) -> list:
         """Virtual entities (built for the drawing, never added to it)
         rendered as what the next click leaves, through the real styles.
