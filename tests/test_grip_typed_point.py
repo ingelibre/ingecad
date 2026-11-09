@@ -69,6 +69,23 @@ def test_an_absolute_point_moves_the_grip(win):
     assert (line.dxf.end.x, line.dxf.end.y) == pytest.approx((20.0, 5.0))
 
 
+def test_a_bare_distance_goes_toward_the_cursor(win):
+    """#125: "changing a line length ... using grips does not work with
+    numeric input". The cursor shows the way, the number is how far."""
+    line = _hot_end_grip(win)
+    win.tools.on_hover(10, 8, threshold_world=0.5)      # straight up
+    _type(win, "3")
+    assert not win.tools.grip_hot()
+    assert (line.dxf.end.x, line.dxf.end.y) == pytest.approx((10.0, 3.0))
+
+
+def test_a_distance_along_the_line_changes_its_length(win):
+    line = _hot_end_grip(win)
+    win.tools.on_hover(30, 0, threshold_world=0.5)      # on along the line
+    _type(win, "2.5")
+    assert (line.dxf.end.x, line.dxf.end.y) == pytest.approx((12.5, 0.0))
+
+
 def test_a_letter_does_not_start_a_command(win):
     line = _hot_end_grip(win)
     _type(win, "L")
