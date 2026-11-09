@@ -156,7 +156,34 @@ class PropertiesPanel(QWidget):
             for title, rows in self._schema(entities):
                 self._add_section(title, rows, entities)
         self.tree.expandAll()
+        self._fit_label_column()
         self._loading = False
+
+    #: The names' column never takes more than this share of the panel:
+    #: the values stay readable.
+    LABEL_SHARE = 0.55
+
+    def _fit_label_column(self) -> None:
+        """The names' column as wide as its longest name, up to
+        :data:`LABEL_SHARE` of the panel: "Text position X" and its kin
+        were cut to "Text position..." at the column's default width.
+        Whatever is still cut shows whole in its tooltip."""
+        metrics = self.tree.fontMetrics()
+        widest = 0
+        for i in range(self.tree.topLevelItemCount()):
+            head = self.tree.topLevelItem(i)
+            for j in range(head.childCount()):
+                widest = max(widest, metrics.horizontalAdvance(
+                    head.child(j).text(0)))
+        if widest == 0:
+            return
+        room = self.tree.viewport().width() or self.width()
+        want = widest + self.tree.indentation() * 2 + 16
+        self.tree.setColumnWidth(0, int(min(want, room * self.LABEL_SHARE)))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._fit_label_column()
 
     def _add_section(self, title: str, rows: list, entities: list) -> None:
         head = QTreeWidgetItem(self.tree, [title])
@@ -172,6 +199,7 @@ class PropertiesPanel(QWidget):
 
     def _add_row(self, parent, row: Row, entities: list) -> None:
         item = QTreeWidgetItem(parent, [row.label, ""])
+        item.setToolTip(0, row.label)          # whole, if the column cuts it
         item.setForeground(0, Qt.GlobalColor.gray)
         value = self._common(entities, row.get)
         if row.kind == "ro":
