@@ -49,10 +49,19 @@ _ACI = [("ByBlock", 0), ("ByLayer", 256), ("Red", 1), ("Yellow", 2),
         ("Green", 3), ("Cyan", 4), ("Blue", 5), ("Magenta", 6), ("White", 7)]
 
 # Arrowhead names (ezdxf ARROWS constants; "" = AutoCAD's Closed filled).
+# The classic list, all twenty in its order (ISO 129-1 uses the open 90,
+# the origin and the blank dot, which were missing).
 _ARROWS = [("Closed filled", ""), ("Closed blank", "CLOSEDBLANK"),
            ("Closed", "CLOSED"), ("Dot", "DOT"),
            ("Architectural tick", "ARCHTICK"), ("Oblique", "OBLIQUE"),
-           ("Open 30", "OPEN30"), ("None", "NONE")]
+           ("Open", "OPEN"), ("Origin indicator", "ORIGIN"),
+           ("Origin indicator 2", "ORIGIN2"), ("Right angle", "OPEN90"),
+           ("Open 30", "OPEN30"), ("Dot small", "DOTSMALL"),
+           ("Dot blank", "DOTBLANK"), ("Dot small blank", "SMALL"),
+           ("Box", "BOXBLANK"), ("Box filled", "BOXFILLED"),
+           ("Datum triangle", "DATUMBLANK"),
+           ("Datum triangle filled", "DATUMFILLED"),
+           ("Integral", "INTEGRAL"), ("None", "NONE")]
 
 _VERTICAL = [("Centered", 0), ("Above", 1), ("Outside", 2), ("JIS", 3),
              ("Below", 4)]
