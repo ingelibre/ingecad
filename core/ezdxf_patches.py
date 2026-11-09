@@ -799,6 +799,7 @@ def _patch_arc_length_symbol_text() -> None:
     ArcLengthMeasurement.__init__ = __init__
     _patch_arc_length_symbol()
     _patch_arc_length_extension_lines()
+    _patch_text_frame()
 
 
 def _patch_arc_length_symbol() -> None:
@@ -918,6 +919,68 @@ def _patch_arc_length_extension_lines() -> None:
     ArcLengthDimension.get_ext1_dir = get_ext1_dir
     ArcLengthDimension.get_ext2_dir = get_ext2_dir
     ArcLengthDimension._add_ext_line = _add_ext_line
+
+
+def _patch_text_frame() -> None:
+    """A negative DIMGAP frames the dimension text, as classic CAD does
+    ("Draw frame around text"; the theoretically exact dimension of
+    UNE-EN ISO 129-1). The gap is its absolute value.
+
+    ezdxf took the negative number as it came: no frame, and the text sat
+    that far *into* the dimension line instead of clear of it.
+
+    The frame is four lines, the text's width (as measured in its style)
+    and height plus the gap on every side, in the dimension line's
+    colour, linetype and lineweight.
+    """
+    from ezdxf.math import Vec2
+    from ezdxf.render.dim_base import (BaseDimensionRenderer, Measurement,
+                                       TextBox)
+
+    if getattr(BaseDimensionRenderer.add_text, "_ingecad_frame", False):
+        return
+    original_init = Measurement.__init__
+    original_add_text = BaseDimensionRenderer.add_text
+    original_text_box = BaseDimensionRenderer.init_text_box
+
+    def init_text_box(self):
+        """A framed text hides the dimension line up to its frame."""
+        measurement = self.measurement
+        if not getattr(measurement, "_ingecad_framed", False):
+            return original_text_box(self)
+        return TextBox(center=measurement.text_location,
+                       width=self.total_text_width(),
+                       height=measurement.text_height,
+                       angle=measurement.text_rotation or 0.0,
+                       hgap=measurement.text_gap,
+                       vgap=measurement.text_gap * 0.75)  # as ezdxf
+
+    def measurement_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self._ingecad_framed = self.text_gap < 0.0
+        self.text_gap = abs(self.text_gap)
+
+    def add_text(self, text, pos, rotation, dxfattribs) -> None:
+        original_add_text(self, text, pos, rotation, dxfattribs)
+        measurement = self.measurement
+        if not text or not getattr(measurement, "_ingecad_framed", False):
+            return
+        gap = measurement.text_gap
+        half_w = self.total_text_width() / 2.0 + gap
+        half_h = measurement.text_height / 2.0 + gap
+        u = Vec2.from_deg_angle(rotation)
+        v = u.orthogonal()
+        center = Vec2(pos)
+        corners = [center + u * (sx * half_w) + v * (sy * half_h)
+                   for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        attribs = self.dimension_line.dxfattribs()
+        for start, end in zip(corners, corners[1:] + corners[:1]):
+            self.add_line(start, end, dxfattribs=dict(attribs))
+
+    Measurement.__init__ = measurement_init
+    BaseDimensionRenderer.init_text_box = init_text_box
+    add_text._ingecad_frame = True
+    BaseDimensionRenderer.add_text = add_text
 
 
 def _patch_single_vertex_leader() -> None:
