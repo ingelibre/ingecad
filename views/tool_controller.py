@@ -3656,6 +3656,8 @@ class ToolController(QObject):
             self._selection_option(text.strip())
             self.changed.emit()
             return True
+        if self.tool is None and self._grip_drag is not None:
+            return self._grip_text(text)
         if self.tool is None:
             return False
         stripped = text.strip()
@@ -3854,6 +3856,68 @@ class ToolController(QObject):
                 return (x, y, role, h, i)
         return None
 
+    #: What a hot grip asks, as classic CAD's grip STRETCH mode does. Only
+    #: eXit is offered: Base point, Copy and Undo come with the
+    #: multifunction grips.
+    GRIP_PROMPT = "Specify stretch point or [eXit]:"
+
+    def grip_hot(self) -> bool:
+        """A grip is held: what is typed is its point, not a command."""
+        return self._grip_drag is not None
+
+    def _ask_grip_point(self) -> None:
+        self.window.command_line.echo(tr("** STRETCH **"))
+        self._on_prompt(tr(self.GRIP_PROMPT))
+
+    def _grip_text(self, text: str) -> bool:
+        """Typed while a grip is hot: a point for it (absolute, @relative,
+        polar, or a distance toward the cursor), X to let it go. A word
+        that is neither is refused -- it used to reach the command line,
+        and an "L" started LINE with the grip still in the hand."""
+        stripped = text.strip()
+        if not stripped:
+            return True                    # Enter keeps the grip hot
+        if stripped.upper() in ("X", "EXIT", "_X", "_EXIT"):
+            self.cancel()
+            self.current_prompt = ""
+            self.changed.emit()
+            return True
+        from core.calc import expand_input
+
+        stripped = expand_input(stripped)
+        # @ and a bare distance are measured from where the grip was taken
+        anchor = getattr(self, "_grip_base", None) or self.lastpoint
+        direction = self.current_ucs().angle
+        if self._cursor is not None:
+            target = self.resolved_point(*self._cursor)
+            if math.hypot(target[0] - anchor[0], target[1] - anchor[1]) > 0:
+                direction = math.atan2(target[1] - anchor[1],
+                                       target[0] - anchor[0])
+        try:
+            frame = self.current_ucs()
+            point = parse_point(stripped, frame.to_ucs(*anchor),
+                                direction - frame.angle,
+                                relative_default=self.dyn_on)
+            if point is not None and not frame.is_world:
+                point = ParsedPoint(*frame.to_world(point.x, point.y))
+        except CoordinateError as exc:
+            self.window.command_line.echo(tr("Invalid point: {error}",
+                                             error=str(exc)))
+            return True
+        if point is None:
+            asked = tr(self.GRIP_PROMPT)
+            options = re.search(r"\[([^\]]+)\]", asked)
+            self.window.command_line.echo(
+                tr("Expects a point or {options}",
+                   options=options.group(1) if options else "eXit"))
+            self._on_prompt(asked)
+            return True
+        self._note_point((point.x, point.y))
+        self.finish_grip_drag(point.x, point.y)
+        self.current_prompt = ""
+        self.changed.emit()
+        return True
+
     def begin_grip_drag(self, grip) -> None:
         from core.actions import SnapshotCommand
         from core.select import entity_grips
@@ -3862,8 +3926,10 @@ class ToolController(QObject):
         if self.paper_vp is not None:
             # viewport grip: only the rubber rectangle moves until the drop
             self._grip_drag = (_VP_GRIP, index, role, None)
+            self._grip_base = (gx, gy)
             self.window.viewport.vp_drag_rect = layout_ops.viewport_rect(
                 self.paper_vp)
+            self._ask_grip_point()
             return
         entity = self.index.entity(handle)
         if entity is None:
@@ -3881,6 +3947,7 @@ class ToolController(QObject):
             # stay — the drag moves their quad surgically, no regen.
             self.window.viewport.show_image(handle)
         self._refresh_overlay()
+        self._ask_grip_point()
 
     def current_ucs(self):
         """The UCS typed points, the readout, ORTHO, POLAR and the grid

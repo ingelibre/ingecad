@@ -2153,7 +2153,8 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         self.plugins.selection_changed()
 
     def _on_command_submitted(self, text: str) -> None:
-        if self.tools.active() or self.dispatcher.pending_prompt is not None:
+        if (self.tools.active() or self.tools.grip_hot()
+                or self.dispatcher.pending_prompt is not None):
             self.command_line.echo_answer(text)     # "prompt: answer"
         else:
             self.command_line.echo_input(text)
