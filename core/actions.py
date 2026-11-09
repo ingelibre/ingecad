@@ -2700,7 +2700,8 @@ def angular_from_lines(l1, l2, region):
 
 
 def dim_angular(vertex, p1, p2, location, *, region=None, text: str = "<>",
-                text_rotation: float | None = None) -> AddDimensionCommand:
+                text_rotation: float | None = None,
+                dimstyle: str | None = None) -> AddDimensionCommand:
     """DIMANGULAR: the CCW angle p1 -> p2 around ``vertex``. When ``region``
     is given (the location or the Quadrant pick), the points are reordered so
     the dimensioned angle is the one containing it; None keeps the order
@@ -2714,7 +2715,7 @@ def dim_angular(vertex, p1, p2, location, *, region=None, text: str = "<>",
             base=(location[0], location[1]), center=(vertex[0], vertex[1]),
             p1=(q1[0], q1[1]), p2=(q2[0], q2[1]),
             text=text, text_rotation=text_rotation,
-            dimstyle=_current_dimstyle(document))
+            dimstyle=_chained_dimstyle(dimstyle, document))
     return AddDimensionCommand(factory)
 
 

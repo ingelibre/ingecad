@@ -47,11 +47,54 @@ def set_last_dimension(dim) -> None:
     _LAST_DIM[0] = dim
 
 
+# Dimension types a chain continues from: linear, aligned, and the two
+# angular kinds (two lines, three points).
+_CHAINABLE = (0, 1, 2, 5)
+
+
+def chainable(dim) -> bool:
+    """Whether DIMCONTINUE/DIMBASELINE can go on from ``dim``."""
+    return (dim is not None and dim.dxftype() == "DIMENSION"
+            and (dim.dxf.dimtype & 15) in _CHAINABLE)
+
+
 def last_dimension():
-    """The session's last linear-family dimension, if it still exists."""
+    """The session's last dimension a chain can follow, if it still
+    exists."""
     d = _LAST_DIM[0]
-    if d is not None and d.is_alive and (d.dxf.dimtype & 15) in (0, 1):
+    if d is not None and d.is_alive and chainable(d):
         return d
+    return None
+
+
+def angular_frame(dim):
+    """An angular dimension as (vertex, first origin, second origin,
+    radius): the origins counter-clockwise across its arc, as it is
+    drawn. A two-line dimension's rays are turned to the sector its arc
+    point lies in. None for parallel legs."""
+    kind = dim.dxf.dimtype & 15
+    if kind == 5:
+        v, a, b = dim.dxf.defpoint4, dim.dxf.defpoint2, dim.dxf.defpoint3
+        vertex, arc = (v.x, v.y), (dim.dxf.defpoint.x, dim.dxf.defpoint.y)
+        p1, p2 = actions.angular_points(vertex, (a.x, a.y), (b.x, b.y), arc)
+        return vertex, p1, p2, math.dist(vertex, arc)
+    l1 = [(q.x, q.y) for q in (dim.dxf.defpoint, dim.dxf.defpoint4)]
+    l2 = [(q.x, q.y) for q in (dim.dxf.defpoint3, dim.dxf.defpoint2)]
+    vertex = actions.line_intersection(l1, l2)
+    if vertex is None:
+        return None
+    arc = (dim.dxf.defpoint5.x, dim.dxf.defpoint5.y)
+    rays = []
+    for leg in (l1, l2):
+        far = max(leg, key=lambda q: math.dist(q, vertex))
+        rays.append([far, (2 * vertex[0] - far[0], 2 * vertex[1] - far[1])])
+    for p1 in rays[0]:
+        for p2 in rays[1]:
+            for a, b in ((p1, p2), (p2, p1)):
+                if actions.angular_measurement(vertex, a, b) < 180.0 \
+                        and actions.angular_measurement(vertex, a, arc) <= \
+                        actions.angular_measurement(vertex, a, b):
+                    return vertex, a, b, math.dist(vertex, arc)
     return None
 
 
@@ -744,6 +787,8 @@ class DimAngularTool(_DimTextMixin, Tool):
                 self.ctx.echo(tr("Lines are parallel."))
                 return
             self.ctx.execute(cmd)
+            if cmd.dim is not None:
+                set_last_dimension(cmd.dim)
             report_dimension(self.ctx, cmd, association=False)
             self.ctx.finish()
 
@@ -1029,8 +1074,9 @@ class CenterLineTool(Tool):
 
 
 class _ChainDim(Tool):
-    """DIMCONTINUE/DIMBASELINE: chain new dimensions from a base linear or
-    aligned dimension. The session's last one is picked up automatically;
+    """DIMCONTINUE/DIMBASELINE: chain new dimensions from a base linear,
+    aligned or angular dimension. The session's last one is picked up
+    automatically;
     otherwise (or via the Select option) the user picks the base. Undo drops
     the last chained dimension without leaving the command."""
 
@@ -1067,7 +1113,10 @@ class _ChainDim(Tool):
 
     @staticmethod
     def _base_location(base) -> Point:
-        p = base.dxf.defpoint
+        """Where the base's dimension line passes: its arc point for an
+        angular one."""
+        p = base.dxf.defpoint5 if (base.dxf.dimtype & 15) == 2 \
+            else base.dxf.defpoint
         return (p.x, p.y)
 
     def on_enter(self) -> None:
@@ -1100,9 +1149,9 @@ class _ChainDim(Tool):
     def on_point(self, point: Point) -> None:
         if getattr(self, "_selecting", False):
             e = self.ctx.services.pick_entity(point) if self.ctx.services else None
-            if e is None or e.dxftype() != "DIMENSION" \
-                    or (e.dxf.dimtype & 15) not in (0, 1):
-                self.ctx.echo(tr("Select a linear or aligned dimension."))
+            if e is None or not chainable(e):
+                self.ctx.echo(tr("Select a linear, aligned or angular "
+                                 "dimension."))
                 return
             self._base = e
             self._prev_location = self._base_location(e)
@@ -1114,6 +1163,9 @@ class _ChainDim(Tool):
         base = self._base
         if base is None or not base.is_alive:
             self._enter_select()
+            return
+        if (base.dxf.dimtype & 15) in (2, 5):
+            self._chain_angular(base, point)
             return
         aligned = (base.dxf.dimtype & 15) == 1
         b1 = base.dxf.defpoint2
@@ -1142,6 +1194,52 @@ class _ChainDim(Tool):
             self._prev_location = self._base_location(cmd.dim)
         self.prompt(self._chain_prompt())
 
+    def _chain_angular(self, base, point: Point) -> None:
+        """The next angle around the base's vertex: from its second
+        extension line on (continue), or from its first, its arc DIMDLI
+        farther out (baseline). Both go on counter-clockwise, the way the
+        base is measured."""
+        frame = angular_frame(base)
+        if frame is None:
+            self.ctx.echo(tr("Lines are parallel."))
+            return
+        vertex, first, second, radius = frame
+        if self.BASELINE:
+            radius = (math.dist(vertex, self._prev_location)
+                      + self._dimdli(base))
+            start = first
+        else:
+            start = second
+        a1 = math.atan2(start[1] - vertex[1], start[0] - vertex[0])
+        a2 = math.atan2(point[1] - vertex[1], point[0] - vertex[0])
+        sweep = (a2 - a1) % (2.0 * math.pi)
+        if sweep < 1e-9:
+            return
+        mid = a1 + sweep / 2.0
+        location = (vertex[0] + radius * math.cos(mid),
+                    vertex[1] + radius * math.sin(mid))
+        cmd = actions.dim_angular(vertex, start, point, location,
+                                  dimstyle=base.dxf.get("dimstyle", None))
+        self._stack.append((self._base, self._prev_location))
+        self.ctx.execute(cmd)
+        set_last_dimension(cmd.dim)
+        report_dimension(self.ctx, cmd, association=False)
+        if self.BASELINE:
+            self._prev_location = location
+        else:
+            self._base = cmd.dim
+            self._prev_location = self._base_location(cmd.dim)
+        self.prompt(self._chain_prompt())
+
+    @staticmethod
+    def _dimdli(base) -> float:
+        dli = 3.75
+        doc = base.doc
+        style = base.dxf.get("dimstyle", None)
+        if doc is not None and style and style in doc.dimstyles:
+            dli = doc.dimstyles.get(style).dxf.get("dimdli", 3.75) or 3.75
+        return dli
+
     def _baseline_location(self, p1: Point, p2: Point) -> Point:
         """The previous dimension line shifted DIMDLI away from the points."""
         base = self._base
@@ -1166,6 +1264,9 @@ class _ChainDim(Tool):
     def preview_segments(self, cursor: Point):
         if getattr(self, "_selecting", False) or self._base is None:
             return []
+        if (self._base.dxf.dimtype & 15) in (2, 5):
+            frame = angular_frame(self._base)
+            return [(frame[0], cursor)] if frame else []
         b = self._base.dxf.defpoint2 if self.BASELINE \
             else self._base.dxf.defpoint3
         return [((b.x, b.y), cursor)]

@@ -1386,7 +1386,7 @@
   "Select a line, arc, circle, ellipse, polyline or spline.": "Seleccione una línea, arco, círculo, elipse, polilínea o spline.",
   "Select a line, arc, circle, or polyline segment.": "Seleccione una línea, arco, círculo o segmento de polilínea.",
   "Select a line.": "Seleccione una línea.",
-  "Select a linear or aligned dimension.": "Seleccione una cota lineal o alineada.",
+  "Select a linear, aligned or angular dimension.": "Seleccione una cota lineal, alineada o angular.",
   "Select a viewport (border) or MSPACE first.": "Seleccione una ventana gráfica (su borde) o use MSPACE primero.",
   "Select an arc or circle.": "Seleccione un arco o círculo.",
   "Select an arc, circle, or line.": "Seleccione un arco, círculo o línea.",
