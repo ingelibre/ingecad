@@ -410,6 +410,7 @@ class ToolController(QObject):
         self.ortho_on = False
         self.polar_on = False
         self.snap_on = False        # SNAP / F9: the cursor jumps by the grid
+        self.ctrl_held = False      # Ctrl held: an arc being drawn turns the other way
         self.shift_held = False     # AutoCAD: Shift held = ortho flipped for the moment
         self.cycling_on = True      # SELECTIONCYCLING (Ctrl+W)
         # OTRACK / F11: object snap tracking. Pausing on an object snap

@@ -115,6 +115,11 @@ class Tool:
 
         return keywords.match(text, self._prompt_source) or ""
 
+    def ctrl_held(self) -> bool:
+        """Is Ctrl down right now? Arcs read it to turn the other way,
+        while the cursor moves and at the click."""
+        return bool(getattr(self.ctx.services, "ctrl_held", False))
+
     def ucs(self):
         """The current UCS (core/ucs.py): a typed angle or an "along X"
         default is measured from its X axis, as in AutoCAD (#91)."""

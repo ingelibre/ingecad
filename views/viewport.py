@@ -2401,16 +2401,23 @@ class Viewport(QOpenGLWidget):
         delegate = self.tool_delegate
         if delegate is not None:
             delegate.shift_held = bool(modifiers & Qt.ShiftModifier)
+            delegate.ctrl_held = bool(modifiers & Qt.ControlModifier)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Shift:
             self._track_shift(event.modifiers() | Qt.ShiftModifier)
+            self.update()
+        elif event.key() == Qt.Key_Control:
+            self._track_shift(event.modifiers() | Qt.ControlModifier)
             self.update()
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event) -> None:
         if event.key() == Qt.Key_Shift:
             self._track_shift(event.modifiers() & ~Qt.ShiftModifier)
+            self.update()
+        elif event.key() == Qt.Key_Control:
+            self._track_shift(event.modifiers() & ~Qt.ControlModifier)
             self.update()
         super().keyReleaseEvent(event)
 

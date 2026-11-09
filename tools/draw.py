@@ -496,7 +496,13 @@ class ArcTool(Tool):
                                      self._start[0] - self._center[0]))
         a2 = math.degrees(math.atan2(end[1] - self._center[1],
                                      end[0] - self._center[0]))
-        return actions.arc_sca(self._start, self._center, (a2 - a1) % 360.0)
+        return actions.arc_sca(self._start, self._center,
+                               self._sweep((a2 - a1) % 360.0))
+
+    def _sweep(self, ccw: float) -> float:
+        """The sweep to draw: counterclockwise, or -- Ctrl held -- the
+        other way round to the same end."""
+        return ccw - 360.0 if self.ctrl_held() and ccw else ccw
 
     # -- input -----------------------------------------------------------------
     def on_point(self, point: Point) -> None:
@@ -540,17 +546,20 @@ class ArcTool(Tool):
         elif state == "C_START":
             self._start = point
             self._state = "SC_END"
-            self.prompt("Specify end point of arc or [Angle/chord Length]:")
+            self.prompt("Specify end point of arc (hold Ctrl to switch direction) "
+                        "or [Angle/chord Length]:")
         elif state == "S_CENTER":
             self._center = point
             self._state = "SC_END"
-            self.prompt("Specify end point of arc or [Angle/chord Length]:")
+            self.prompt("Specify end point of arc (hold Ctrl to switch direction) "
+                        "or [Angle/chord Length]:")
         elif state == "SC_END":
             self._try(lambda: self._sce_geom(point))
         elif state == "S_END":
             self._end = point
             self._state = "SE_KEY"
-            self.prompt("Specify center point of arc or [Angle/Direction/Radius]:")
+            self.prompt("Specify center point of arc (hold Ctrl to switch "
+                        "direction) or [Angle/Direction/Radius]:")
         elif state == "SE_KEY":
             # Start, End, Center: same ray rule, inputs reordered
             self._center = point
@@ -711,7 +720,8 @@ class ArcTool(Tool):
         a1 = math.degrees(math.atan2(self._start[1] - center[1],
                                      self._start[0] - center[0]))
         a2 = math.degrees(math.atan2(end[1] - center[1], end[0] - center[0]))
-        return actions.arc_sca(self._start, center, (a2 - a1) % 360.0)
+        return actions.arc_sca(self._start, center,
+                               self._sweep((a2 - a1) % 360.0))
 
 
 class EllipseTool(Tool):
@@ -1357,7 +1367,7 @@ class PlineTool(Tool):
 
     def _arc_prompt(self) -> None:
         self.prompt(
-            "Specify endpoint of arc or "
+            "Specify endpoint of arc (hold Ctrl to switch direction) or "
             "[Angle/CEnter/CLose/Direction/Halfwidth/Line/Radius/Second pt/Undo/Width]:")
 
     def _mode_prompt(self) -> None:
@@ -1419,6 +1429,8 @@ class PlineTool(Tool):
             # no previous segment: AutoCAD uses the last known direction;
             # fall back to the chord (a straight-ish arc pick)
             raise ValueError("no tangent direction")
+        if self.ctrl_held():
+            direction += 180.0            # Ctrl: the arc bends the other way
         return actions.arc_sed(self._verts[-1], point, direction)
 
     def _arc_from_angle_radius(self, angle: float, radius: float) -> None:
