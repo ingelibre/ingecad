@@ -1261,6 +1261,53 @@ class ToolController(QObject):
                 self.changed.emit()
         return True
 
+    def _edit_dimension_text(self, entity) -> bool:
+        """Double-click on a dimension: its text in the in-place editor, as
+        the classic double-click action (TEXTEDIT) does. What it shows is
+        the text drawn; left as it was, nothing changes; anything else is
+        the dimension's text override ("<>" stands for the measurement),
+        set the way the Properties panel's Text override sets it."""
+        from core.modify import _rerender_dimension
+        from views.mtext_editor import MTextInPlaceEditor
+
+        block = (entity.doc.blocks.get(entity.dxf.get("geometry", ""))
+                 if entity.doc is not None else None)
+        drawn = [e for e in (block or ()) if e.dxftype() in ("MTEXT", "TEXT")]
+        shown = drawn[0] if drawn else None
+        if shown is None:
+            return False
+        if shown.dxftype() == "MTEXT":
+            text = shown.plain_text()
+            height = float(shown.dxf.get("char_height", 2.5) or 2.5)
+        else:
+            text = shown.dxf.text
+            height = float(shown.dxf.get("height", 2.5) or 2.5)
+        mid = entity.dxf.get("text_midpoint", None) or shown.dxf.insert
+        width = max(len(text), 8) * height
+        document = self.window.document
+
+        def commit(content: str, _extras: dict) -> None:
+            new = content.replace("\\P", " ").strip()
+            if new == text.strip():
+                return                        # untouched: not an edit
+            if new == "":
+                new = " "                     # an empty override hides it
+
+            def mutate() -> None:
+                entity.dxf.text = new
+                _rerender_dimension(document, entity)
+            actions.apply_in_place(self.window.history, [entity], mutate)
+            self.window.regen_in_memory()
+            self.window.viewport.update()
+
+        self._mtext_editor = MTextInPlaceEditor(
+            self.window.viewport,
+            top_left=(mid.x - width / 2.0, mid.y + height / 2.0),
+            width_world=width, char_height=height, text=text,
+            on_commit=commit, single_line=True, document=document,
+            style=str(shown.dxf.get("style", "Standard")))
+        return True
+
     def open_text_editor_for(self, entity) -> bool:
         """Double-click on a text object: edit it in place. True if handled.
 
@@ -1275,6 +1322,8 @@ class ToolController(QObject):
         from views.mtext_editor import MTextInPlaceEditor
 
         kind = entity.dxftype()
+        if kind == "DIMENSION":
+            return self._edit_dimension_text(entity)
         if kind not in ("MTEXT", "TEXT", "ATTRIB", "ATTDEF"):
             return False
         if kind == "ATTDEF":
