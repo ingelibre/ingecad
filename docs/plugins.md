@@ -154,6 +154,8 @@ release to the next. It asks the `PluginContext` instead.
 | `ctx.pick_tolerance` | the pickbox's half-size in drawing units at the current zoom |
 | `ctx.redraw(entities=None)` | shows those entities again with their current look, no regen; with none, repaints |
 | `ctx.regen()` | REGEN in the background; `on_regen_done` hears when it is in view |
+| `with ctx.transaction(name):` | the commands executed inside are one undo step called `name`; if the block raises, they are undone and the error goes on |
+| `ctx.mark()` / `ctx.fold_since(mark, name)` / `ctx.undo_to(mark)` | the same by hand: where the history stands, fold what came after into one step, or take it all back with nothing left to redo |
 
 ## Contract levels (`api_version`)
 
@@ -167,7 +169,7 @@ written for level 1 keeps working on every later IngeCAD.
 | level | IngeCAD | what it added |
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
-| 2 | 0.8 | `api_version`, `on_regen_done`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen` |
+| 2 | 0.8 | `api_version`, `on_regen_done`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
 
 ## The rules a plugin lives by
 

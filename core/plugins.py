@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional
@@ -160,6 +161,48 @@ class PluginContext:
         """Rebuild the whole drawing in the background (REGEN); the
         plugins' ``on_regen_done`` hear when it is in view."""
         self.host.regen_in_memory()
+
+    # -- undo steps (level 2) ----------------------------------------------------
+    def mark(self) -> int:
+        """Where the undo history stands now, for :meth:`fold_since` and
+        :meth:`undo_to`."""
+        return self.host.history.depth
+
+    def fold_since(self, mark: int, name: str) -> None:
+        """Make everything executed since ``mark`` one undo step."""
+        self.host.history.fold(min(mark, self.host.history.depth), name)
+        self._refresh()
+
+    def undo_to(self, mark: int) -> None:
+        """Undo everything executed since ``mark``, leaving nothing to
+        redo, and show the drawing as it was."""
+        tools = self.host.tools
+        for command in self.host.history.undo_to(mark):
+            tools.after_history_change(command)
+        self._refresh()
+
+    @contextmanager
+    def transaction(self, name: str):
+        """Several commands as one undo step::
+
+            with ctx.transaction("Parcel"):
+                ctx.execute(...)
+                ctx.execute(...)
+
+        If the block raises, what it executed is undone and the error goes
+        on to the caller."""
+        start = self.mark()
+        try:
+            yield self
+        except BaseException:
+            self.undo_to(start)
+            raise
+        self.fold_since(start, name)
+
+    def _refresh(self) -> None:
+        changed = getattr(getattr(self.host, "tools", None), "changed", None)
+        if changed is not None:
+            changed.emit()
 
 
 @dataclass

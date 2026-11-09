@@ -173,6 +173,27 @@ class History:
         return len(added)
 
     @property
+    def depth(self) -> int:
+        """How many steps there are to undo: a mark for :meth:`fold` and
+        :meth:`undo_to`."""
+        return len(self._undo)
+
+    def undo_to(self, depth: int) -> list:
+        """Undo back to ``depth`` and forget those steps (they cannot be
+        redone): an operation of several commands that gave up half-way
+        leaves no trace. Returns the commands undone, latest first."""
+        undone = []
+        while len(self._undo) > max(0, depth):
+            command = self.undo()
+            if command is None:
+                break
+            undone.append(command)
+        for command in reversed(undone):   # the last undone is on top
+            if self._redo and self._redo[-1] is command:
+                self._redo.pop()
+        return undone
+
+    @property
     def can_undo(self) -> bool:
         return bool(self._undo)
 
