@@ -126,3 +126,33 @@ def test_a_broken_regen_hook_is_reported_not_raised(win):
     finally:
         win.plugins.deactivate(spec.id)
         win.plugins.loaded.pop(spec.id, None)
+
+
+def test_the_selection_hook_hears_each_new_selection_once(win):
+    from pathlib import Path
+
+    from core.plugins import LoadedPlugin
+
+    heard = []
+    spec = PluginSpec(
+        id="ejemplo_sel", name="Sel",
+        on_selection_changed=lambda ctx: heard.append(
+            sorted(e.dxf.handle for e in ctx.selection)))
+    win.plugins.loaded[spec.id] = LoadedPlugin(spec.id, Path("."), False,
+                                               spec=spec)
+    win.plugins.activate(spec.id)
+    try:
+        ctx = _ctx(win)
+        ctx.run_command("LINE", "0,0", "10,0", "")
+        ctx.run_command("ZOOM", "E")
+        (line,) = win.document.modelspace().query("LINE")
+        heard.clear()
+        win.tools.on_hover(5, 0, threshold_world=0.5)
+        win.tools.on_click(5, 0)                 # a pick
+        win.tools.on_hover(5, 1, threshold_world=0.5)   # a hover: no news
+        assert heard == [[line.dxf.handle]]
+        win.tools.clear_selection()
+        assert heard == [[line.dxf.handle], []]
+    finally:
+        win.plugins.deactivate(spec.id)
+        win.plugins.loaded.pop(spec.id, None)

@@ -2124,6 +2124,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         self.tools = ToolController(self)
         self.viewport.tool_delegate = self.tools
         self.tools.changed.connect(self.viewport.update)
+        self.tools.changed.connect(self._tell_plugins_selection)
 
         self._register_commands()
         self.command_line.set_completions(self.dispatcher.known_names())
@@ -2140,6 +2141,16 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         QShortcut(QKeySequence("F2"), self, self._toggle_text_window)
         self.command_line.echo(tr("IngeCAD — type a command (L, C, Z, ...)"))
         self._build_mode_toggles()
+
+    def _tell_plugins_selection(self) -> None:
+        """Plugins' ``on_selection_changed`` hear a new selection, once:
+        every change of it ends in ``tools.changed``, which also fires for
+        much else, so the set is compared with the last one told."""
+        selection = frozenset(self.tools.selection)
+        if selection == getattr(self, "_told_selection", frozenset()):
+            return
+        self._told_selection = selection
+        self.plugins.selection_changed()
 
     def _on_command_submitted(self, text: str) -> None:
         if self.tools.active() or self.dispatcher.pending_prompt is not None:

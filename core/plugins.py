@@ -95,6 +95,7 @@ class PluginSpec:
     on_document_open: Optional[Callable] = None
     api_version: int = 1
     on_regen_done: Optional[Callable] = None
+    on_selection_changed: Optional[Callable] = None
 
 
 @dataclass
@@ -591,13 +592,22 @@ class PluginManager:
 
     def regen_done(self, layout: str) -> None:
         """A regen of ``layout`` is now on screen."""
+        self._tell("on_regen_done", layout)
+
+    def selection_changed(self) -> None:
+        """The selection is another set now (``ctx.selection`` has it)."""
+        self._tell("on_selection_changed")
+
+    def _tell(self, hook_name: str, *args) -> None:
+        """Call each active plugin's ``hook_name(ctx, *args)``; a plugin
+        that raises is named at the command line, the rest still hear."""
         ctx = self.context()
         for spec in self.active_specs():
-            hook = spec.on_regen_done
+            hook = getattr(spec, hook_name, None)
             if hook is None:
                 continue
             try:
-                hook(ctx, layout)
+                hook(ctx, *args)
             except Exception as exc:
                 ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
 
