@@ -20,6 +20,38 @@ def _dir_deg(a: Point, b: Point) -> float:
     return math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))
 
 
+def _polyline_segment_at(entity, pick: Point):
+    """The straight segment of a 2D polyline nearest ``pick``, in WCS, or
+    None when the nearest segment is an arc (it is not a line object)."""
+    if entity.dxftype() == "LWPOLYLINE":
+        verts = [(x, y, b) for x, y, b in entity.get_points("xyb")]
+    else:
+        if entity.is_3d_polyline or entity.is_poly_face_mesh \
+                or entity.is_polygon_mesh:
+            return None
+        verts = [(v.dxf.location.x, v.dxf.location.y, v.dxf.bulge)
+                 for v in entity.vertices]
+    ocs = entity.ocs()
+    pts = [ocs.to_wcs((x, y, 0.0)) for x, y, _ in verts]
+    pairs = list(range(len(verts) - 1))
+    if entity.closed and len(verts) > 2:
+        pairs.append(len(verts) - 1)
+    best, best_d = None, math.inf
+    for i in pairs:
+        a, b = pts[i], pts[(i + 1) % len(pts)]
+        dx, dy = b.x - a.x, b.y - a.y
+        span = dx * dx + dy * dy
+        t = 0.0 if span == 0 else max(0.0, min(1.0, (
+            (pick[0] - a.x) * dx + (pick[1] - a.y) * dy) / span))
+        d = math.hypot(pick[0] - (a.x + t * dx), pick[1] - (a.y + t * dy))
+        if d < best_d and span > 0:
+            best, best_d = i, d
+    if best is None or abs(verts[best][2]) > 1e-12:
+        return None
+    a, b = pts[best], pts[(best + 1) % len(pts)]
+    return (a.x, a.y), (b.x, b.y)
+
+
 class XlineTool(Tool):
     """XLINE: two-point default plus Hor/Ver/Ang (with Reference)/Bisect/
     Offset — each mode loops placing construction lines until Enter."""
@@ -112,17 +144,30 @@ class XlineTool(Tool):
 
     _offset = 1.0
 
-    def _line_of(self, entity):
-        if entity is None or entity.dxftype() != "LINE":
-            self.ctx.echo(tr("Select a line."))
-            return None
-        s, e = entity.dxf.start, entity.dxf.end
-        return (s.x, s.y), (e.x, e.y)
+    def _line_of(self, entity, pick: Point | None = None):
+        """The two points of the "line object" picked at ``pick``: a LINE,
+        an XLINE or RAY (its base point and one unit along it), or the
+        straight polyline segment nearest the pick -- the objects classic
+        CAD's "Select a line object" accepts."""
+        kind = entity.dxftype() if entity is not None else None
+        if kind == "LINE":
+            s, e = entity.dxf.start, entity.dxf.end
+            return (s.x, s.y), (e.x, e.y)
+        if kind in ("XLINE", "RAY"):
+            s, u = entity.dxf.start, entity.dxf.unit_vector
+            return (s.x, s.y), (s.x + u.x, s.y + u.y)
+        if kind in ("LWPOLYLINE", "POLYLINE") and pick is not None:
+            segment = _polyline_segment_at(entity, pick)
+            if segment is not None:
+                return segment
+        self.ctx.echo(tr("Select a line."))
+        return None
 
     def on_point(self, point: Point) -> None:
         services = self.ctx.services
         if self._await == "ref_pick":
-            ends = self._line_of(services.pick_entity(point) if services else None)
+            ends = self._line_of(
+                services.pick_entity(point) if services else None, point)
             if ends is None:
                 return
             self._pending["ref"] = _dir_deg(*ends)
@@ -131,7 +176,8 @@ class XlineTool(Tool):
             self.prompt("Enter angle of xline <0>:")
             return
         if self._await == "offset_pick":
-            ends = self._line_of(services.pick_entity(point) if services else None)
+            ends = self._line_of(
+                services.pick_entity(point) if services else None, point)
             if ends is None:
                 return
             self._pending["line"] = ends

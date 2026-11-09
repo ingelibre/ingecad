@@ -236,3 +236,57 @@ def test_revcloud_object_replaces_in_one_undo():
     h.history.undo()                               # one step restores it
     assert len(h.msp.query("CIRCLE")) == 1
     assert len(h.msp.query("LWPOLYLINE")) == 0
+
+
+def _offset_from(h, picked, pick_at, side, distance="50"):
+    """XLINE > Offset > distance > pick ``picked`` > side, as typed."""
+    h.ctx.services = PickServices(picked)
+    tool = XlineTool(h.ctx)
+    tool.start()
+    assert tool.on_option("O")
+    assert tool.on_option(distance)
+    tool.on_point(pick_at)
+    tool.on_point(side)
+    return tool
+
+
+def _new_xlines(h, before):
+    return [x for x in h.msp.query("XLINE") if x.dxf.handle not in before]
+
+
+@pytest.mark.parametrize("add", ["xline", "ray"])
+def test_xline_offset_accepts_a_construction_line(add):
+    """Offset inside XLINE takes an xline or a ray as its line object,
+    not only a LINE (it used to repeat "Select a line." forever)."""
+    h = Harness()
+    maker = actions.add_xline if add == "xline" else actions.add_ray
+    h.history.execute(maker((0.0, 0.0), 90.0))
+    source = h.msp.query(add.upper())[0]
+    before = {x.dxf.handle for x in h.msp.query("XLINE")}
+    _offset_from(h, source, (0.0, 5.0), (30.0, 5.0))
+    new = _new_xlines(h, before)
+    assert len(new) == 1
+    assert new[0].dxf.start.x == pytest.approx(50.0)
+    assert abs(new[0].dxf.unit_vector.x) == pytest.approx(0.0, abs=1e-9)
+    assert "Select a line." not in h.prompts
+
+
+def test_xline_offset_uses_the_picked_polyline_segment():
+    h = Harness()
+    h.history.execute(actions.add_polyline(
+        [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)]))
+    pline = h.msp.query("LWPOLYLINE")[0]
+    _offset_from(h, pline, (100.0, 40.0), (130.0, 40.0), distance="10")
+    new = _new_xlines(h, set())
+    assert len(new) == 1
+    assert new[0].dxf.start.x == pytest.approx(110.0)
+
+
+def test_xline_offset_refuses_an_arc_segment():
+    h = Harness()
+    h.history.execute(actions.add_polyline_ex(
+        [(0.0, 0.0, 0.0, 0.0, 1.0), (10.0, 0.0, 0.0, 0.0, 0.0)]))
+    pline = h.msp.query("LWPOLYLINE")[0]
+    _offset_from(h, pline, (5.0, -5.0), (5.0, -20.0), distance="1")
+    assert not h.msp.query("XLINE")
+    assert "Select a line." in h.prompts
