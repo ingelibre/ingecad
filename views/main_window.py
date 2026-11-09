@@ -1694,6 +1694,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             cmd_item(modify_menu, label, name)
         cmd_item(modify_menu, tr("Chamfer"), "CHAMFER")
         cmd_item(modify_menu, tr("Array"), "ARRAY")
+        cmd_item(modify_menu, tr("Path Array"), "ARRAYPATH")
         modify_menu.addSeparator()
         for label, name in ((tr("Stretch"), "STRETCH"), (tr("Break"), "BREAK"),
                             (tr("Join"), "JOIN")):
@@ -4549,7 +4550,8 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
                      "REVCLOUD",
                      "DIST", "ID", "AREA", "LIST",
                      "STRETCH", "BREAK", "JOIN",
-                     "CHAMFER", "ARRAY", "MATCHPROP", "CHPROP", "PEDIT",
+                     "CHAMFER", "ARRAY", "ARRAYPATH", "MATCHPROP", "CHPROP",
+                     "PEDIT",
                      "DRAWORDER", "LAYISO", "LAYOFF", "LAYFRZ", "LAYLCK",
                      "LAYULK", "IMAGEATTACH",
                      "TABLE", "PDFATTACH", "IMAGEADJUST", "TRANSPARENCY",

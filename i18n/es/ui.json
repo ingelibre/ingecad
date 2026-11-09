@@ -2301,5 +2301,17 @@
   "Included with IngeCAD": "Incluida con IngeCAD",
   "License: {license}": "Licencia: {license}",
   "Preview unavailable": "Vista previa no disponible",
-  "No extension matches the search.": "Ninguna extensión coincide con la búsqueda."
+  "No extension matches the search.": "Ninguna extensión coincide con la búsqueda.",
+  "Type = Path  Associative = No": "Tipo = Camino  Asociativa = No",
+  "Select path curve:": "Seleccione curva de camino:",
+  "Enter an option [Method/Base point/Items/Align items/eXit] <eXit>:": "Indique una opción [Método(M)/punto Base(B)/Elementos(I)/Alinear elementos(A)/salir(X)] <salir>:",
+  "Enter path method [Divide/Measure] <Measure>:": "Indique el método de camino [Dividir(D)/Medir(M)] <Medir>:",
+  "Enter path method [Divide/Measure] <Divide>:": "Indique el método de camino [Dividir(D)/Medir(M)] <Dividir>:",
+  "Specify base point <end of path curve>:": "Precise punto base <extremo de la curva de camino>:",
+  "Align arrayed items to the path? [Yes/No] <{current}>:": "¿Alinear los elementos de la matriz con el camino? [Sí(Y)/No(N)] <{current}>:",
+  "Specify the distance between items along path <{current}>:": "Precise la distancia entre elementos a lo largo del camino <{current}>:",
+  "Enter number of items along path <{current}>:": "Indique el número de elementos a lo largo del camino <{current}>:",
+  "Specify number of items or [Fill entire path] <{current}>:": "Precise el número de elementos o [Rellenar todo el camino(F)] <{current}>:",
+  "{n} items fit on the path.": "Caben {n} elementos en el camino.",
+  "Path Array": "Matriz de camino"
 }

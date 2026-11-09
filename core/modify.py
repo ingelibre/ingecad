@@ -1214,6 +1214,94 @@ def array_polar(entities, center: Point, count: int,
     return ArrayCommand(entities, transforms)
 
 
+
+#: Curves a path array follows (ARRAYPATH): what DIVIDE and MEASURE walk.
+PATH_CURVES = ("LINE", "ARC", "CIRCLE", "ELLIPSE", "LWPOLYLINE",
+               "POLYLINE", "SPLINE")
+
+
+def path_curve(entity, pick=None):
+    """``(points, closed, length)``: ``entity`` flattened, walked from the
+    end nearest ``pick`` (an open curve; a closed one from its start)."""
+    from core.actions import _entity_polyline
+
+    points, closed = _entity_polyline(entity)
+    if not closed and pick is not None:
+        if math.dist(pick, points[-1]) < math.dist(pick, points[0]):
+            points = points[::-1]
+    length = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+    if length <= 0.0:
+        raise ValueError("zero-length path")
+    return points, closed, length
+
+
+def path_positions(length: float, closed: bool, method: str,
+                   count: int, spacing: float = 0.0) -> list[float]:
+    """Distances along the path of each item, the first at the start.
+
+    ``"divide"`` spreads ``count`` items over the whole curve, end to end
+    (a closed curve: the last one short of the start, where the first
+    sits). ``"measure"`` puts them ``spacing`` apart, at most as many as
+    fit on the curve."""
+    count = int(count)
+    if count < 1:
+        return []
+    if method == "divide":
+        if count == 1:
+            return [0.0]
+        step = length / (count if closed else count - 1)
+        return [i * step for i in range(count)]
+    if spacing <= 0.0:
+        raise ValueError("spacing must be positive")
+    fit = path_fill_count(length, closed, spacing)
+    return [i * spacing for i in range(min(count, fit))]
+
+
+def path_fill_count(length: float, closed: bool, spacing: float) -> int:
+    """How many items ``spacing`` apart fill the path (Fill entire path):
+    on a closed curve none lands on the first one again."""
+    fit = int(math.floor(length / spacing + 1e-9)) + 1
+    if closed and (fit - 1) * spacing >= length - 1e-9:
+        fit -= 1
+    return max(fit, 1)
+
+
+def path_transforms(points, positions, base=None, align: bool = True):
+    """One matrix per item: ``base`` (the path's start by default) carried
+    to each position; with ``align``, the item turns as the path turns
+    from its start. The first item of the default base is the original."""
+    from core.actions import _resample
+    from ezdxf.math import Matrix44
+
+    samples = _resample(points, positions)
+    if not samples:
+        return []
+    start_angle = _resample(points, [0.0])[0][2]
+    bx, by = base if base is not None else points[0]
+    out = []
+    for x, y, angle in samples:
+        matrix = Matrix44.translate(-bx, -by, 0)
+        if align:
+            matrix = matrix @ Matrix44.z_rotate(math.radians(angle - start_angle))
+        out.append(matrix @ Matrix44.translate(x, y, 0))
+    return out
+
+
+def array_path(entities, transforms, keep_first: bool = True):
+    """The path array. ``keep_first``: the first item is the originals
+    where they are (the default base point); otherwise a base point took
+    them off, and the originals move to the first place."""
+    from core.actions import TransformCommand
+    from core.commands import CompositeCommand
+
+    if keep_first or not transforms:
+        return ArrayCommand(entities, transforms[1:])
+    first = transforms[0]
+    back = first.copy()
+    back.inverse()
+    return CompositeCommand("ARRAYPATH", [
+        TransformCommand("ARRAYPATH", entities, first), ArrayCommand(entities, [back @ m for m in transforms[1:]])])
+
 # -- MATCHPROP -----------------------------------------------------------------
 
 # What the Property Settings dialog copies by default (MATCHPROP, p.1081).

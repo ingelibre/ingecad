@@ -679,6 +679,256 @@ class ArrayTool(Tool):
             self.prompt("Enter the number of items in the array:")
 
 
+
+class ArrayPathTool(Tool):
+    """ARRAYPATH: copies along a curve, spaced by a distance (Measure) or
+    spread over it (Divide), turning with it unless Align items is No.
+
+    Plain copies, as ARRAY makes (the module's first deviation): the
+    prompts are the path array's without the associative ones. The array
+    shows while its options are edited; Enter or eXit places it."""
+
+    wants_selection = True
+    MENU = ("Enter an option [Method/Base point/Items/Align items/eXit] "
+            "<eXit>:")
+    #: copies drawn at most in the live preview
+    PREVIEW_LIMIT = 2000
+
+    def start(self) -> None:
+        self.name = "ARRAYPATH"
+        self._entities: list = []
+        self._curve = None              # (points, closed, length)
+        self._method = "measure"
+        self._spacing = 0.0
+        self._count = 0
+        self._base: Point | None = None
+        self._align = True
+        self._await = None
+        self.entity_picker = False
+
+    # -- selection and path
+    def on_selection(self, entities: list) -> None:
+        if not entities:
+            self.ctx.finish()
+            return
+        self._entities = entities
+        self.ctx.echo(tr("Type = Path  Associative = No"))
+        self._await = "path"
+        self.entity_picker = True
+        self.prompt("Select path curve:")
+
+    def _take_path(self, point: Point) -> None:
+        services = self.ctx.services
+        entity = services.pick_entity(point) if services else None
+        if entity is None or entity.dxftype() not in modify.PATH_CURVES:
+            self.ctx.echo(tr("Select a line, arc, circle, ellipse, "
+                             "polyline or spline."))
+            return
+        try:
+            self._curve = modify.path_curve(entity, point)
+        except ValueError:
+            self.ctx.echo(tr("Select a line, arc, circle, ellipse, "
+                             "polyline or spline."))
+            return
+        self.entity_picker = False
+        _points, closed, length = self._curve
+        self._spacing = self._default_spacing(length)
+        self._count = modify.path_fill_count(length, closed, self._spacing)
+        self._menu()
+
+    def _default_spacing(self, length: float) -> float:
+        """The selection's larger size, so the copies do not overlap."""
+        from ezdxf import bbox
+
+        box = bbox.extents(self._entities, fast=True)
+        size = max(box.size.x, box.size.y) if box.has_data else 0.0
+        if size <= 1e-9 or size > length:
+            size = length / 10.0
+        return size
+
+    # -- the option menu
+    def _menu(self) -> None:
+        self._await = "menu"
+        self.prompt(self.MENU)
+
+    def on_point(self, point: Point) -> None:
+        if self._await == "path":
+            self._take_path(point)
+        elif self._await == "base":
+            self._base = point
+            self._menu()
+
+    def on_option(self, text: str) -> bool:
+        token = self.option(text) or text.strip().upper()
+        if self._await == "menu":
+            if token in ("", "X", "EXIT"):
+                return self._place()
+            if token in ("M", "METHOD"):
+                self._await = "method"
+                self.prompt(
+                    "Enter path method [Divide/Measure] <Measure>:"
+                    if self._method == "measure" else
+                    "Enter path method [Divide/Measure] <Divide>:")
+                return True
+            if token in ("B", "BASE POINT"):
+                self._await = "base"
+                self.prompt("Specify base point <end of path curve>:")
+                return True
+            if token in ("I", "ITEMS"):
+                self._ask_items()
+                return True
+            if token in ("A", "ALIGN ITEMS"):
+                self._await = "align"
+                self.prompt("Align arrayed items to the path? [Yes/No] "
+                            "<{current}>:",
+                            current=tr("Yes" if self._align else "No"))
+                return True
+            return False
+        handler = getattr(self, f"_take_{self._await}", None)
+        return handler(text, token) if handler and self._await != "path" \
+            else False
+
+    def _take_method(self, text: str, token: str) -> bool:
+        if token in ("D", "DIVIDE"):
+            self._method = "divide"
+        elif token in ("M", "MEASURE"):
+            self._method = "measure"
+        elif token:
+            return False
+        if self._method == "measure":
+            _points, closed, length = self._curve
+            self._count = min(self._count, modify.path_fill_count(
+                length, closed, self._spacing))
+        self._menu()
+        return True
+
+    def _take_base(self, text: str, token: str) -> bool:
+        if token:
+            return False
+        self._base = None               # Enter: back to the path's end
+        self._menu()
+        return True
+
+    def _take_align(self, text: str, token: str) -> bool:
+        if token in ("Y", "YES"):
+            self._align = True
+        elif token in ("N", "NO"):
+            self._align = False
+        elif token:
+            return False
+        self._menu()
+        return True
+
+    def _ask_items(self) -> None:
+        if self._method == "measure":
+            self._await = "spacing"
+            self.prompt("Specify the distance between items along path "
+                        "<{current}>:",
+                        current=self.length_text(self._spacing))
+        else:
+            self._await = "divide_count"
+            self.prompt("Enter number of items along path <{current}>:",
+                        current=self._count)
+
+    def _take_spacing(self, text: str, token: str) -> bool:
+        if text.strip():
+            value = _number(text)
+            if value is None or value <= 0:
+                self.ctx.echo(tr("Requires a positive number."))
+                self._ask_items()
+                return True
+            self._spacing = value
+        _points, closed, length = self._curve
+        fit = modify.path_fill_count(length, closed, self._spacing)
+        self._count = min(max(self._count, 1), fit) if text.strip() == "" \
+            else fit
+        self._await = "measure_count"
+        self.prompt("Specify number of items or [Fill entire path] "
+                    "<{current}>:", current=fit)
+        return True
+
+    def _take_measure_count(self, text: str, token: str) -> bool:
+        _points, closed, length = self._curve
+        fit = modify.path_fill_count(length, closed, self._spacing)
+        if token in ("", "F", "FILL ENTIRE PATH"):
+            self._count = fit
+            self._menu()
+            return True
+        count = self._whole(text)
+        if count is None:
+            self.prompt("Specify number of items or [Fill entire path] "
+                        "<{current}>:", current=fit)
+            return True
+        if count > fit:
+            # more than the path holds at this spacing: as many as fit
+            self.ctx.echo(tr("{n} items fit on the path.", n=fit))
+        self._count = min(count, fit)
+        self._menu()
+        return True
+
+    def _take_divide_count(self, text: str, token: str) -> bool:
+        if text.strip():
+            count = self._whole(text)
+            if count is None:
+                self._ask_items()
+                return True
+            self._count = count
+        self._menu()
+        return True
+
+    def _whole(self, text: str):
+        value = _number(text)
+        if value is None or value < 1 or int(value) != value:
+            self.ctx.echo(tr("Requires a positive integer."))
+            return None
+        return int(value)
+
+    def on_enter(self) -> None:
+        if self._await in (None, "path"):
+            self.ctx.finish()
+            return
+        self.on_option("")
+
+    # -- result
+    def _transforms(self):
+        points, closed, length = self._curve
+        positions = modify.path_positions(
+            length, closed, self._method, self._count, self._spacing)
+        return modify.path_transforms(points, positions, self._base,
+                                      self._align)
+
+    def preview_entities(self, cursor: Point) -> list:
+        if self._curve is None or self._await == "path":
+            return []
+        out = []
+        transforms = self._transforms()
+        if self._base is None:
+            transforms = transforms[1:]     # the originals are the first
+        for matrix in transforms:
+            for source in self._entities:
+                if len(out) >= self.PREVIEW_LIMIT:
+                    return out
+                try:
+                    copy = source.copy()
+                    modify.transform_entity(copy, matrix)
+                except Exception:  # noqa: BLE001 -- that one is not shown
+                    continue
+                out.append(copy)
+        return out
+
+    def _place(self) -> bool:
+        transforms = self._transforms()
+        if len(transforms) < 2:
+            self.ctx.echo(tr("An array needs at least two items."))
+            self.ctx.finish()
+            return True
+        self.ctx.execute(modify.array_path(
+            self._entities, transforms, keep_first=self._base is None))
+        self.ctx.echo(tr("{count} copies placed.",
+                         count=(len(transforms) - 1) * len(self._entities)))
+        self.ctx.finish()
+        return True
+
 class MatchPropTool(Tool):
     """MATCHPROP: one source, then destinations until Enter -- each pick,
     window (left to right) or crossing (right to left) painted at once.
@@ -1629,6 +1879,7 @@ MODIFY_TOOL_CLASSES = {
     "JOIN": JoinTool,
     "CHAMFER": ChamferTool,
     "ARRAY": ArrayTool,
+    "ARRAYPATH": ArrayPathTool,
     "MATCHPROP": MatchPropTool,
     "CHPROP": ChpropTool,
     "PEDIT": PeditTool,

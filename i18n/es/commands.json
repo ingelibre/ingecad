@@ -41,6 +41,7 @@
   "FILLET":    {"name": "EMPALME"},
   "CHAMFER":   {"name": "CHAFLAN"},
   "ARRAY":     {"name": "MATRIZ"},
+  "ARRAYPATH": {"name": "MATRIZCAMINO"},
   "EXPLODE":   {"name": "DESCOMP"},
   "STRETCH":   {"name": "ESTIRA"},
   "BREAK":     {"name": "PARTE"},
