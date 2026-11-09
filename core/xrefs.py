@@ -388,6 +388,18 @@ def _explode(entity, depth: int):
     yield entity
 
 
+def plain_entities(entity, document=None):
+    """``entity`` as the plain entities it draws: a block reference
+    expanded (nested ones too), an xref's drawing when ``document`` is the
+    host, anything else itself. What a boundary trace sees."""
+    if entity.dxftype() == "INSERT" and document is not None:
+        block = entity.doc.blocks.get(entity.dxf.name) if entity.doc else None
+        if block is not None and is_xref_block(block):
+            yield from virtual_entities(entity, document)
+            return
+    yield from _explode(entity, 0)
+
+
 def referenced_for_insert(document, insert):
     """The Document an xref INSERT shows, or None."""
     if insert.doc is None:

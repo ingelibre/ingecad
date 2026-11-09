@@ -1380,15 +1380,24 @@ class ToolController(QObject):
 
         The boundary set is what the canvas shows, as AutoCAD's default
         (HPBOUND = current viewport): a region is traced from every curve
-        in view, lines and arcs included, not only from closed objects.
+        in view, lines and arcs included, not only from closed objects,
+        and the curves inside block references too.
         """
+        from core import xrefs
         from core.hatch_boundary import region_at_point
 
-        if self.window.document is None:
+        document = self.window.document
+        if document is None:
             return None
-        return region_at_point(
-            list(self.window.document.modelspace()), point,
-            window=self._visible_space_rect())
+        # The space being drawn in (a sheet, a block being edited), and
+        # what its block references draw: a wall inside a block bounds a
+        # room as well as a loose line ("No closed boundary found" inside
+        # a block, a review video).
+        entities = []
+        for e in document.current_space():
+            entities.extend(xrefs.plain_entities(e, document))
+        return region_at_point(entities, point,
+                               window=self._visible_space_rect())
 
     def _visible_space_rect(self):
         """The canvas in coordinates of the current space, or None headless."""
