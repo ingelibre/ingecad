@@ -812,57 +812,69 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         self.invalidate_vp_model_cache()
         self.regen_in_memory()
 
-    def _cmd_viewres(self, *args) -> None:
+    def _cmd_viewres(self, *args) -> Prompt | None:
         """VIEWRES (p. 2049): arc and circle smoothness, then a regen."""
         from render import backend
 
-        current = backend.viewres()
-        text = str(args[0]).strip() if args and str(args[0]).strip() else ""
+        def ask():
+            # a Prompt, not an echo: the next thing typed is the answer,
+            # not a new command (#132)
+            return Prompt(tr("Enter circle zoom percent ({min}-{max}) "
+                             "<{value}>:", min=backend.VIEWRES_MIN,
+                             max=backend.VIEWRES_MAX,
+                             value=backend.viewres()), self._viewres_answer)
+
+        if args and str(args[0]).strip():
+            return self._viewres_answer(str(args[0]))
+        return ask()
+
+    def _viewres_answer(self, text: str) -> Prompt | None:
+        from render import backend
+
+        text = text.strip()
         if not text:
-            self.command_line.echo(
-                tr("VIEWRES = {value}", value=current) + "  "
-                + tr("Enter circle zoom percent ({min}-{max}):",
-                     min=backend.VIEWRES_MIN, max=backend.VIEWRES_MAX))
-            return
+            return None                     # Enter keeps the current value
         try:
             value = int(text)
         except ValueError:
             self.command_line.echo(tr("Requires an integer value."))
-            return
+            return self._cmd_viewres()
         if not backend.VIEWRES_MIN <= value <= backend.VIEWRES_MAX:
             self.command_line.echo(
                 tr("Value must be between {min} and {max}.",
                    min=backend.VIEWRES_MIN, max=backend.VIEWRES_MAX))
-            return
+            return self._cmd_viewres()
         QSettings().setValue(backend.SETTING_VIEWRES, value)
         self.refresh_curve_tolerance()
         self.command_line.echo(tr("VIEWRES = {value}", value=value) + "  "
                                + tr("Regenerating model."))
 
-    def _cmd_cursorsize(self, *args) -> None:
+    def _cmd_cursorsize(self, *args) -> Prompt | None:
         """CURSORSIZE (p. 2202): crosshair length, 1-100 % of the screen."""
         from views import viewport as vp_prefs
 
-        self._set_int_pref(args, vp_prefs.SETTING_CURSORSIZE, 1, 100,
-                           "CURSORSIZE", vp_prefs.cursorsize())
+        return self._set_int_pref(args, vp_prefs.SETTING_CURSORSIZE, 1, 100,
+                                   "CURSORSIZE", vp_prefs.cursorsize())
 
-    def _cmd_pickbox(self, *args) -> None:
+    def _cmd_pickbox(self, *args) -> Prompt | None:
         """PICKBOX (p. 2452): the object selection target, in pixels."""
         from views import apertures
 
-        self._set_int_pref(args, apertures.SETTING_PICKBOX, 1, 50,
-                           "PICKBOX", apertures.pickbox())
+        return self._set_int_pref(args, apertures.SETTING_PICKBOX, 1, 50,
+                                   "PICKBOX", apertures.pickbox())
 
     def _set_int_pref(self, args, key: str, low: int, high: int,
-                      name: str, current: int) -> None:
-        """The shared body of the integer system variables: bare name shows
-        the value and the range, a number sets it."""
+                      name: str, current: int) -> Prompt | None:
+        """The shared body of the integer system variables: the bare name
+        asks "Enter new value for NAME <current>:" and WAITS for the answer
+        (an echo let the number run as a command, #132); a number sets it."""
         text = str(args[0]).strip() if args and str(args[0]).strip() else ""
         if not text:
-            self.command_line.echo(
-                tr("{name} = {value}", name=name, value=current) + "  "
-                + tr("Enter new value ({min}-{max}):", min=low, max=high))
-            return
+            return Prompt(tr("Enter new value for {name} <{value}>:",
+                             name=name, value=current),
+                          lambda value: self._set_int_pref(
+                              (value,), key, low, high, name, current)
+                          if str(value).strip() else None)
         try:
             value = int(text)
         except ValueError:
@@ -1066,7 +1078,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         self.refresh_grid_settings()
         self.command_line.echo(tr("{name} = {value}", name=name, value=value))
 
-    def _cmd_center_var(self, name: str, *args) -> None:
+    def _cmd_center_var(self, name: str, *args) -> Prompt | None:
         """The CENTERMARK / CENTERLINE variables (AutoCAD 2017+): bare name
         shows the value, a value sets it. CENTEREXE is a length in drawing
         units, CENTERCROSSSIZE / CENTERCROSSGAP a length or a multiple of
@@ -1088,10 +1100,11 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
                    "CENTERMARKEXE": int(prefs.markexe)}[name]
         text = str(args[0]).strip() if args and str(args[0]).strip() else ""
         if not text:
-            self.command_line.echo(
-                tr("{name} = {value}", name=name, value=current) + "  "
-                + tr("Enter new value:"))
-            return
+            return Prompt(
+                tr("Enter new value for {name} <{value}>:",
+                   name=name, value=current),
+                lambda value: self._cmd_center_var(name, value)
+                if str(value).strip() else None)
         if name == "CENTEREXE":
             try:
                 value = float(text.replace(",", "."))
