@@ -91,15 +91,24 @@ def build(entities, base):
     return f"{_PROCESS}-{os.getpid()}:{next(_counter)}", doc
 
 
-def put(clip_id: str, data: bytes) -> None:
-    """Hand the written copy to the system clipboard (GUI thread)."""
+def put(clip_id: str, data: bytes, extend=None) -> None:
+    """Hand the written copy to the system clipboard (GUI thread);
+    ``extend(mime)`` adds other formats first (plugins' on_copy)."""
     board = _clipboard()
     if board is None:
         return
     mime = QMimeData()
     mime.setData(ID_MIME, clip_id.encode("ascii"))
     mime.setData(MIME, data)
+    if extend is not None:
+        extend(mime)
     board.setMimeData(mime)
+
+
+def current_mime():
+    """What the system clipboard holds now (a QMimeData), or None."""
+    board = _clipboard()
+    return board.mimeData() if board is not None else None
 
 
 def publish(entities, base) -> Optional[str]:

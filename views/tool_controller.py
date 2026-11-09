@@ -1089,6 +1089,9 @@ class ToolController(QObject):
         self._clip_id = built[0] if built is not None else None
         if built is None:
             return
+        # what plugins' on_copy see: the copy's own entities, alive even
+        # after a cut
+        self._clip_doc = built[1]
         writer = clipboard.ClipWriter(*built)
         writer.done.connect(self._on_clip_written)
         self._clip_writers.add(writer)
@@ -1102,7 +1105,25 @@ class ToolController(QObject):
             worker.wait()   # thread has emitted; joins immediately
             self._clip_writers.discard(worker)
         if data and clip_id == self._clip_id:   # not overtaken by a newer copy
-            clipboard.put(clip_id, data)
+            clipboard.put(clip_id, data, self._plugins_extend_copy())
+
+    def _plugins_extend_copy(self):
+        """``extend(mime)`` for clipboard.put: the plugins' on_copy."""
+        plugins = getattr(self.window, "plugins", None)
+        doc = getattr(self, "_clip_doc", None)
+        if plugins is None or doc is None:
+            return None
+        return lambda mime: plugins.copy(list(doc.modelspace()), mime)
+
+    def plugins_take_paste(self) -> bool:
+        """A paste starts: True when a plugin took the clipboard itself."""
+        from views import clipboard
+
+        plugins = getattr(self.window, "plugins", None)
+        if plugins is None or not plugins.wants_paste():
+            return False
+        mime = clipboard.current_mime()
+        return mime is not None and plugins.paste(mime)
 
     def _system_clipboard(self) -> Optional[tuple]:
         """(sources, base) of an IngeCAD copy made in ANOTHER window, read
@@ -1143,7 +1164,9 @@ class ToolController(QObject):
 
     def paste(self) -> None:
         """Ctrl+V: place the clipboard entities from a picked point."""
-        if not self._clipboard and self._system_clipboard() is None:
+        plugins = getattr(self.window, "plugins", None)
+        if not self._clipboard and self._system_clipboard() is None \
+                and not (plugins is not None and plugins.wants_paste()):
             self.window.command_line.echo(tr("Clipboard is empty."))
             return
         self.start_tool("PASTECLIP")

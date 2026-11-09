@@ -162,6 +162,8 @@ class PluginSpec:
     reactors: tuple = ()
     properties_sections: Optional[Callable] = None
     toolbars: tuple = ()
+    on_paste: Optional[Callable] = None
+    on_copy: Optional[Callable] = None
 
 
 @dataclass
@@ -745,6 +747,41 @@ class PluginManager:
             except Exception as exc:
                 ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
         return False
+
+    def wants_paste(self) -> bool:
+        """Does any active plugin read the clipboard on a paste?"""
+        return any(spec.on_paste is not None for spec in self.active_specs())
+
+    def paste(self, mime) -> bool:
+        """A paste is starting: True when a plugin's ``on_paste(ctx,
+        mime)`` took the clipboard's contents (``mime``, a QMimeData)
+        itself, ahead of the core's own paste."""
+        ctx = None
+        for spec in self.active_specs():
+            hook = spec.on_paste
+            if hook is None:
+                continue
+            ctx = ctx or self.context()
+            try:
+                if hook(ctx, mime):
+                    return True
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+        return False
+
+    def copy(self, entities: list, mime) -> None:
+        """A copy is going to the system clipboard: each ``on_copy(ctx,
+        entities, mime)`` may add formats of its own to ``mime``."""
+        ctx = None
+        for spec in self.active_specs():
+            hook = spec.on_copy
+            if hook is None:
+                continue
+            ctx = ctx or self.context()
+            try:
+                hook(ctx, list(entities), mime)
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
 
     def properties_sections(self, entities: list) -> list:
         """The Properties panel's sections the active plugins add for the

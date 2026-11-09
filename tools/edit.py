@@ -1829,6 +1829,11 @@ class PasteTool(Tool):
 
     def start(self) -> None:
         self.name = "PASTECLIP"
+        # a plugin may take what is on the clipboard (an image, a table)
+        take = getattr(self.ctx.services, "plugins_take_paste", None)
+        if callable(take) and take():
+            self.ctx.finish()
+            return
         self._sources, self._base = (
             self.ctx.services.clipboard_data() if self.ctx.services
             else (None, None))
