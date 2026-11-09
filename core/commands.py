@@ -77,20 +77,85 @@ class CompositeCommand(Command):
         for command in self.commands:
             command.do(document)
             # a member recorded by History brings its associative
-            # dimensions along (a script folded into one step, #90)
+            # dimensions along (a script folded into one step, #90), and
+            # what the plugins' reactors did after it
             followup = getattr(command, "dimassoc_followup", None)
             if followup is not None:
+                followup.do(document)
+            for followup in getattr(command, "plugin_followups", ()):
                 followup.do(document)
 
     def undo(self, document) -> None:
         removed = []
         for command in reversed(self.commands):
+            for followup in reversed(getattr(command, "plugin_followups", ())):
+                followup.undo(document)
             followup = getattr(command, "dimassoc_followup", None)
             if followup is not None:
                 followup.undo(document)
             command.undo(document)
             removed.extend(getattr(command, "removed_handles", ()) or ())
         self.removed_handles = removed
+
+
+# -- plugins' follow-up reactors (PluginSpec.reactors) ------------------------
+#
+# The associative dimensions' reactor (core.dimassoc) made general: a
+# reactor has ``before(document)`` -> a state, or None when it has nothing
+# to watch (a command then pays nothing), and ``react(document, state)`` ->
+# a Command NOT yet done, or None. History runs it after the command, in
+# the same undo step: a plugin keeps its derived geometry and its XDATA
+# true after a MOVE, COPY, MIRROR or grip edit it does not own. Per
+# process and counted per plugin, since several windows activate the same
+# plugin. Proposed by the architecture plugin.
+_REACTORS: list = []                 # [[owner, reactor, count]]
+
+
+def register_reactor(reactor, owner: str) -> None:
+    for entry in _REACTORS:
+        if entry[0] == owner and entry[1] is reactor:
+            entry[2] += 1
+            return
+    _REACTORS.append([owner, reactor, 1])
+
+
+def unregister_reactors(owner: str) -> None:
+    for entry in list(_REACTORS):
+        if entry[0] == owner:
+            entry[2] -= 1
+            if entry[2] <= 0:
+                _REACTORS.remove(entry)
+
+
+def _log_reactor_error(what: str, reactor) -> None:
+    import logging
+
+    logging.getLogger("ingecad.plugins").exception(
+        "a plugin's reactor %r failed in %s()", reactor, what)
+
+
+class _States:
+    """What ``record`` compares after a command: the associative
+    dimensions' state and each plugin reactor's."""
+
+    __slots__ = ("dimassoc", "plugins")
+
+    def __init__(self, dimassoc, plugins) -> None:
+        self.dimassoc = dimassoc
+        self.plugins = plugins
+
+
+def _plugin_states(document) -> list:
+    states = []
+    for _owner, reactor, _count in list(_REACTORS):
+        try:
+            state = reactor.before(document)
+        except Exception:                 # noqa: BLE001 - a plugin's fault
+            _log_reactor_error("before", reactor)
+            continue
+        if state is not None:
+            states.append((reactor, state))
+    return states
 
 
 class History:
@@ -121,7 +186,13 @@ class History:
         hand to ``record`` once the command has mutated the drawing."""
         from core import dimassoc
 
-        return dimassoc.before(self.document) if self.document is not None else None
+        if self.document is None:
+            return None
+        state = dimassoc.before(self.document)
+        if not _REACTORS:
+            return state                  # no plugin reacts: as it always was
+        plugins = _plugin_states(self.document)
+        return _States(state, plugins) if plugins else state
 
     def record(self, command: Command, dimassoc_state=None) -> None:
         """Put an already-applied command on the undo stack (execute's last
@@ -130,6 +201,10 @@ class History:
         With the ``dimassoc_state`` taken before the mutation, associative
         dimensions follow their objects in the same undo step. Grips called
         this without one and a dimension stayed behind its line (#90)."""
+        plugin_states = []
+        if isinstance(dimassoc_state, _States):
+            dimassoc_state, plugin_states = (dimassoc_state.dimassoc,
+                                             dimassoc_state.plugins)
         if dimassoc_state is not None:
             from core import dimassoc
 
@@ -137,6 +212,20 @@ class History:
                                                        dimassoc_state)
             if command.dimassoc_followup is not None:
                 command.dimassoc_followup.do(self.document)
+        followups = []
+        for reactor, state in plugin_states:
+            try:
+                followup = reactor.react(self.document, state)
+                if followup is not None:
+                    followup.do(self.document)
+                    followups.append(followup)
+            except Exception:             # noqa: BLE001 - a plugin's fault
+                _log_reactor_error("react", reactor)
+        if followups:
+            command.plugin_followups = followups
+            # what a follow-up changed is not among the command's own
+            # entities: only a regen shows it
+            command.needs_regen = True
         self._undo.append(command)
         self._redo.clear()
         self._mark_blocks(command, applied=True)
@@ -206,6 +295,8 @@ class History:
             return None
         self._gate()
         command = self._undo.pop()
+        for followup in reversed(getattr(command, "plugin_followups", ())):
+            followup.undo(self.document)
         followup = getattr(command, "dimassoc_followup", None)
         if followup is not None:
             followup.undo(self.document)
@@ -222,6 +313,8 @@ class History:
         command.do(self.document)
         followup = getattr(command, "dimassoc_followup", None)
         if followup is not None:
+            followup.do(self.document)
+        for followup in getattr(command, "plugin_followups", ()):
             followup.do(self.document)
         self._undo.append(command)
         self._mark_blocks(command)

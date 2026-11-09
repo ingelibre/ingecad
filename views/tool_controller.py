@@ -1250,9 +1250,10 @@ class ToolController(QObject):
             return True
         snap = actions.SnapshotCommand([entity])
         snap.name = "HATCHEDIT"
+        state = self.window.history.dimassoc_state()
         actions.apply_hatch_settings(entity, after)
         snap.commit(document)
-        self.window.history.record(snap)
+        self.window.history.record(snap, state)
         # its look changed, its geometry did not: redraw that one entity
         # instead of the drawing (the same path a layer's colour takes)
         self.redraw_entities([entity])

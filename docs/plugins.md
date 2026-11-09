@@ -144,6 +144,7 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `input_filters` | `callable(ctx, text, state)` that reads typed input first (level 2, below) |
 | `on_before` | `callable(ctx, event) -> str or None` for `"undo"`, `"save"` and `"close"` (a drawing or the window): a text stops it and is shown as the reason (level 2) |
 | `on_double_click` | `callable(ctx, entity) -> bool`, asked before the core's own editor for that object; True means the plugin handled it (level 2) |
+| `reactors` | objects with `before(document)` and `react(document, state)`: keep derived objects true after any command, in its undo step (level 2, below) |
 
 ### A tool's own overlay and preview (level 2)
 
@@ -184,6 +185,36 @@ Esc, the object snap and tracking, typed points (`@5,0`), and the other
 selected objects whose grips share the spot. The first plugin to register a
 type wins; turning the plugin off gives the core's grips back.
 
+### Keeping derived objects true (`reactors`, level 2)
+
+A plugin whose objects depend on others (an opening on its wall, a tag on
+its point) cannot own every command that moves them. A reactor is told
+around each command recorded in the history, the same way the associative
+dimensions are:
+
+```python
+class OpeningsFollowWalls:
+    def before(self, document):
+        # what to compare afterwards, or None when nothing is watched
+        # (then the command costs this reactor nothing more)
+        return {h: wall_geometry(document, h) for h in watched_walls(document)}
+
+    def react(self, document, state):
+        # a Command NOT yet done, or None; IngeCAD calls its do()
+        changed = [h for h, g in state.items()
+                   if wall_geometry(document, h) != g]
+        return RebuildOpenings(changed) if changed else None
+
+PLUGIN = PluginSpec(id="mi_disciplina", name="...",
+                    reactors=(OpeningsFollowWalls(),))
+```
+
+The returned command joins the undo step of the command that caused it: one
+U undoes both, REDO and a folded script (`transaction`) replay both.
+`before` runs before every command, so keep it cheap: return None as soon
+as the drawing has nothing of yours. A reactor that raises is logged and
+skipped; the user's command still stands.
+
 ### What the context answers (level 2)
 
 A plugin never reads the window's private attributes: they change from one
@@ -213,7 +244,7 @@ written for level 1 keeps working on every later IngeCAD.
 | level | IngeCAD | what it added |
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
-| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, the tool's `overlay`, `preview_entities` and `suppress_selection_highlight`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
+| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, the tool's `overlay`, `preview_entities` and `suppress_selection_highlight`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
 
 ## The rules a plugin lives by
 

@@ -124,6 +124,7 @@ class PluginSpec:
     input_filters: tuple = ()
     on_before: Optional[Callable] = None
     on_double_click: Optional[Callable] = None
+    reactors: tuple = ()
 
 
 @dataclass
@@ -284,6 +285,7 @@ class _Activation:
     pack_dir: Optional[Path] = None
     toolbar: bool = False
     grip_types: list[str] = field(default_factory=list)
+    reactors: bool = False
 
 
 # -- where plugins live --------------------------------------------------------
@@ -573,6 +575,12 @@ class PluginManager:
             for alias, command in spec.aliases.items():
                 if host.add_alias(alias, command):
                     record.aliases.append(alias.upper())
+            if spec.reactors:
+                from core import commands as core_commands
+
+                for reactor in spec.reactors:
+                    core_commands.register_reactor(reactor, spec.id)
+                record.reactors = True
             if spec.grip_handlers:
                 from core import select
 
@@ -603,6 +611,10 @@ class PluginManager:
             host.unregister_command(name)
         for alias in record.aliases:
             host.remove_alias(alias)
+        if record.reactors:
+            from core import commands as core_commands
+
+            core_commands.unregister_reactors(plugin_id)
         if record.grip_types:
             from core import select
 
