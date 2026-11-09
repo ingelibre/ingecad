@@ -5150,6 +5150,8 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         entity = None
         if self._active_vp is None:
             entity = self.tools.pick_entity((wx, wy))
+        if entity is not None and self.plugins.double_click(entity):
+            return
         if entity is not None and entity.dxftype() != "VIEWPORT":
             # A block reference with attributes opens the Enhanced Attribute
             # Editor (EATTEDIT, p. 715) -- before any text rule, because the
@@ -5858,6 +5860,10 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         return ask()
 
     def _cmd_undo(self, *args) -> None:
+        reason = self.plugins.veto("undo")
+        if reason:
+            self.command_line.echo(reason)
+            return
         session = self._block_session
         if session is not None and session.undo_blocked():
             self.command_line.echo(
@@ -6618,6 +6624,11 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         if getattr(self, "_save_worker", None) is not None:
             event.ignore()             # the window closes after the save
             return
+        reason = self.plugins.veto("close")
+        if reason:
+            self.command_line.echo(reason)
+            event.ignore()
+            return
         if not self.maybe_save_all():      # every open drawing (#71)
             event.ignore()
             return
@@ -6747,6 +6758,10 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
     def _write_document(self, path: Path, version: str = "r2000") -> bool:
         """The shared tail of SAVE and SAVEAS: write, report, warn."""
         if self.document is None:
+            return False
+        reason = self.plugins.veto("save")
+        if reason:
+            self.command_line.echo(reason)
             return False
         if self._save_worker is not None:
             return False           # one save at a time (input is held meanwhile)

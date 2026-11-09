@@ -122,6 +122,8 @@ class PluginSpec:
     on_selection_changed: Optional[Callable] = None
     grip_handlers: dict = field(default_factory=dict)
     input_filters: tuple = ()
+    on_before: Optional[Callable] = None
+    on_double_click: Optional[Callable] = None
 
 
 @dataclass
@@ -649,6 +651,43 @@ class PluginManager:
                 if isinstance(answer, str):
                     text = answer
         return text
+
+    def veto(self, event: str) -> Optional[str]:
+        """Ask each active plugin's ``on_before(ctx, event)`` -- event is
+        ``"undo"``, ``"save"`` or ``"close"`` -- whether it may go on. The
+        first text returned stops it and is the reason shown; None from
+        every plugin lets it go."""
+        ctx = None
+        for spec in self.active_specs():
+            hook = spec.on_before
+            if hook is None:
+                continue
+            ctx = ctx or self.context()
+            try:
+                reason = hook(ctx, event)
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+                continue
+            if reason:
+                return f"{spec.name}: {reason}"
+        return None
+
+    def double_click(self, entity) -> bool:
+        """A double-click on ``entity``: True when a plugin's
+        ``on_double_click(ctx, entity)`` handled it, ahead of the core's
+        own editor for it."""
+        ctx = None
+        for spec in self.active_specs():
+            hook = spec.on_double_click
+            if hook is None:
+                continue
+            ctx = ctx or self.context()
+            try:
+                if hook(ctx, entity):
+                    return True
+            except Exception as exc:
+                ctx.echo(f"{spec.name}: {type(exc).__name__}: {exc}")
+        return False
 
     def regen_done(self, layout: str) -> None:
         """A regen of ``layout`` is now on screen."""

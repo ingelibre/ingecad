@@ -294,6 +294,10 @@ class DocumentTabsMixin:
             return False
         if session is not self._session and not self.switch_document(session):
             return False
+        reason = self.plugins.veto("close")
+        if reason:
+            self.command_line.echo(reason)
+            return False
         if not self.maybe_save_changes():
             return False
         self._autosave_discard()

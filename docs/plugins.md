@@ -142,6 +142,8 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `on_selection_changed` | `callable(ctx)` once per new selection; `ctx.selection` has it (level 2) |
 | `grip_handlers` | `{"DXFTYPE": handler}`: grips of its own for a type (level 2, below) |
 | `input_filters` | `callable(ctx, text, state)` that reads typed input first (level 2, below) |
+| `on_before` | `callable(ctx, event) -> str or None` for `"undo"`, `"save"` and `"close"` (a drawing or the window): a text stops it and is shown as the reason (level 2) |
+| `on_double_click` | `callable(ctx, entity) -> bool`, asked before the core's own editor for that object; True means the plugin handled it (level 2) |
 
 ### A tool's own overlay and preview (level 2)
 
@@ -211,7 +213,7 @@ written for level 1 keeps working on every later IngeCAD.
 | level | IngeCAD | what it added |
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
-| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, the tool's `overlay`, `preview_entities` and `suppress_selection_highlight`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
+| 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, the tool's `overlay`, `preview_entities` and `suppress_selection_highlight`, and the context's `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
 
 ## The rules a plugin lives by
 
