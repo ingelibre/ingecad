@@ -120,17 +120,70 @@ class MoveTool(_DisplacementTool):
 
 class CopyTool(_DisplacementTool):
     """COPY repeats (COPYMODE 0): after the first copy the prompt offers
-    Exit and Undo, the copies made so far going back one by one."""
+    Exit and Undo, the copies made so far going back one by one.
+
+    Array, at either second-point prompt, lays a row of copies in one
+    step: the number of items (the original counts), then the second
+    point -- the place of the first copy, the rest following at the same
+    spacing -- or Fit, which puts the LAST copy on the point and spreads
+    the others evenly before it."""
 
     def start(self) -> None:
         super().start()
         self.name = "COPY"
         self._copies = 0
+        self._array: str | None = None    # None | "count" | "point"
+        self._items = 0
+        self._fit = False
+
+    def _ask_second(self, first: bool) -> None:
+        self._first_second = first
+        self.prompt("Specify second point or [Array] "
+                    "<use first point as displacement>:")
+
+    def _ask_array_point(self) -> None:
+        self._array = "point"
+        self.prompt("Specify second point or [Array]:" if self._fit
+                    else "Specify second point or [Fit]:")
+
+    def _leave_array(self) -> None:
+        self._array = None
+        self._fit = False
+        if self._copies:
+            self._ask_more()
+        else:
+            self._ask_second(first=True)
 
     def on_option(self, text: str) -> bool:
         if super().on_option(text):
             return True
         key = self.option(text)
+        if self._array == "count":
+            try:
+                items = int(text.strip())
+            except ValueError:
+                items = 0
+            if items < 2:
+                self.ctx.echo(tr("Requires an integer greater than 1."))
+                return True
+            self._items = items
+            self._fit = False
+            self._ask_array_point()
+            return True
+        if self._array == "point":
+            if key == "F" and not self._fit:
+                self._fit = True
+                self._ask_array_point()
+                return True
+            if key == "A" and self._fit:
+                self._fit = False
+                self._ask_array_point()
+                return True
+            return False
+        if self._base is not None and key == "A":
+            self._array = "count"
+            self.prompt("Enter number of items to array:")
+            return True
         if self._base is not None and not self._first_second:
             if key == "E":
                 self.ctx.finish()
@@ -148,7 +201,33 @@ class CopyTool(_DisplacementTool):
 
     def _ask_more(self) -> None:
         self._first_second = False
-        self.prompt("Specify second point or [Exit/Undo] <Exit>:")
+        self.prompt("Specify second point or [Array/Exit/Undo] <Exit>:")
+
+    def on_enter(self) -> None:
+        if self._array is not None:
+            self._leave_array()           # Enter: no array after all
+            return
+        super().on_enter()
+
+    def on_point(self, point: Point) -> None:
+        if self._array == "count":
+            return                        # a number is being asked
+        if self._array == "point":
+            from core.commands import CompositeCommand
+
+            dx, dy = point[0] - self._base[0], point[1] - self._base[1]
+            gaps = self._items - 1
+            if self._fit:
+                dx, dy = dx / gaps, dy / gaps
+            self.ctx.execute(CompositeCommand("COPY", [
+                actions.copy_entities(self._entities, dx * k, dy * k)
+                for k in range(1, gaps + 1)]))
+            self._copies += 1             # one step for U, the whole row
+            self._array = None
+            self._fit = False
+            self._ask_more()
+            return
+        super().on_point(point)
 
     def _apply(self, dx: float, dy: float, last: bool) -> None:
         self.ctx.execute(actions.copy_entities(self._entities, dx, dy))

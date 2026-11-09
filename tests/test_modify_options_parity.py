@@ -58,6 +58,34 @@ def test_copy_repeats_with_exit_and_undo(win):
     assert (5, 7, 1) in _circles(win)
 
 
+def test_copy_array_lays_a_row_in_one_step(win):
+    _type(win, "CIRCLE", "0,0", "1")
+    # 4 items, the original counting: copies at 5, 10 and 15
+    _type(win, "COPY", "L", "", "0,0", "A", "4", "5,0")
+    assert _circles(win) == [(0, 0, 1), (5, 0, 1), (10, 0, 1), (15, 0, 1)]
+    # the command goes on, and U takes the whole row back
+    _type(win, "U")
+    assert _circles(win) == [(0, 0, 1)]
+    _type(win, "0,3", "E")
+    assert _circles(win) == [(0, 0, 1), (0, 3, 1)]
+    assert not win.tools.active()
+
+
+def test_copy_array_fit_puts_the_last_copy_on_the_point(win):
+    _type(win, "CIRCLE", "0,0", "1")
+    _type(win, "COPY", "L", "", "0,0", "A", "4", "F", "30,0", "")
+    assert _circles(win) == [(0, 0, 1), (10, 0, 1), (20, 0, 1), (30, 0, 1)]
+
+
+def test_copy_array_after_a_first_copy_and_enter_backs_out(win):
+    _type(win, "CIRCLE", "0,0", "1")
+    _type(win, "COPY", "L", "", "0,0", "0,5", "A", "1")
+    assert "greater than 1" in win.command_line.history.toPlainText()
+    _type(win, "3", "", "E")              # Enter at the point: no array
+    assert _circles(win) == [(0, 0, 1), (0, 5, 1)]
+    assert not win.tools.active()
+
+
 def test_rotate_and_scale_can_work_on_a_copy(win):
     _type(win, "CIRCLE", "10,0", "1")
     _type(win, "ROTATE", "L", "", "0,0", "C", "90")
