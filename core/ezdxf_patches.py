@@ -797,6 +797,54 @@ def _patch_arc_length_symbol_text() -> None:
     __init__._ingecad_patch = True
     __init__._ingecad_arc_prefix = True
     ArcLengthMeasurement.__init__ = __init__
+    _patch_arc_length_symbol()
+
+
+def _patch_arc_length_symbol() -> None:
+    """The arc length symbol drawn as the classic CAD draws it: a small ARC
+    in the dimension's block, before the number (DIMARCSYM 0) or above it
+    (1); none for 2. ezdxf wrote "( " instead (see
+    :func:`_patch_arc_length_symbol_text`), and the symbol was missing
+    (UNE-EN ISO 129-1, a tester's eighth review).
+
+    The arc spans 120 degrees over a chord of 0.9 text heights, bulging
+    up the text. Before the number it sits at the text's middle, past the
+    text box ezdxf estimates; above it, half a height over the text.
+    """
+    import math
+
+    from ezdxf.math import Vec2
+    from ezdxf.render.dim_curved import ArcLengthDimension
+
+    if getattr(ArcLengthDimension.add_measurement_text, "_ingecad_patch",
+               False):
+        return
+    original = ArcLengthDimension.add_measurement_text
+
+    def add_measurement_text(self, dim_text, pos, rotation) -> None:
+        original(self, dim_text, pos, rotation)
+        where = int(self.dim_style.get("dimarcsym", 0) or 0)
+        if where not in (0, 1) or not dim_text:
+            return
+        h = float(self.measurement.text_height)
+        u = Vec2.from_deg_angle(rotation)
+        v = u.orthogonal()
+        chord = 0.9 * h
+        radius = chord / (2.0 * math.sin(math.radians(60.0)))
+        if where == 0:
+            width = float(getattr(self.text_box, "width", 0.0) or 0.0)
+            mid = Vec2(pos) - u * (width / 2.0 + 0.5 * chord)
+            mid -= v * (0.15 * h)
+        else:
+            mid = Vec2(pos) + v * (0.75 * h)
+        center = mid - v * (radius / 2.0)          # chord's midpoint, below
+        up = math.atan2(v.y, v.x)
+        self.add_arc(center, radius, up - math.radians(60.0),
+                     up + math.radians(60.0),
+                     dxfattribs=self.measurement.dxfattribs())
+
+    add_measurement_text._ingecad_patch = True
+    ArcLengthDimension.add_measurement_text = add_measurement_text
 
 
 def _patch_single_vertex_leader() -> None:
