@@ -10,6 +10,8 @@ and threw those objects away. Judged in the classic CAD itself (2026-11-09):
 either class alone was enough to refuse the file."""
 import pytest
 
+from formats.dwg_bridge import find_dxf2dwg
+
 from core.document import Document
 from core.encoding import write_dwg_intermediate
 from formats.dwg_bridge import load_dwg
@@ -94,6 +96,7 @@ def test_a_version_already_stated_is_left_as_it_is(tmp_path):
     assert style.get_xdata("ACAD_MLEADERVER")[0].value == 1   # and stays
 
 
+@pytest.mark.skipif(find_dxf2dwg() is None, reason="LibreDWG not available")
 def test_the_saved_dwg_carries_them(tmp_path):
     doc = _drawing_from_a_later_format()
     doc.modelspace().add_line((0, 0), (10, 0))
