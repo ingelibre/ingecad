@@ -21,6 +21,9 @@ from core import ezdxf_patches
 
 @pytest.fixture(autouse=True)
 def setup_patches():
+    from ezdxf.addons.drawing import frontend as _frontend
+    if not hasattr(_frontend, "is_complex_mtext"):
+        _frontend.is_complex_mtext = lambda mtext: False
     ezdxf_patches.apply()
 
 
@@ -83,3 +86,102 @@ def test_thai_fallback_font_on_arial():
     # Thai glyphs have valid bounding boxes
     for p in paths:
         assert p.bbox().extmax[0] >= p.bbox().extmin[0]
+
+
+def test_thai_fallback_font_sentinel_cached(monkeypatch):
+    """When no Thai font is found, the sentinel is cached to avoid repeated scanning."""
+    monkeypatch.setattr(ezdxf_patches, "_THAI_FALLBACK_FONT", None)
+    monkeypatch.setattr(fonts.font_manager, "find_best_match", lambda **kw: None)
+    monkeypatch.setattr(fonts, "make_font", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("no font")))
+
+    first = ezdxf_patches._get_thai_fallback_font()
+    assert first is None
+    assert ezdxf_patches._THAI_FALLBACK_FONT is ezdxf_patches._NOT_FOUND
+
+    # Subsequent call returns None immediately via the sentinel
+    call_count = 0
+
+    def fail_if_called(**kw):
+        nonlocal call_count
+        call_count += 1
+        return None
+
+    monkeypatch.setattr(fonts.font_manager, "find_best_match", fail_if_called)
+    second = ezdxf_patches._get_thai_fallback_font()
+    assert second is None
+    assert call_count == 0
+
+
+def test_thai_real_text_path_glyph_positions():
+    """Through the real drawing frontend, tone mark sits above the upper vowel
+
+    and combining marks have zero advance width.
+    """
+    import ezdxf
+    from ezdxf.addons.drawing.frontend import Frontend
+    from ezdxf.addons.drawing.properties import RenderContext
+    from ezdxf.addons.drawing.recorder import Recorder
+
+    doc = ezdxf.new()
+    msp = doc.modelspace()
+    msp.add_text("ทก", dxfattribs={"height": 10.0, "insert": (0.0, 0.0)})
+    msp.add_text("ที่ก", dxfattribs={"height": 10.0, "insert": (0.0, 0.0)})
+
+    rec = Recorder()
+    fe = Frontend(RenderContext(doc), rec)
+    fe.draw_layout(msp)
+
+    assert len(rec.records) >= 2
+    paths_alone = rec.records[0].paths
+    paths_clustered = rec.records[1].paths
+
+    # 'ทก' -> [ท, ก]
+    assert len(paths_alone) == 2
+    # 'ที่ก' -> [ท, ี, ่, ก]
+    assert len(paths_clustered) == 4
+
+    base_box = paths_clustered[0].bbox()
+    vowel_box = paths_clustered[1].bbox()
+    tone_box = paths_clustered[2].bbox()
+    k_clustered_box = paths_clustered[3].bbox()
+    k_alone_box = paths_alone[1].bbox()
+
+    # Upper vowel is above base consonant
+    assert vowel_box.extmin[1] > base_box.extmin[1]
+    # Tone mark is elevated above upper vowel
+    assert tone_box.extmin[1] >= vowel_box.extmax[1] - 0.5
+
+    # Combining characters have zero advance: 'ก' starts at the exact same X
+    assert pytest.approx(k_alone_box.extmin[0], rel=1e-4) == k_clustered_box.extmin[0]
+
+
+def test_thai_real_mtext_path_glyph_positions():
+    """MTEXT rendered through the drawing frontend also shapes Thai syllables correctly."""
+    import ezdxf
+    from ezdxf.addons.drawing.frontend import Frontend
+    from ezdxf.addons.drawing.properties import RenderContext
+    from ezdxf.addons.drawing.recorder import Recorder
+
+    doc = ezdxf.new()
+    msp = doc.modelspace()
+    msp.add_mtext("ทก", dxfattribs={"char_height": 10.0, "insert": (0.0, 0.0)})
+    msp.add_mtext("ที่ก", dxfattribs={"char_height": 10.0, "insert": (0.0, 0.0)})
+
+    rec = Recorder()
+    fe = Frontend(RenderContext(doc), rec)
+    fe.draw_layout(msp)
+
+    assert len(rec.records) >= 2
+    paths_alone = rec.records[0].paths
+    paths_clustered = rec.records[1].paths
+
+    assert len(paths_alone) == 2
+    assert len(paths_clustered) == 4
+
+    vowel_box = paths_clustered[1].bbox()
+    tone_box = paths_clustered[2].bbox()
+    k_clustered_box = paths_clustered[3].bbox()
+    k_alone_box = paths_alone[1].bbox()
+
+    assert tone_box.extmin[1] >= vowel_box.extmax[1] - 0.5
+    assert pytest.approx(k_alone_box.extmin[0], rel=1e-4) == k_clustered_box.extmin[0]

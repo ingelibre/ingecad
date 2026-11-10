@@ -802,9 +802,6 @@ def _patch_mtext_mask_rendering() -> None:
     """
     from ezdxf.addons.drawing import frontend as _frontend
 
-    if not hasattr(_frontend, "is_complex_mtext"):
-        return
-
     original = _frontend.is_complex_mtext
 
     def is_complex_mtext(mtext) -> bool:
@@ -1540,37 +1537,40 @@ def _patch_linetype_dots() -> None:
     LinetypeStage2d.draw_path = draw_path
 
 
+_NOT_FOUND = object()
 _THAI_FALLBACK_FONT = None
 
 
 def _get_thai_fallback_font():
     global _THAI_FALLBACK_FONT
+    if _THAI_FALLBACK_FONT is _NOT_FOUND:
+        return None
     if _THAI_FALLBACK_FONT is not None:
         return _THAI_FALLBACK_FONT
     from ezdxf.fonts import fonts
 
     fm = fonts.font_manager
     candidates = (
-        "tahoma", "leelawad", "notosansthai", "loma", "waree",
-        "garuda", "thonburi", "cordia", "angsana", "umpush", "sawasdee",
+        "tahoma", "leelawadee ui", "leelawadee", "noto sans thai",
+        "loma", "waree", "garuda", "thonburi", "cordia new",
+        "angsana new", "umpush", "sawasdee",
     )
-    cache = getattr(fm, "_font_cache", None)
-    if cache and hasattr(cache, "_cache"):
-        for cand in candidates:
-            for entry in cache._cache.values():
-                fn = entry.font_face.filename.lower()
-                fam = entry.font_face.family.lower()
-                if cand in fn or cand in fam:
-                    try:
-                        _THAI_FALLBACK_FONT = fonts.make_font(entry.font_face.filename, 1.0)
-                        return _THAI_FALLBACK_FONT
-                    except Exception:
-                        pass
+    for cand in candidates:
+        try:
+            face = fm.find_best_match(family=cand)
+            if face is not None:
+                font_name = fm.find_font_name(face)
+                _THAI_FALLBACK_FONT = fonts.make_font(font_name, 1.0)
+                return _THAI_FALLBACK_FONT
+        except Exception:
+            pass
     try:
         _THAI_FALLBACK_FONT = fonts.make_font("tahoma.ttf", 1.0)
+        return _THAI_FALLBACK_FONT
     except Exception:
-        _THAI_FALLBACK_FONT = None
-    return _THAI_FALLBACK_FONT
+        pass
+    _THAI_FALLBACK_FONT = _NOT_FOUND
+    return None
 
 
 def _normalize_thai_text(s: str) -> str:
