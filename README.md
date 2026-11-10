@@ -31,7 +31,7 @@ and IngePresupuestos (construction budgeting).
   trim/offset/extend, survey points with elevations, and printing to scale.
   Not a feature-for-feature clone of any other CAD.
 
-## Status — v0.7.0
+## Status — v0.8.0
 
 What works today:
 
@@ -92,7 +92,8 @@ What works today:
   (chamfer/fillet/area/rotation), polygons, ellipses and elliptical arcs,
   text with all 14 justifications, hatches that find their boundary among
   lines and arcs (islands included, like BPOLY); construction lines (XLINE/RAY),
-  DIVIDE/MEASURE with aligned blocks, REVCLOUD.
+  DIVIDE/MEASURE with aligned blocks, REVCLOUD, ARRAYPATH along a curve,
+  and the drawing's blocks listed with thumbnails in the Palette.
 - **Dimensions, complete**: linear, aligned, angular, arc length, ordinate,
   radius and diameter to the norm (arrowheads inside the circle), center
   marks and the chain-line axes of CENTERMARK / CENTERLINE,

@@ -86,6 +86,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.8.0" date="2026-11-10">
+      <description>
+        <p>What users reported, fixed one by one. Pattern hatches: dense ones are refused instead of freezing, they are found inside rooms closed by blocks, their pattern follows them when moved or placed in a block, and EXPLODE breaks one into lines. Construction lines and rays can be trimmed, filleted and offset. New: ARRAYPATH, COPY Array, a block list with thumbnails in the Palette, -BLOCK and -INSERT at the prompt, the spacebar as Enter. A drawing saved as DWG opens elsewhere without being recovered. Panning inside a viewport is fluid on sheets whose viewports use different annotation scales. Dimension text follows the style's unit format, with arc symbols, framed text and twenty arrowheads. A wider contract for extensions, and Lao and Thai translations.</p>
+        <p xml:lang="es">Lo que reportaron los usuarios, arreglado uno por uno. Sombreados con patrón: uno demasiado denso se rechaza en vez de congelar la ventana, se encuentran dentro de recintos cerrados por bloques, el patrón los acompaña al moverlos o al ir dentro de un bloque, y DESCOMPONER los convierte en líneas. Las líneas auxiliares y los rayos se recortan, empalman y desfasan. Nuevo: matriz por trayectoria, COPIA con Matriz, lista de bloques con miniaturas en la Paleta, -BLOQUE y -INSERT desde el teclado, la barra espaciadora como Enter. Un dibujo guardado como DWG se abre en otros programas sin pedir recuperación. El encuadre dentro de una ventana gráfica va fluido en láminas cuyas ventanas usan escalas de anotación distintas. El texto de cota sigue el formato de unidades del estilo, con símbolo de arco, texto enmarcado y veinte extremos de cota. Un contrato más amplio para las extensiones, y traducciones al lao y al tailandés.</p>
+      </description>
+    </release>
     <release version="0.7.0" date="2026-10-29">
       <description>
         <p>Extensions: a manager window to install, update and remove them from a catalog with one click, each download verified, and a bundled Roads extension (road axis, stationing, horizontal curves and their tables). Drawing and editing commands polished prompt by prompt: arcs, ellipses, AREA with arcs, polygon and fence selection, TRIM along polylines and on ellipses, ROTATE, SCALE, FILLET, CHAMFER, OFFSET and ZOOM options, defaults at the drawing's precision, and sheets in metres plotted at their scale.</p>

@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.8.0 — unreleased
+## v0.8.0 — 2026-11-10
 
 What users reported, fixed one by one, a wider contract for extensions,
 and a handful of commands asked for by name.
