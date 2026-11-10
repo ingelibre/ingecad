@@ -487,3 +487,48 @@ def test_an_edit_inside_a_viewport_never_freezes_the_next_pan(win, monkeypatch):
         QApplication.processEvents()
     assert win.viewport._live_vp is not None                   # caught up
     assert on_gui == []
+
+
+def test_a_baked_pan_shows_the_bakes_it_makes(win):
+    """A tester's video: double-click into a viewport, drag, "va muy lento".
+
+    A viewport that cannot go live (its own frozen layers here; another
+    annotation scale in his drawing) bakes the sheet per pan tick. Every
+    tick is a new revision and asks for a rerun, so each bake landed stale
+    and was thrown away: measured on a real sheet, 0 of 75 ticks of a
+    six-second drag showed a new picture, and it jumped on release.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    psp, vp = _sheet(win)
+    win.document.doc.layers.add("NOTES")
+    vp.frozen_layers = ["NOTES"]
+    win.switch_layout("Layout1")
+    win._activate_viewport(vp)
+    _warm(win)
+    assert win._vp_placement(vp) is None         # the baked path, for sure
+    win._VP_LIVE_BUDGET_MS = 0.0     # a real sheet: too slow to bake in a tick
+
+    shown = []
+    real = win.viewport.set_scene
+    win.viewport.set_scene = lambda scene, *a, **k: (
+        shown.append(scene), real(scene, *a, **k))[1]
+    try:
+        for _ in range(4):
+            assert win.vp_view_pan(1.0, 0.5) is True
+            worker = win._regen_worker
+            assert worker is not None            # a bake is in flight ...
+            worker.wait()
+            assert win.vp_view_pan(1.0, 0.5) is True   # ... and the drag goes on
+            QApplication.processEvents()         # the bake lands, already stale
+        assert win._vp_gesture is not None       # still mid-drag
+        assert len(shown) >= 4
+    finally:
+        win.viewport.set_scene = real
+        win._vp_gesture_commit()
+        for _ in range(50):
+            worker = win._regen_worker
+            if worker is None:
+                break
+            worker.wait()
+            QApplication.processEvents()

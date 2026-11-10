@@ -51,6 +51,13 @@ and a handful of commands asked for by name.
   state there; the classic CAD then offered to recover the file and
   dropped those objects, and the layer groups with them.
 
+### Sheets and viewports
+- **Panning inside a viewport follows the cursor on every sheet.** A
+  viewport with its own frozen layers, a shaped boundary or its own
+  annotation scale redraws the sheet as you drag; each redraw was thrown
+  away because the drag had already moved on, so the picture stood still
+  and jumped when the button was released.
+
 ### Commands that did not answer
 - **SELECTSIMILAR, ISOLATEOBJECTS, HIDEOBJECTS, TEXTEDIT and HATCHEDIT**
   were menu entries without a command behind them (#121).

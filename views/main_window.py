@@ -4374,6 +4374,19 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
                  or revision != self.document.revision
                  or layout != self._active_layout)
         if stale:
+            if (scene is not None and layout == self._active_layout
+                    and self._vp_gesture is not None
+                    and self.viewport._live_vp is None):
+                # A pan inside a viewport that cannot go live (shaped clip,
+                # its own frozen layers, another annotation scale) asks for
+                # a bake per tick, and each tick is a new revision. So every
+                # bake landed stale and none was ever shown: the picture
+                # stood still for the whole drag and jumped on release.
+                # Nothing but the view moves during the gesture, so this
+                # bake is a moment old, not wrong -- show it, the next one
+                # is on its way.
+                self.viewport.set_scene(scene)
+                self.tools.mark_scene_merged()
             self._start_regen()
             return
         self.viewport.set_scene(scene)
