@@ -349,6 +349,46 @@ def _downgrade_fields(doc) -> list:
     return undo
 
 
+# -- class versions an R2000 file states apart from the object ------------------
+#: Object type -> (APPID, XDATA) an R2000 drawing carries on each object of
+#: that type. Later formats keep the version inside the object, or do not
+#: need one, so a drawing that comes from them has no such XDATA; written
+#: to R2000 without it, the classic CAD reads the object by another layout,
+#: finds it "improperly read" (its error 67) and offers to recover the
+#: whole drawing, discarding these objects -- and the layer groups with them.
+_R2000_CLASS_VERSION = {
+    "VISUALSTYLE": ("ACAD", [(1000, "AcDbSavedByObjectVersion"), (1070, 0)]),
+    "MLEADERSTYLE": ("ACAD_MLEADERVER", [(1070, 2)]),
+}
+
+
+def _state_class_versions(doc) -> tuple[list, list]:
+    """Give every object of :data:`_R2000_CLASS_VERSION` the XDATA that
+    states its version, where it has none. Returns ``(objects, appids)`` to
+    hand to :func:`_withdraw_class_versions`."""
+    marked, registered = [], []
+    for entity in doc.objects:
+        spec = _R2000_CLASS_VERSION.get(entity.dxftype())
+        if spec is None:
+            continue
+        appid, tags = spec
+        if entity.has_xdata(appid):
+            continue
+        if appid not in doc.appids:
+            doc.appids.new(appid)
+            registered.append(appid)
+        entity.set_xdata(appid, tags)
+        marked.append((entity, appid))
+    return marked, registered
+
+
+def _withdraw_class_versions(doc, marked: list, registered: list) -> None:
+    for entity, appid in marked:
+        entity.discard_xdata(appid)
+    for appid in registered:
+        doc.appids.remove(appid)
+
+
 def write_dwg_intermediate(doc, dxf_path: Path) -> None:
     """Write the DXF that ``dxf2dwg`` will convert.
 
@@ -391,6 +431,7 @@ def write_dwg_intermediate(doc, dxf_path: Path) -> None:
         self.force_optional = True
 
     fields = _downgrade_fields(doc)
+    marked, registered = _state_class_versions(doc)
     try:
         doc.dxfversion = INTERMEDIATE_DXF_VERSION
         TagWriter.__init__ = forced_init
@@ -400,5 +441,6 @@ def write_dwg_intermediate(doc, dxf_path: Path) -> None:
         doc.dxfversion = old_version
         for sub, original in fields:
             sub[:] = original
+        _withdraw_class_versions(doc, marked, registered)
         for namespace, name in materialized:
             namespace.discard(name)
