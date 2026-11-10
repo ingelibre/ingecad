@@ -150,12 +150,14 @@ class _LiveSceneWorker(QThread):
 
     done = Signal(object, object)          # key, scene | None
 
-    def __init__(self, document: Document, layout_name: str, key) -> None:
+    def __init__(self, document: Document, layout_name: str, key,
+                 anno=None) -> None:
         super().__init__()
         self.setObjectName("vp-live")
         self._document = document
         self._layout_name = layout_name
         self._key = key
+        self._anno = anno      # (scale, show all) of a viewport, or None
 
     def run(self) -> None:
         from core import gc_guard
@@ -165,7 +167,8 @@ class _LiveSceneWorker(QThread):
 
             try:
                 sheet = self._document.doc.layouts.get(self._layout_name)
-                scene = build_scene(self._document, "Model", canvas=sheet)
+                scene = build_scene(self._document, "Model", canvas=sheet,
+                                    anno=self._anno)
             except Exception:                 # noqa: BLE001 - the sync path will say
                 scene = None
             self.done.emit(self._key, scene)
@@ -4695,6 +4698,10 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         self.viewport.space_placement = placement
         self.viewport.update()
         self._vp_warm_live_scene()
+        # ... and at every other annotation scale the sheet's viewports show
+        for other in layout_ops.visible_viewports(
+                self.document.doc.layouts.get(self._active_layout)):
+            self._vp_warm_live_scene(self._vp_anno(other))
         label = layout_ops.scale_label(layout_ops.viewport_scale(vp))
         if layout_ops.is_viewport_locked(vp):
             self.command_line.echo(
@@ -4924,6 +4931,8 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         wheel tick, and keying on that rebuilt 160 ms of model per tick,
         which is the whole cost this cache exists to avoid."""
         self._vp_model_cache = None
+        self._vp_anno_scenes = {}
+        self._vp_warm_queue = []
         if getattr(self, "_active_vp", None) is not None:
             # an undo inside a viewport: rebuild the live model now, in the
             # background, so the next pan finds it (or waits, never freezes)
@@ -4966,40 +4975,93 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         self._vp_model_cache = (key, scene)
         return scene
 
-    def _vp_model_scene_ready(self):
+    def _vp_anno(self, vp):
+        """How this viewport shows annotations when that is NOT how model
+        space does: ``(scale, show all)``, else None.
+
+        The live model is tessellated at model space's annotation scale; a
+        viewport with another one needs the representations of ITS scale,
+        so it gets a tessellation of its own (one per scale, shared by the
+        viewports that show it). A tester's sheet -- two views of a plate
+        at 1:1 and 2:1 -- used to fall back to baking the sheet per pan
+        tick for this alone.
+        """
+        if not self._model_annotative():
+            return None
+        from core import annotative
+
+        doc = self.document.doc
+        shown = annotative.viewport_scale(vp)
+        if shown is None or shown == annotative.current_scale(doc):
+            return None
+        return (shown, annotative.all_visible(
+            doc.layouts.get(self._active_layout)))
+
+    def _vp_cached_scene(self, anno=None):
+        key = self._vp_live_key()
+        if anno is None:
+            cached = getattr(self, "_vp_model_cache", None)
+        else:
+            cached = getattr(self, "_vp_anno_scenes", {}).get(anno)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        return None
+
+    def _vp_model_scene_ready(self, anno=None):
         """The live model scene if it is cached -- never built here: a pan
         tick after an edit rebuilt it on the GUI thread, 2.4 s frozen on a
         real sheet (Marco: "editar desde la lámina no está bien"). Missing,
         the build starts in the background and this tick draws nothing;
         the display catches up when it lands."""
-        cached = getattr(self, "_vp_model_cache", None)
-        if cached is not None and cached[0] == self._vp_live_key():
-            return cached[1]
-        self._vp_warm_live_scene()
-        return None
+        scene = self._vp_cached_scene(anno)
+        if scene is None:
+            self._vp_warm_live_scene(anno)
+        return scene
 
-    def _vp_warm_live_scene(self) -> None:
+    def _vp_warm_live_scene(self, anno=None) -> None:
         """Start building the live model scene in the background, unless
-        it is cached or already being built."""
+        it is cached or already being built. One build at a time: another
+        scale asked for meanwhile waits its turn."""
         if self.document is None or self._active_layout == "Model":
             return
-        key = self._vp_live_key()
-        cached = getattr(self, "_vp_model_cache", None)
-        if cached is not None and cached[0] == key:
+        if self._vp_cached_scene(anno) is not None:
             return
         worker = getattr(self, "_vp_live_worker", None)
         if worker is not None and worker.isRunning():
+            queue = getattr(self, "_vp_warm_queue", None)
+            if queue is None:
+                queue = self._vp_warm_queue = []
+            if anno != worker._anno and anno not in queue:
+                queue.append(anno)
             return
-        worker = _LiveSceneWorker(self.document, self._active_layout, key)
+        worker = _LiveSceneWorker(self.document, self._active_layout,
+                                  (self._vp_live_key(), anno), anno)
         worker.done.connect(self._on_live_scene_done)
         self._vp_live_worker = worker
         gc_guard.start(worker)
 
     def _on_live_scene_done(self, key, scene) -> None:
-        if scene is None or self.document is None or key != self._vp_live_key():
+        key, anno = key
+        queue = getattr(self, "_vp_warm_queue", None) or []
+        if self.document is None or key != self._vp_live_key():
+            queue.clear()
             return
-        if getattr(self, "_vp_model_cache", None) is None:
-            self._vp_model_cache = (key, scene)
+        if scene is not None and self._vp_cached_scene(anno) is None:
+            if anno is None:
+                self._vp_model_cache = (key, scene)
+            else:
+                if getattr(self, "_vp_anno_scenes", None) is None:
+                    self._vp_anno_scenes = {}
+                self._vp_anno_scenes[anno] = (key, scene)
+        if queue:
+            # the finished thread may not have left run() yet: let it, or
+            # the next build would find it "running" and queue for ever
+            worker = getattr(self, "_vp_live_worker", None)
+            if worker is not None:
+                worker.wait()
+            self._vp_warm_live_scene(queue.pop(0))
+        if scene is None:
+            return
         # a drag already under way: catch the display up to the cursor
         if self._vp_gesture is not None and self._active_vp is not None:
             if self._vp_live_draw():
@@ -5025,16 +5087,6 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
                 return None          # a shaped boundary: only the bake clips it
         except Exception:
             return None
-        # The live model is tessellated once, at model space's annotation
-        # scale: a viewport showing annotations at another scale needs its
-        # own representations, which only the baked path draws.
-        if self._model_annotative():
-            from core import annotative
-
-            doc = self.document.doc
-            shown = annotative.viewport_scale(vp)
-            if shown is not None and shown != annotative.current_scale(doc):
-                return None
         # past those, the placement IS the projection MSPACE edits through
         placement = layout_ops.viewport_placement(vp)
         if placement is not None and clip is not None:
@@ -5076,18 +5128,23 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         # froze the first pan tick of every gesture on such a sheet.
         layout = self.document.doc.layouts.get(self._active_layout)
         placements = []
+        annos = []
         for other in visible_viewports(layout):
             placement = self._vp_placement(other)
             if placement is None:
                 return False        # one of them needs the bake: all do
             placements.append(placement)
+            annos.append(self._vp_anno(other))
         if not placements:
             return False
-        scene = self._vp_model_scene_ready()
-        if scene is None:
+        # every scale the sheet shows, asked for before giving up on any:
+        # they build one after another while this tick draws nothing
+        scenes = {anno: self._vp_model_scene_ready(anno)
+                  for anno in dict.fromkeys(annos)}
+        if any(scene is None for scene in scenes.values()):
             return False
-        for placement in placements:
-            placement["scene"] = scene
+        for placement, anno in zip(placements, annos):
+            placement["scene"] = scenes[anno]
         self._vp_hide_baked_content()
         self.viewport.set_live_viewport(placements)
         return True

@@ -147,10 +147,14 @@ def test_the_same_paper_size_in_viewports_at_different_scales(tmp_path):
     assert 1.5 < h_left < 2.6
 
 
-def test_a_viewport_at_another_annotation_scale_keeps_the_bake(qapp):
-    """The live pan tessellates the model once, at CANNOSCALE; a viewport
-    showing annotations at another scale stays on the baked path, which
-    draws each viewport's own representations."""
+def test_a_viewport_at_another_annotation_scale_pans_live(qapp):
+    """A tester's sheet: two views of a plate at 1:1 and 2:1, "cuando entras
+    en la ventana va muy lento". The live pan tessellated the model once, at
+    CANNOSCALE, so a viewport showing annotations at another scale sent the
+    whole sheet to the baked path: a bake per pan tick. It now gets a
+    tessellation of its own scale and pans by a matrix like the rest."""
+    from PySide6.QtWidgets import QApplication
+
     from views.main_window import MainWindow
 
     win = MainWindow()
@@ -160,19 +164,61 @@ def test_a_viewport_at_another_annotation_scale_keeps_the_bake(qapp):
         s50 = A.ensure_scale(doc, "1:50", 1.0, 50.0)
         s100 = A.ensure_scale(doc, "1:100", 1.0, 100.0)
         A.set_current_scale(doc, s50)
-        psp = doc.layouts.get("Layout1")
-        vp = psp.add_viewport(center=(100, 70), size=(160, 100),
-                              view_center_point=(50, 25), view_height=60)
-        win._active_layout = "Layout1"
-        A.set_viewport_scale(vp, s100)
-        assert win._vp_placement(vp) is not None     # nothing annotative yet
-
         text = doc.modelspace().add_text("P1", dxfattribs={"height": 125})
         A.add_representation(text, s50, default=True)
+        A.add_representation(text, s100, default=False, layout={40: 250.0})
+        psp = doc.layouts.get("Layout1")
+        same = psp.add_viewport(center=(60, 70), size=(80, 100),
+                                view_center_point=(50, 25), view_height=600)
+        other = psp.add_viewport(center=(150, 70), size=(80, 100),
+                                 view_center_point=(50, 25), view_height=600)
+        A.set_viewport_scale(same, s50)
+        A.set_viewport_scale(other, s100)
         win.document.revision += 1
-        assert win._vp_placement(vp) is None
-        A.set_viewport_scale(vp, s50)                 # CANNOSCALE's: live again
-        assert win._vp_placement(vp) is not None
+        win.switch_layout("Layout1")
+        assert win._vp_anno(same) is None            # model space's own scale
+        assert win._vp_anno(other)[0] == s100
+        assert win._vp_placement(other) is not None  # no longer "bake only"
+
+        win._activate_viewport(other)
+
+        def settle():
+            for _ in range(200):
+                worker = getattr(win, "_vp_live_worker", None)
+                if worker is not None:
+                    worker.wait()
+                QApplication.processEvents()
+                if all(win._vp_cached_scene(win._vp_anno(v)) is not None
+                       for v in (same, other)):
+                    break
+            worker = win._regen_worker
+            if worker is not None:
+                worker.wait()
+                QApplication.processEvents()
+
+        settle()                   # the user looks for a moment, then drags
+        bakes = []
+        real = win.regen_in_memory
+        win.regen_in_memory = lambda *a, **k: bakes.append(1) or real(*a, **k)
+        for _ in range(5):
+            assert win.vp_view_pan(1.0, 0.5) is True
+        assert bakes == []                           # not one sheet bake
+        live = win.viewport._live_vp
+        assert live is not None and len(live) == 2
+        base, scaled = live[0]["scene"], live[1]["scene"]
+        assert base is win._vp_model_cache[1]
+        assert scaled is not base
+        # ... and it IS the other scale: the text twice as tall
+        def tall(scene):
+            runs = [b.bounds for b in (scene.triangles, scene.lines)
+                    if b.bounds is not None and len(b.bounds)]
+            return (max(r[:, 3].max() for r in runs)
+                    - min(r[:, 1].min() for r in runs))
+
+        assert tall(scaled) == pytest.approx(2 * tall(base), rel=0.05)
+        win.regen_in_memory = real
+        win._vp_gesture_commit()
+        settle()
     finally:
         win.document.dirty = False
         win.close()

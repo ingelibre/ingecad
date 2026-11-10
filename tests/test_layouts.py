@@ -1114,8 +1114,8 @@ def test_a_pan_tick_falls_back_to_a_rebuild_without_a_model_scene(
     win, t, vp = _layout_window(qapp)
     win._active_vp = vp
     # no model scene, and none on its way: the tick cannot go live
-    monkeypatch.setattr(win, "_vp_model_scene_ready", lambda: None)
-    monkeypatch.setattr(win, "_vp_warm_live_scene", lambda: None)
+    monkeypatch.setattr(win, "_vp_model_scene_ready", lambda *a: None)
+    monkeypatch.setattr(win, "_vp_warm_live_scene", lambda *a: None)
     win._regen_ms[win._active_layout] = 500.0      # measured: heavy
     called = []
     monkeypatch.setattr(win, "regen_in_memory", lambda *a, **k: called.append(1))

@@ -822,6 +822,9 @@ class TolerantFrontend(Frontend):
     _anno_scale = _UNSET
     #: ANNOALLVISIBLE of that space
     _anno_show_all: bool = True
+    #: (scale, show all) to draw MODEL space at instead of its own: the
+    #: model as a viewport with another annotation scale shows it
+    anno_override = None
     #: ANNOALLVISIBLE of the sheet whose viewports are being drawn
     _anno_sheet_show_all: bool = True
 
@@ -834,7 +837,10 @@ class TolerantFrontend(Frontend):
         from core.attributes import attmode
 
         self._attmode = attmode(layout.doc)
-        if layout.is_modelspace:
+        if layout.is_modelspace and self.anno_override is not None:
+            # the model as ONE viewport shows it (live navigation)
+            self._anno_scale, self._anno_show_all = self.anno_override
+        elif layout.is_modelspace:
             self._anno_scale = annotative.current_scale(layout.doc)
             self._anno_show_all = annotative.all_visible(layout)
         else:
@@ -1427,7 +1433,7 @@ def _draw_viewport_borders(layout, context, backend) -> None:
 
 
 def build_scene(document: Document, layout_name: str | None = None, *,
-                canvas=None) -> Scene:
+                canvas=None, anno=None) -> Scene:
     """Run the ezdxf frontend over the drawing and pack the result ("regen").
 
     ``layout_name`` selects a tab explicitly: "Model" renders modelspace with
@@ -1442,6 +1448,10 @@ def build_scene(document: Document, layout_name: str | None = None, *,
     entity comes out white -- invisible on the white sheet, which on a
     plan drawn all in "color 7" is the whole drawing vanishing the moment
     a pan starts inside a viewport.
+
+    ``anno`` is ``(scale, show all)`` when that model is the one a viewport
+    with its own annotation scale shows: annotative objects then take the
+    representation of THAT scale, as in the sheet's bake.
     """
     if getattr(document, "edit_block", None) and layout_name in (None, "Model"):
         return _build_block_scene(document)
@@ -1477,6 +1487,7 @@ def build_scene(document: Document, layout_name: str | None = None, *,
         frontend = TolerantFrontend(context, backend, frontend_config(flatten, document))
         frontend._host_document = document   # xref paths resolve from here
         frontend.hidden_handles = hidden
+        frontend.anno_override = anno
         if instancing:
             frontend._block_cache = {}
         return frontend, backend

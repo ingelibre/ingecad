@@ -449,19 +449,19 @@ class Viewport(QOpenGLWidget):
         """Draw the sheet's viewports from a model scene, live.
 
         ``live`` is a list of ``{"scene", "rect", "base", "factor",
-        "offset"}`` — one per viewport, all sharing the one tessellation —
-        or None. Panning or zooming inside a floating viewport then costs a
-        matrix per viewport instead of a re-tessellation of the whole sheet,
-        whose baked copy of that content is hidden while this is on.
+        "offset"}`` — one per viewport — or None. The viewports share one
+        tessellation of the model, except those that show annotations at
+        another scale: each such scale has its own. Panning or zooming
+        inside a floating viewport then costs a matrix per viewport instead
+        of a re-tessellation of the whole sheet, whose baked copy of that
+        content is hidden while this is on.
+
+        The buffers are uploaded once per scene and kept across ticks AND
+        across gestures (each pan used to start with 150-220 ms of
+        re-upload); _draw_live_viewport drops those of a scene that no
+        placement uses any more.
         """
         self._live_vp = live
-        # The buffers hold the model scene the placements share: uploaded
-        # once per scene, kept across ticks AND across gestures (each pan
-        # used to start with 150-220 ms of re-upload), dropped when a
-        # different scene comes.
-        scene_id = id(live[0]["scene"]) if live else None
-        if scene_id is not None and scene_id != getattr(self, "_live_vp_scene_id", None):
-            self._live_vp_dirty = True
         self.update()
 
     def hide_handles(self, handles) -> None:
@@ -688,7 +688,8 @@ class Viewport(QOpenGLWidget):
             holders = [self._scene_bufs, self._paper_bufs,
                        self._overlay_bufs, self._preview_bufs,
                        self._ghost_bufs,
-                       getattr(self, "_live_vp_bufs", None) or {}]
+                       *(bufs for _scene, bufs in
+                         getattr(self, "_live_vp_sets", {}).values())]
             for bufs in holders:
                 for vao, vbo, *_ in bufs.values():
                     vbo.destroy()
@@ -1233,31 +1234,36 @@ class Viewport(QOpenGLWidget):
         placements = self._live_vp
         if not placements:
             return
-        scene = placements[0]["scene"]
-        if getattr(self, "_live_vp_dirty", False) or not getattr(
-                self, "_live_vp_bufs", None):
-            for vao, vbo, _c in (getattr(self, "_live_vp_bufs", None) or {}).values():
+        # one set of buffers per scene in use; the scene rides along so
+        # its id cannot be handed to another one while the set lives
+        sets = getattr(self, "_live_vp_sets", None)
+        if sets is None:
+            sets = self._live_vp_sets = {}
+        wanted = {id(live["scene"]): live["scene"] for live in placements}
+        for key in [k for k in sets if k not in wanted]:
+            for vao, vbo, _c in sets.pop(key)[1].values():
                 vbo.destroy()
                 vao.destroy()
-            self._live_vp_bufs = {}
+        for key, scene in wanted.items():
+            if key in sets:
+                continue
+            bufs = {}
             for name in ("triangles", "lines", "points"):
                 batch = getattr(scene, name)
                 if batch.vertex_count:
-                    self._live_vp_bufs[name] = self._make_vao(batch.data)
+                    bufs[name] = self._make_vao(batch.data)
             if scene.thick.vertex_count:
-                self._live_vp_bufs["thick"] = self._make_thick_vao(
-                    scene.thick.data)
-            self._live_vp_dirty = False
-            self._live_vp_scene_id = id(scene)
-        if not self._live_vp_bufs:
-            return
+                bufs["thick"] = self._make_thick_vao(scene.thick.data)
+            sets[key] = (scene, bufs)
 
         gl.glEnable(GL_SCISSOR_TEST)
         for live in placements:
-            self._draw_one_live_viewport(gl, live, scene)
+            scene, bufs = sets[id(live["scene"])]
+            if bufs:
+                self._draw_one_live_viewport(gl, live, scene, bufs)
         gl.glDisable(GL_SCISSOR_TEST)
 
-    def _draw_one_live_viewport(self, gl, live, scene) -> None:
+    def _draw_one_live_viewport(self, gl, live, scene, bufs) -> None:
         # Clip to the viewport's frame, in device pixels with y flipped —
         # GL counts scissor rows from the bottom.
         x0, y0, x1, y1 = live["rect"]
@@ -1296,7 +1302,7 @@ class Viewport(QOpenGLWidget):
         self._program.setUniformValue(self._loc_mvp, mvp)
         for name, mode in (("triangles", GL_TRIANGLES), ("lines", GL_LINES),
                            ("points", GL_POINTS)):
-            buf = self._live_vp_bufs.get(name)
+            buf = bufs.get(name)
             if buf is None:
                 continue
             vao, _vbo, _count = buf
@@ -1307,7 +1313,7 @@ class Viewport(QOpenGLWidget):
                 gl.glDrawArrays(mode, first, count)
             vao.release()
         self._program.release()
-        self._draw_thick(gl, mvp, model_rect, self._live_vp_bufs.get("thick"),
+        self._draw_thick(gl, mvp, model_rect, bufs.get("thick"),
                          scene.thick, px_per_unit=px_per_unit)
 
     def _upload_overlay(self) -> None:

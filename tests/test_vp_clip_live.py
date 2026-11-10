@@ -474,7 +474,8 @@ def test_an_edit_inside_a_viewport_never_freezes_the_next_pan(win, monkeypatch):
     # flight is exactly what the tick must cope with
     asked = []
     real_warm = win._vp_warm_live_scene
-    monkeypatch.setattr(win, "_vp_warm_live_scene", lambda: asked.append(1))
+    monkeypatch.setattr(win, "_vp_warm_live_scene",
+                        lambda *a: asked.append(1))
     win.invalidate_vp_model_cache()                            # what an edit does
     assert asked == [1] and win._vp_model_cache is None
     assert win.vp_view_pan(1.0, 0.5) is True                   # the next pan
