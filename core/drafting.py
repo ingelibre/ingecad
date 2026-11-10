@@ -6,8 +6,9 @@ What AutoCAD's Drafting Settings dialog (DSETTINGS, reference p. 664) rules
 and where each value lives -- the same places AutoCAD keeps them, so a
 colleague's drawing brings its own grid and ours travels with the file:
 
-* **GRIDUNIT, SNAPUNIT, GRIDMAJOR** are saved in the drawing, in the
-  ``*Active`` entry of the VPORT table (groups 15, 14 and 61). A file with
+* **GRIDUNIT, SNAPUNIT, GRIDMAJOR** and **SNAPANG** are saved in the
+  drawing, in the ``*Active`` entry of the VPORT table (groups 15, 14, 61
+  and 50). A file with
   none carries AutoCAD's metric or imperial default, by its unit.
 * **POLARANG, POLARADDANG, POLARMODE** and the grid *behaviour* bits of
   GRIDDISPLAY (adaptive, subdivision) are per user (QSettings), as in the
@@ -233,6 +234,21 @@ def snap_unit(drawing) -> float:
     return _vport_xy(drawing, "snap_spacing") or 0.0
 
 
+def snap_angle(drawing) -> float:
+    """SNAPANG: the turn of the snap grid and of ORTHO, in degrees from the
+    current UCS's X axis (0 = along the UCS, AutoCAD's default). Walls,
+    roads or plots that are not square to the sheet are drawn with ORTHO
+    along them by setting it, without moving the UCS."""
+    vport = active_vport(drawing)
+    if vport is None:
+        return 0.0
+    try:
+        value = float(vport.dxf.get("snap_rotation", 0.0))
+    except Exception:
+        return 0.0
+    return value % 360.0 if math.isfinite(value) else 0.0
+
+
 def grid_major(drawing) -> int:
     """GRIDMAJOR: minor lines per major line (2-100)."""
     vport = active_vport(drawing)
@@ -268,24 +284,28 @@ def set_grid_behaviour(adaptive: bool, subdivide: bool) -> None:
 
 
 class SetGridCommand(Command):
-    """GRIDUNIT / SNAPUNIT / GRIDMAJOR into the drawing's *Active VPORT --
+    """GRIDUNIT / SNAPUNIT / GRIDMAJOR / SNAPANG into the drawing's *Active VPORT --
     a mutation of the file like any other, so undoable. Nothing drawn
     changes (the grid is display), so no regen."""
 
     _ATTRS = {"grid": "grid_spacing", "snap": "snap_spacing",
-              "major": "major_grid_lines"}
+              "major": "major_grid_lines", "angle": "snap_rotation"}
 
     def __init__(self, grid: Optional[float] = None,
                  snap: Optional[float] = None,
-                 major: Optional[int] = None) -> None:
+                 major: Optional[int] = None,
+                 angle: Optional[float] = None) -> None:
         self.name = "DSETTINGS"
-        self.values = {"grid": grid, "snap": snap, "major": major}
+        self.values = {"grid": grid, "snap": snap, "major": major,
+                       "angle": angle}
         self._old = None
 
     @staticmethod
     def _dxf_value(key: str, value):
         if key == "major":
             return int(value)
+        if key == "angle":
+            return float(value) % 360.0
         return (float(value), float(value))
 
     def _write(self, vport, key: str, raw) -> None:
