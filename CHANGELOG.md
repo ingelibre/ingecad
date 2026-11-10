@@ -44,6 +44,13 @@ and a handful of commands asked for by name.
 - **ERASE takes a member out of its group**; **MATCHPROP** takes its
   destinations by window and crossing; an image's frame snaps.
 
+### Saving as DWG
+- **A drawing saved as DWG opens in the classic CAD without being
+  recovered.** A drawing that came from a recent format lost, on its way
+  to R2000, the version its visual styles and multileader styles must
+  state there; the classic CAD then offered to recover the file and
+  dropped those objects, and the layer groups with them.
+
 ### Commands that did not answer
 - **SELECTSIMILAR, ISOLATEOBJECTS, HIDEOBJECTS, TEXTEDIT and HATCHEDIT**
   were menu entries without a command behind them (#121).
