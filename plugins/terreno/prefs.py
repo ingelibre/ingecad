@@ -11,6 +11,7 @@ from .datum import PSAD56_PERU_SHIFT
 SETTING_ZONE = "terreno/zone"
 SETTING_HEMISPHERE = "terreno/hemisphere"
 SETTING_SHIFT = "terreno/psad56_shift"
+SETTING_CRS = "terreno/crs"
 
 
 def _setting(key: str, default: str) -> str:
@@ -41,7 +42,13 @@ def default_shift() -> tuple[float, float, float]:
     return PSAD56_PERU_SHIFT
 
 
-def save_defaults(zone: int, northern: bool, shift) -> None:
+def default_crs() -> str:
+    """The coordinate system GEOREF proposes first (``EPSG:2154`` for a
+    French office), or "" for the UTM questions."""
+    return _setting(SETTING_CRS, "").strip()
+
+
+def save_defaults(zone: int, northern: bool, shift, crs: str | None = None) -> None:
     try:
         from PySide6.QtCore import QSettings
 
@@ -49,6 +56,8 @@ def save_defaults(zone: int, northern: bool, shift) -> None:
         settings.setValue(SETTING_ZONE, int(zone))
         settings.setValue(SETTING_HEMISPHERE, "N" if northern else "S")
         settings.setValue(SETTING_SHIFT, ",".join(f"{float(v):g}" for v in shift))
+        if crs is not None:
+            settings.setValue(SETTING_CRS, crs.strip())
     except Exception:
         pass
 
@@ -71,7 +80,21 @@ def dem_source():
         return AWS_TERRAIN
     if encoding not in ENCODINGS:
         encoding = "terrarium"
-    return DemSource("custom", "custom DEM tiles", url, encoding, 15, "")
+    return DemSource("custom", "custom DEM tiles", url, max_zoom=15, attribution="", encoding=encoding)
+
+
+def dem_is_ign(georef=None) -> bool:
+    """IGN's RGE ALTI, when Options choose it -- or, left on Automatic with
+    no DEM URL of the user's own, for a drawing in a French system."""
+    choice = _setting(SETTING_DEM_ENCODING, "auto").strip().lower()
+    if choice == "ign":
+        return True
+    if choice not in ("", "auto"):
+        return False
+    from .dem import AWS_TERRAIN
+
+    url = _setting(SETTING_DEM_URL, "").strip()
+    return (not url or url == AWS_TERRAIN.url_template) and is_french(georef)
 
 
 def dem_zoom() -> int:
@@ -97,11 +120,24 @@ SETTING_IMG_URL = "terreno/imagery_url"
 SETTING_IMG_MAXZOOM = "terreno/imagery_maxzoom"
 
 
-def imagery_source():
-    """The tile source Options names: a preset, or the user's own XYZ."""
-    from .tiles import DEFAULT_SOURCE_ID, PRESETS, custom_source
+def is_french(georef) -> bool:
+    """Whether the drawing declares one of IGN's systems (Lambert-93, a CC
+    zone, NTF Lambert, the overseas departments)."""
+    from .datum import FRENCH_SYSTEMS
 
-    chosen = _setting(SETTING_IMG_SOURCE, DEFAULT_SOURCE_ID).strip()
+    return bool(georef is not None and getattr(georef, "crs", "")
+                and georef.crs in set(FRENCH_SYSTEMS.values()))
+
+
+def imagery_source(georef=None):
+    """The tile source Options names: a preset, or the user's own XYZ.
+    Unset, a drawing in a French system gets IGN's BD ORTHO HR."""
+    from .tiles import DEFAULT_SOURCE_ID, FRANCE_SOURCE_ID, PRESETS, custom_source
+
+    default = FRANCE_SOURCE_ID if is_french(georef) else DEFAULT_SOURCE_ID
+    chosen = _setting(SETTING_IMG_SOURCE, "auto").strip()
+    if chosen in ("", "auto"):
+        chosen = default
     if chosen == "custom":
         url = _setting(SETTING_IMG_URL, "").strip()
         if url:

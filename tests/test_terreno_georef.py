@@ -142,7 +142,7 @@ def test_georef_tool_asks_zone_hemisphere_and_datum():
     h = _Harness()
     tool = GeorefTool(h.ctx)
     tool.start()
-    assert h.prompts[-1].startswith("UTM zone number or [Longitude/Coordsys/Remove] <19>:")
+    assert h.prompts[-1].startswith("UTM zone number or [Longitude/Coordsys/France/Remove] <19>:")
     assert tool.on_option("70")                              # not a zone
     assert "1 to 60" in h.echoed[-1]
     assert tool.on_option("19")
@@ -336,7 +336,7 @@ def test_the_plugin_is_bundled_on_with_its_menu_names_and_options_page(
         finally:
             i18n.set_language("en")
         # the options page, applied
-        for key in (prefs.SETTING_ZONE, prefs.SETTING_HEMISPHERE, prefs.SETTING_SHIFT):
+        for key in (prefs.SETTING_ZONE, prefs.SETTING_HEMISPHERE, prefs.SETTING_SHIFT, prefs.SETTING_CRS):
             settings.remove(key)
         dlg = OptionsDialog(win)
         tabs = [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())]
@@ -352,7 +352,7 @@ def test_the_plugin_is_bundled_on_with_its_menu_names_and_options_page(
         assert prefs.default_shift() == (-288.0, 175.0, -379.0)
         dlg.close()
     finally:
-        for key in (prefs.SETTING_ZONE, prefs.SETTING_HEMISPHERE, prefs.SETTING_SHIFT):
+        for key in (prefs.SETTING_ZONE, prefs.SETTING_HEMISPHERE, prefs.SETTING_SHIFT, prefs.SETTING_CRS):
             settings.remove(key)
         # apply() writes every tab, the new-drawing template too; left behind,
         # later windows in the same process start their drawings in mm

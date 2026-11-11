@@ -273,6 +273,22 @@ def crs_name(code: str) -> str:
         return code
 
 
+#: Datums whose best path to WGS84 goes through another geographic system:
+#: France's old NTF reaches RGF93 v1 (EPSG:4171) through IGN's ntf_r93
+#: grid (a few centimetres), while PROJ's own NTF -> WGS84 is a Helmert
+#: shift (2 m). RGF93 is taken as WGS84, as PROJ does for Lambert-93
+#: (1 m in EPSG's catalogue, the size of the ETRS89/ITRF drift).
+PIVOTS = {"NTF": "EPSG:4171", "NTF (Paris)": "EPSG:4171"}
+
+
+def _is_ballpark(transformer) -> bool:
+    """PROJ's last resort when it knows no path: no shift at all, up to
+    hundreds of metres off. Never taken when a real path exists."""
+    accuracy = getattr(transformer, "accuracy", -1.0)
+    return "ballpark" in str(getattr(transformer, "description", "")).lower() or accuracy is None \
+        or accuracy < 0
+
+
 @functools.lru_cache(maxsize=16)
 def _candidates(code: str) -> tuple:
     """Every way PROJ knows from ``code`` to WGS84 lon/lat, most accurate
@@ -280,19 +296,68 @@ def _candidates(code: str) -> tuple:
     National Grid is the OSTN15 grid (1 m in EPSG's catalogue, mm in
     practice), fetched from cdn.proj.org on first use and cached; offline
     it cannot be read, and the next path -- a Helmert shift, metres -- still
-    answers."""
+    answers. A datum of :data:`PIVOTS` (France's NTF) tries its national
+    grid first, through the pivot system."""
     try:
         import warnings
 
+        from pyproj import CRS
         from pyproj.network import set_network_enabled
         from pyproj.transformer import TransformerGroup
     except ImportError as exc:                    # pragma: no cover
         raise ProjUnavailable("pyproj is not installed") from exc
     set_network_enabled(True)
+    out: list = []
     with warnings.catch_warnings():               # "best not available": handled below
         warnings.simplefilter("ignore")
+        try:
+            geodetic = CRS.from_user_input(code).geodetic_crs.name
+        except Exception:
+            geodetic = ""
+        pivot = PIVOTS.get(geodetic)
+        if pivot:
+            out += [t for t in TransformerGroup(code, pivot, always_xy=True).transformers
+                    if not _is_ballpark(t)]
         group = TransformerGroup(code, "EPSG:4326", always_xy=True)
-    return tuple(group.transformers)
+    out += list(group.transformers)
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class Route:
+    """How PROJ actually converts a coordinate system's points: the path
+    it takes, its accuracy in metres (0 when unknown), and whether a more
+    accurate path exists but cannot be read here (a grid, offline)."""
+
+    description: str
+    accuracy: float
+    degraded: bool
+
+
+def route(code: str, x: float | None = None, y: float | None = None) -> Route:
+    """The path a point of ``code`` takes to WGS84 -- probed at ``(x, y)``,
+    or at the centre of the system's area of use -- so GEOREF can say
+    which conversion the drawing gets, and warn when it is not the best."""
+    from pyproj import CRS, Transformer
+
+    candidates = _candidates(code)
+    if x is None or y is None:
+        crs = CRS.from_user_input(code)
+        area = crs.area_of_use
+        if area is None:
+            return Route(candidates[0].description if candidates else "", 0.0, False)
+        lon = (area.west + area.east) / 2.0
+        lat = (area.south + area.north) / 2.0
+        # the projection alone, on the system's own datum: no grid involved
+        x, y = Transformer.from_crs(crs.geodetic_crs, crs, always_xy=True).transform(lon, lat)
+    for index, transformer in enumerate(candidates):
+        a, b = transformer.transform(x, y)
+        if math.isfinite(a) and math.isfinite(b):
+            accuracy = transformer.accuracy if (transformer.accuracy or 0) > 0 else 0.0
+            best = candidates[0].accuracy if (candidates[0].accuracy or 0) > 0 else accuracy
+            return Route(transformer.description, float(accuracy),
+                         index > 0 and float(accuracy) > float(best))
+    return Route("", 0.0, False)
 
 
 def _through_proj(code: str, x: float, y: float, inverse: bool) -> tuple[float, float]:
@@ -305,6 +370,46 @@ def _through_proj(code: str, x: float, y: float, inverse: bool) -> tuple[float, 
         if math.isfinite(a) and math.isfinite(b):
             return a, b
     raise ValueError(f"PROJ could not convert the point in {code}")
+
+
+# -- France (IGN) -----------------------------------------------------------------------------
+
+#: What a French surveyor types for the systems IGN publishes: Lambert-93,
+#: the nine conic conformal zones CC42..CC50, the old NTF Lambert zones of
+#: pre-2000 plans (II etendu is EPSG:27572), and the overseas departments.
+FRENCH_SYSTEMS = {
+    "L93": "EPSG:2154", "LAMBERT93": "EPSG:2154", "RGF93": "EPSG:2154",
+    **{f"CC{n}": f"EPSG:{3900 + n}" for n in range(42, 51)},
+    "LI": "EPSG:27571", "L1": "EPSG:27571",
+    "LII": "EPSG:27572", "L2": "EPSG:27572", "LIIE": "EPSG:27572", "L2E": "EPSG:27572",
+    "LIII": "EPSG:27573", "L3": "EPSG:27573",
+    "LIV": "EPSG:27574", "L4": "EPSG:27574",
+    "ANTILLES": "EPSG:5490", "GUADELOUPE": "EPSG:5490", "MARTINIQUE": "EPSG:5490",
+    "GUYANE": "EPSG:2972", "REUNION": "EPSG:2975", "MAYOTTE": "EPSG:4471",
+    "SPM": "EPSG:4467",
+}
+
+
+def cc_zone_for_lat(lat: float) -> int:
+    """The conic conformal zone (42..50) for a latitude in degrees: zone n
+    is centred on n degrees north, its standard parallels n +/- 0.75."""
+    return min(50, max(42, int(math.floor(lat + 0.5))))
+
+
+def french_system(text: str) -> str | None:
+    """The EPSG code of what was typed -- ``L93``, ``CC44``, ``L2E``,
+    ``Guyane``, or a latitude such as ``43.93`` for its CC zone -- or None
+    when it names none of them."""
+    token = re.sub(r"[\s\-_.]", "", text.strip().upper()).replace("É", "E")
+    if token in FRENCH_SYSTEMS:
+        return FRENCH_SYSTEMS[token]
+    try:
+        lat = float(text.strip().replace(",", "."))
+    except ValueError:
+        return None
+    if 41.0 <= lat <= 51.5:
+        return f"EPSG:{3900 + cc_zone_for_lat(lat)}"
+    return None
 
 
 # -- typed and printed coordinates ----------------------------------------------------------

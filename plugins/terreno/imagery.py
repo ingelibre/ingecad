@@ -124,12 +124,18 @@ def satellite_image(georef: Georef, polygon, zoom: int, cache: TileCache,
     tx0, ty0 = p["tx0"], p["ty0"]
     ntx = max(x for x, _y in tiles) - tx0 + 1
     nty = max(y for _x, y in tiles) - ty0 + 1
-    mosaic = Image.new("RGB", (ntx * TILE_PX, nty * TILE_PX), (0, 0, 0))
+    # white under a transparent tile (IGN's cadastre is lines on nothing)
+    mosaic = Image.new("RGB", (ntx * TILE_PX, nty * TILE_PX), (255, 255, 255))
     for k, (x, y) in enumerate(tiles):
         data = cache.bytes(zoom, x, y)
         try:
             with Image.open(io.BytesIO(data)) as tile:
-                mosaic.paste(tile.convert("RGB"), ((x - tx0) * TILE_PX, (y - ty0) * TILE_PX))
+                at = ((x - tx0) * TILE_PX, (y - ty0) * TILE_PX)
+                if tile.mode in ("RGBA", "LA", "P"):
+                    rgba = tile.convert("RGBA")
+                    mosaic.paste(rgba.convert("RGB"), at, rgba)
+                else:
+                    mosaic.paste(tile.convert("RGB"), at)
         except Exception as exc:
             cache.forget(zoom, x, y)
             raise TileError(f"{cache.source.url(zoom, x, y)}: not an image ({exc})") from exc

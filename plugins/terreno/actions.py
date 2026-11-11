@@ -195,10 +195,14 @@ def dem_points(document, samples, source_id: str) -> CompositeCommand:
 def honesty(dem, lat: float) -> str:
     """What every DEM command says at the end: where the numbers come
     from and how coarse they are."""
-    return tr("Elevations from {source}: about {pixel:.0f} m per pixel over {data:.0f} m data. "
+    text = tr("Elevations from {source}: about {pixel:.0f} m per pixel over {data:.0f} m data. "
               "For preliminary design only, never for a survey.",
               source=dem.source.name, pixel=dem.metres_per_pixel(lat),
               data=dem.source.data_resolution_m)
+    vertical = getattr(dem.source, "vertical", "")
+    if vertical:
+        text += " " + tr("Heights in {vertical}.", vertical=vertical)
+    return text
 
 
 class DemSurface:

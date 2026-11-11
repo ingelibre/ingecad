@@ -18,6 +18,10 @@ class TerrainOptionsPage(QWidget):
     def __init__(self, dialog, window) -> None:
         super().__init__(dialog)
         form = QFormLayout(self)
+        self.crs = QLineEdit(self)
+        self.crs.setText(prefs.default_crs())
+        self.crs.setPlaceholderText(tr("empty: UTM"))
+        form.addRow(tr("Default coordinate system (EPSG:2154, L93, CC44...):"), self.crs)
         self.zone = QSpinBox(self)
         self.zone.setRange(1, 60)
         self.zone.setValue(prefs.default_zone())
@@ -49,16 +53,20 @@ class TerrainOptionsPage(QWidget):
         self.dem_url.setPlaceholderText("https://.../{z}/{x}/{y}.png")
         form.addRow(tr("DEM tiles URL ({z}/{x}/{y}):"), self.dem_url)
         self.dem_encoding = QComboBox(self)
+        self.dem_encoding.addItem(tr("Automatic (IGN RGE ALTI in France, AWS elsewhere)"), "auto")
         self.dem_encoding.addItem("Terrarium (AWS Terrain Tiles)", "terrarium")
         self.dem_encoding.addItem("Mapbox Terrain-RGB", "mapbox")
-        self.dem_encoding.setCurrentIndex(max(0, self.dem_encoding.findData(source.encoding)))
+        self.dem_encoding.addItem(tr("IGN RGE ALTI (France, 1 m, NGF heights)"), "ign")
+        saved = prefs._setting(prefs.SETTING_DEM_ENCODING, "auto").strip().lower() or "auto"
+        self.dem_encoding.setCurrentIndex(max(0, self.dem_encoding.findData(saved)))
         form.addRow(tr("DEM encoding:"), self.dem_encoding)
         self.dem_zoom = QSpinBox(self)
         self.dem_zoom.setRange(8, 15)
         self.dem_zoom.setValue(prefs.dem_zoom())
         form.addRow(tr("DEM zoom level (13 = about 18 m per pixel):"), self.dem_zoom)
         dem_note = QLabel(tr("AWS Terrain Tiles need no key; the data is a 30 m DEM (SRTM and others), "
-                             "for preliminary design only. Tiles are kept in the cache folder."))
+                             "for preliminary design only. Tiles are kept in the cache folder.") + " "
+                          + tr("IGN RGE ALTI needs no key either: 1 m over France, heights in NGF-IGN69."))
         dem_note.setWordWrap(True)
         form.addRow(dem_note)
 
@@ -66,11 +74,13 @@ class TerrainOptionsPage(QWidget):
         from .tiles import PRESETS
 
         source = prefs.imagery_source()
+        saved = prefs._setting(prefs.SETTING_IMG_SOURCE, "auto").strip() or "auto"
         self.img_source = QComboBox(self)
+        self.img_source.addItem(tr("Automatic (IGN BD ORTHO HR in France, Esri elsewhere)"), "auto")
         for preset in PRESETS.values():
             self.img_source.addItem(preset.name, preset.id)
         self.img_source.addItem(tr("Custom XYZ tiles"), "custom")
-        chosen = "custom" if source.id.startswith("custom") else source.id
+        chosen = "custom" if source.id.startswith("custom") else ("auto" if saved == "auto" else source.id)
         self.img_source.setCurrentIndex(max(0, self.img_source.findData(chosen)))
         form.addRow(tr("Satellite image source:"), self.img_source)
         self.img_url = QLineEdit(self)
@@ -86,8 +96,24 @@ class TerrainOptionsPage(QWidget):
         img_note.setWordWrap(True)
         form.addRow(img_note)
 
+    def _crs_code(self) -> str:
+        """What was typed, as an EPSG code PROJ accepts; "" when empty or
+        not a projected system (then GEOREF asks the UTM questions)."""
+        from . import datum
+
+        text = self.crs.text().strip()
+        if not text:
+            return ""
+        code = datum.french_system(text) if not text.replace(".", "").isdigit() else None
+        try:
+            crs = datum.check_crs(code or text)
+        except (ValueError, RuntimeError):
+            return ""
+        authority = crs.to_authority()
+        return ":".join(authority) if authority else (code or text)
+
     def apply(self) -> None:
         prefs.save_defaults(self.zone.value(), self.hemisphere.currentData() == "N",
-                            tuple(box.value() for box in self.shift))
+                            tuple(box.value() for box in self.shift), self._crs_code())
         prefs.save_dem(self.dem_url.text(), self.dem_encoding.currentData(), self.dem_zoom.value())
         prefs.save_imagery(self.img_source.currentData(), self.img_url.text(), self.img_maxzoom.value())
