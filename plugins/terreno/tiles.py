@@ -42,16 +42,37 @@ class TileSource:
     url_template: str
     max_zoom: int = 19
     attribution: str = ""
+    #: Where a tile this source lacks (HTTP 404) is taken instead -- the
+    #: same grid from a coarser or older product, e.g. IGN's BD ORTHO HR
+    #: falling back to its general orthophoto mosaic.
+    fallback_template: str = ""
 
     def url(self, z: int, x: int, y: int) -> str:
-        return (self.url_template.replace("{z}", str(z)).replace("{x}", str(x))
-                .replace("{y}", str(y)))
+        return _fill(self.url_template, z, x, y)
+
+    def fallback_url(self, z: int, x: int, y: int) -> str:
+        return _fill(self.fallback_template, z, x, y) if self.fallback_template else ""
 
     @property
     def extension(self) -> str:
-        """The cache file's extension, from the template (.png / .jpg / .bin)."""
+        """The cache file's extension, from the template (.png / .jpg / .bin):
+        a path ending (``.../{y}.png``) or an OGC ``FORMAT=image/jpeg``."""
         match = re.search(r"\.(png|jpe?g|webp)(?:\?|$)", self.url_template, re.IGNORECASE)
-        return "." + match.group(1).lower() if match else ".bin"
+        if match is None:
+            match = re.search(r"format=image/(png|jpe?g|webp)", self.url_template, re.IGNORECASE)
+        return "." + match.group(1).lower().replace("jpeg", "jpg") if match else ".bin"
+
+
+def _fill(template: str, z: int, x: int, y: int) -> str:
+    return template.replace("{z}", str(z)).replace("{x}", str(x)).replace("{y}", str(y))
+
+
+def ign_wmts(layer: str, fmt: str = "image/jpeg", style: str = "normal") -> str:
+    """A Géoplateforme (IGN) WMTS layer as an XYZ template on the Web
+    Mercator grid (``PM``): open data, no key, Licence Ouverte Etalab 2.0."""
+    return ("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
+            f"&LAYER={layer}&STYLE={style}&TILEMATRIXSET=PM"
+            "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}" f"&FORMAT={fmt}")
 
 
 PRESETS: dict[str, TileSource] = {
@@ -79,7 +100,34 @@ PRESETS: dict[str, TileSource] = {
         max_zoom=19,
         attribution="© OpenStreetMap contributors",
     ),
+    # France (IGN Géoplateforme): open data, Licence Ouverte Etalab 2.0
+    "ign_ortho_hr": TileSource(
+        id="ign_ortho_hr",
+        name="IGN BD ORTHO HR (20 cm)",
+        url_template=ign_wmts("HR.ORTHOIMAGERY.ORTHOPHOTOS"),
+        max_zoom=19,
+        attribution="IGN – BD ORTHO® HR, Géoplateforme – Licence Ouverte Etalab 2.0",
+        fallback_template=ign_wmts("ORTHOIMAGERY.ORTHOPHOTOS"),
+    ),
+    "ign_plan": TileSource(
+        id="ign_plan",
+        name="Plan IGN",
+        url_template=ign_wmts("GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2", "image/png"),
+        max_zoom=19,
+        attribution="IGN – Plan IGN, Géoplateforme – Licence Ouverte Etalab 2.0",
+    ),
+    "ign_cadastre": TileSource(
+        id="ign_cadastre",
+        name="IGN Parcellaire Express (cadastre)",
+        url_template=ign_wmts("CADASTRALPARCELS.PARCELLAIRE_EXPRESS", "image/png"),
+        max_zoom=19,
+        attribution="IGN – Parcellaire Express (PCI), Géoplateforme – Licence Ouverte Etalab 2.0",
+    ),
 }
+
+#: The IGN source a drawing in a French coordinate system gets by default,
+#: unless Options > Terrain names another.
+FRANCE_SOURCE_ID = "ign_ortho_hr"
 
 DEFAULT_SOURCE_ID = "esri_imagery"
 
@@ -193,7 +241,13 @@ class TileCache:
                 return path.read_bytes()
             except OSError:
                 pass
-        data = self.fetch(self.source.url(z, x, y))
+        try:
+            data = self.fetch(self.source.url(z, x, y))
+        except TileError as exc:
+            fallback = self.source.fallback_url(z, x, y)
+            if not fallback or "HTTP 404" not in str(exc):
+                raise
+            data = self.fetch(fallback)                # the product lacks this tile: the next one
         self.downloads += 1
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

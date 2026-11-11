@@ -266,7 +266,7 @@ def test_satimage_tool_asks_zoom_source_and_clip_then_inserts(tmp_path, monkeypa
     assert h.prompts[-1].startswith("Zoom level (1-19) or [Source] <18>:")
     assert tool.on_option("25") and "serves zoom levels 1 to 19" in h.echoed[-1]
     assert tool.on_option("S")
-    assert h.prompts[-1] == "Source [Esri/Sentinel/Osm/Custom] <Esri World Imagery>:"
+    assert h.prompts[-1] == "Source [Esri/Sentinel/Osm/Ign ortho/Plan ign/cadAstre ign/Custom] <Esri World Imagery>:"
     assert tool.on_option("C") and "No custom XYZ source" in h.echoed[-1]
     assert tool.on_option("S")
     assert tool.on_option("Osm")

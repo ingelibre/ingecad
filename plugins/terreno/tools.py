@@ -33,7 +33,10 @@ class GeorefTool(Tool):
     """GEOREF: declare the drawing's UTM zone, hemisphere and datum (or
     remove the declaration). The zone can be given, or worked out from
     a longitude; PSAD56 asks for its shift to WGS84. Coordsys takes any
-    projected coordinate system PROJ knows, by its EPSG code (#27)."""
+    projected coordinate system PROJ knows, by its EPSG code (#27);
+    France takes IGN's systems by the names a French surveyor types
+    (L93, CC44, L2E...). Options > Terrain may make a system the default,
+    and then GEOREF asks for it first."""
 
     def start(self) -> None:
         self.name = "GEOREF"
@@ -50,12 +53,23 @@ class GeorefTool(Tool):
         self._crs = current.crs if current and current.crs else ""
         if current is not None:
             self.ctx.echo(tr("Drawing georeferenced: {what}", what=actions.describe(current)))
+        if current is None and prefs.default_crs():
+            self._crs = prefs.default_crs()
+            self._ask_crs()
+            return
         self._ask_zone()
 
     # -- the questions, one after the other ---------------------------------------
     def _ask_zone(self) -> None:
         self._stage = "zone"
-        self.prompt("UTM zone number or [Longitude/Coordsys/Remove] <{zone}>:", zone=self._zone)
+        self.prompt("UTM zone number or [Longitude/Coordsys/France/Remove] <{zone}>:", zone=self._zone)
+
+    def _ask_france(self) -> None:
+        self._stage = "france"
+        current = next((name for name, code in datum.FRENCH_SYSTEMS.items()
+                        if code == self._crs), "L93")
+        self.prompt("French system: L93, CC42 to CC50 (or a latitude), NTF L1 to L4 or L2E, "
+                    "Antilles, Guyane, Reunion, Mayotte, SPM <{default}>:", default=current)
 
     def _ask_crs(self) -> None:
         self._stage = "crs"
@@ -91,6 +105,9 @@ class GeorefTool(Tool):
                 return True
             if key == "C":
                 self._ask_crs()
+                return True
+            if key == "F":
+                self._ask_france()
                 return True
             try:
                 zone = int(text.strip())
@@ -140,9 +157,25 @@ class GeorefTool(Tool):
             else:
                 self._ask_datum()
             return True
+        if stage == "france":
+            code = datum.french_system(text) if text.strip() else \
+                (self._crs if self._crs in datum.FRENCH_SYSTEMS.values() else datum.FRENCH_SYSTEMS["L93"])
+            if code is None:
+                self.ctx.echo(tr('"{text}" is not a French system IngeCAD knows.', text=text.strip()))
+                self._ask_france()
+                return True
+            self._apply_crs(code)
+            return True
         if stage == "crs":
             if not text.strip() and self._crs:
                 self._apply_crs(self._crs)
+                return True
+            if text.strip().upper() == "UTM":
+                self._ask_zone()
+                return True
+            french = datum.french_system(text)
+            if french is not None and not text.strip().replace(".", "").isdigit():
+                self._apply_crs(french)          # L93, CC44... typed where a code was asked
                 return True
             try:
                 crs = datum.check_crs(text)
@@ -190,7 +223,7 @@ class GeorefTool(Tool):
                 self._ask_shift()
         elif stage == "shift":
             self._apply()
-        elif stage == "crs":
+        elif stage in ("crs", "france"):
             self.on_option("")
         else:
             self.ctx.finish()
@@ -207,9 +240,28 @@ class GeorefTool(Tool):
     def _apply_crs(self, code: str) -> None:
         document = _document(self.ctx)
         georef = Georef(crs=code)
+        self._report_route(code)
         self.ctx.execute(actions.set_georef(document, georef))
         self.ctx.echo(tr("Drawing georeferenced: {what}", what=actions.describe(georef)))
         self.ctx.finish()
+
+    def _report_route(self, code: str) -> None:
+        """Say how PROJ converts this system to WGS84, and warn when a more
+        accurate path (a national grid, such as IGN's for NTF) is out of
+        reach -- an old plan is not read 2 m off without anyone knowing."""
+        try:
+            path = datum.route(code)
+        except Exception:
+            return
+        if not path.description:
+            return
+        if path.accuracy > 0:
+            self.ctx.echo(tr("Conversion to WGS84: {path} (about {accuracy:g} m).",
+                             path=path.description, accuracy=path.accuracy))
+        if path.degraded:
+            self.ctx.echo(tr("A more accurate conversion exists for this system, through a grid PROJ "
+                             "downloads from cdn.proj.org, but it could not be read here. Connect to "
+                             "the internet and run GEOREF again for it."))
 
     def _apply(self) -> None:
         document = _document(self.ctx)
@@ -584,12 +636,13 @@ class SatImageTool(_BoundaryTool):
     the drawing and inserted on TERRENO-SAT at the back, with the
     attribution the licence asks for."""
 
-    SOURCE_KEYS = {"E": "esri_imagery", "S": "s2cloudless", "O": "osm"}
+    SOURCE_KEYS = {"E": "esri_imagery", "S": "s2cloudless", "O": "osm",
+                   "I": "ign_ortho_hr", "P": "ign_plan", "A": "ign_cadastre"}
 
     def start(self) -> None:
         self.name = "SATIMAGE"
         self._begin()
-        self._source = prefs.imagery_source()
+        self._source = prefs.imagery_source(actions.georef_of(_document(self.ctx)))
         self._zoom = min(18, self._source.max_zoom)
         self._clip = True
         _ready(self)
@@ -603,7 +656,8 @@ class SatImageTool(_BoundaryTool):
 
     def _ask_source(self) -> None:
         self._stage = "source"
-        self.prompt("Source [Esri/Sentinel/Osm/Custom] <{name}>:", name=self._source.name)
+        self.prompt("Source [Esri/Sentinel/Osm/Ign ortho/Plan ign/cadAstre ign/Custom] <{name}>:",
+                    name=self._source.name)
 
     def _ask_clip(self) -> None:
         self._stage = "clip"
