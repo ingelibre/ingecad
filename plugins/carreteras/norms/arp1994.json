@@ -1,0 +1,17 @@
+{
+  "id": "ARP1994",
+  "name": "ARP - Aménagement des routes principales (Sétra, 1994)",
+  "country": "FR",
+  "verified": true,
+  "source": "ARP, Sétra, août 1994 (circulaire du 5 août 1994, valant ICTARN): §3.1 tracé en plan, annexe 1 dévers, §3.2 profil en long; longueurs de clothoïde: Cerema DT4044.",
+  "note": "Rm, Rdm, Rnd, profil en long et longueurs de clothoïde de l'ARP 1994. Remplacé par l'ARP 2022 pour les routes ordinaires: garder pour les études qui s'y réfèrent.",
+  "superelevation": {"law": "inverse_linear", "max": 7.0, "min": 2.5, "crown": -2.5, "reduced_max": 5.0},
+  "clothoid": {"required_below": "rnd", "factor": 1.0, "length": {"formula": "k_r04", "k": {"2": 6, "3": 9, "4": 12}, "cap": {"2": 67, "3": 100, "4": 133}}},
+  "chaining": {"rule": "ratio_both", "ratio": 1.5, "unless_both_above": 500},
+  "categories": {
+    "R60": {"rm": 120, "rdm": 450, "rnd": 600, "crest_min": 1500, "sag_min": 1500, "grade_max": 7},
+    "R80": {"rm": 240, "rdm": 650, "rnd": 900, "crest_min": 3000, "sag_min": 2200, "grade_max": 6},
+    "T80": {"rm": 240, "rdm": 650, "rnd": 900, "crest_min": 3000, "sag_min": 2200, "grade_max": 6},
+    "T100": {"rm": 425, "rdm": 900, "rnd": 1300, "crest_min": 6000, "sag_min": 3000, "grade_max": 5}
+  }
+}

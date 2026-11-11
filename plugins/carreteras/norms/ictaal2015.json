@@ -1,0 +1,16 @@
+{
+  "id": "ICTAAL2015",
+  "name": "ICTAAL - Autoroutes de liaison (Cerema, 2015)",
+  "country": "FR",
+  "verified": true,
+  "source": "ICTAAL, édition 2015 (instruction du 13/07/2015): tableau 3-1 (tracé en plan), tableau 3-2 (profil en long), §3.1 raccordements progressifs; §8.2.2 relief difficile.",
+  "note": "Courbes de rayon < 1,5 Rdn introduites par des clothoïdes de longueur au moins égale à max(14 Δδ, R/9). La loi de dévers n'est pas reprise ici: la vérifier dans l'instruction.",
+  "superelevation": {"law": null, "crown": -2.5},
+  "clothoid": {"required_below": "rnd", "factor": 1.5, "length": {"formula": "max_14dd_r9"}},
+  "chaining": {"rule": "ratio_next", "ratio": 1.5, "applies_below_factor": 1.5},
+  "categories": {
+    "L1": {"rm": 600, "rdm": 1000, "rnd": 1000, "crest_min": 12500, "sag_min": 4200, "grade_max": 5},
+    "L2": {"rm": 400, "rdm": 650, "rnd": 650, "crest_min": 6000, "sag_min": 3000, "grade_max": 6},
+    "L2-relief-difficile": {"rm": 240, "rdm": 650, "rnd": 650, "crest_min": 2700, "sag_min": 3000, "grade_max": 6}
+  }
+}

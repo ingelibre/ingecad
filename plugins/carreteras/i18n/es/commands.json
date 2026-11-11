@@ -20,5 +20,11 @@
   },
   "CURVETABLE": {
     "name": "CUADROCURVAS"
+  },
+  "AXISELEMENTS": {
+    "name": "CUADROELEMENTOS"
+  },
+  "ROADCHECK": {
+    "name": "VERIFICARNORMA"
   }
 }

@@ -1,0 +1,16 @@
+{
+  "id": "ARP2022",
+  "name": "ARP - Aménagement des routes principales (Cerema, 2022)",
+  "country": "FR",
+  "verified": false,
+  "source": "ARP, Cerema, août 2022 (DT9075): chap. 4 tableau 10 (rayons), tableau 11 (raccordements progressifs).",
+  "note": "Valeurs relevées dans une source secondaire, pas dans le guide lui-même: à vérifier et compléter (tableaux 10 et 11, terme de gauchissement de la longueur de clothoïde, profil en long). Rdn sert ici de rayon non déversé et de rayon au dévers minimal.",
+  "superelevation": {"law": "inverse_linear", "max": 7.0, "min": 2.5, "crown": -2.5, "reduced_max": 5.0},
+  "clothoid": {"required_below": "rnd", "factor": 1.0, "length": {"formula": "k_r04", "k": {"2": 6, "3": 12, "4": 12}, "cap": {}}},
+  "chaining": null,
+  "categories": {
+    "R1": {"rm": 240, "rdm": 400, "rnd": 400},
+    "R2": {"rm": 125, "rdm": 400, "rnd": 400},
+    "Artere110": {"rm": null, "rdm": 650, "rnd": 650}
+  }
+}
