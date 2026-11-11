@@ -16,29 +16,57 @@ import pytest
 from ezdxf.fonts import fonts
 from ezdxf.fonts.ttfonts import TTFontRenderer
 
+from ezdxf.addons.drawing import frontend as _frontend
+if not hasattr(_frontend, "is_complex_mtext"):
+    _frontend.is_complex_mtext = lambda mtext: False
+
 from core import ezdxf_patches
 
 
 @pytest.fixture(autouse=True)
 def setup_patches():
-    from ezdxf.addons.drawing import frontend as _frontend
-    if not hasattr(_frontend, "is_complex_mtext"):
-        _frontend.is_complex_mtext = lambda mtext: False
     ezdxf_patches.apply()
 
 
+def _has_thai_font() -> bool:
+    ezdxf_patches.apply()
+    fb = ezdxf_patches._get_thai_fallback_font()
+    if fb is not None:
+        return True
+    try:
+        f = fonts.make_font("tahoma.ttf", 1.0)
+        return getattr(f, "glyph_cache", None) is not None and 0x0E01 in f.glyph_cache.cmap
+    except Exception:
+        return False
+
+
+needs_thai_font = pytest.mark.skipif(
+    not _has_thai_font(),
+    reason="No Thai font installed on this system",
+)
+
+
+def _thai_font(height: float = 10.0):
+    fb = ezdxf_patches._get_thai_fallback_font()
+    if fb is not None:
+        return fonts.make_font(fb.name, height)
+    return fonts.make_font("tahoma.ttf", height)
+
+
+@needs_thai_font
 def test_thai_combining_characters_zero_advance_width():
     """Combining marks in Thai must not advance the text cursor."""
-    f = fonts.make_font("tahoma.ttf", 10.0)
+    f = _thai_font(10.0)
     # 'ท' alone vs 'ที่' (ท + ี + ่)
     w_base = f.glyph_cache.get_text_length("ท", 10.0)
     w_cluster = f.glyph_cache.get_text_length("ที่", 10.0)
     assert pytest.approx(w_base, rel=1e-4) == w_cluster
 
 
+@needs_thai_font
 def test_thai_tone_mark_elevation():
     """A tone mark over an upper vowel must sit at Level 2 above the vowel."""
-    f = fonts.make_font("tahoma.ttf", 10.0)
+    f = _thai_font(10.0)
     paths = f.text_glyph_paths("ที่", 10.0)
     # paths: [ท, ี, ่]
     assert len(paths) == 3
@@ -52,9 +80,10 @@ def test_thai_tone_mark_elevation():
     assert tone_box.extmin[1] >= vowel_box.extmax[1] - 0.5
 
 
+@needs_thai_font
 def test_thai_ascender_consonant_shift():
     """Upper vowel on ป must be shifted left to avoid colliding with the tall ascender."""
-    f = fonts.make_font("tahoma.ttf", 10.0)
+    f = _thai_font(10.0)
     paths_ba = f.text_glyph_paths("บี", 10.0)
     paths_pa = f.text_glyph_paths("ปี", 10.0)
     assert len(paths_ba) == 2
@@ -66,9 +95,10 @@ def test_thai_ascender_consonant_shift():
     assert vowel_pa_x < vowel_ba_x
 
 
+@needs_thai_font
 def test_thai_sara_am_normalization():
     """น้ำ (น + ้ + ำ) decomposes so the tone mark sits above the Nikhahit circle."""
-    f = fonts.make_font("tahoma.ttf", 10.0)
+    f = _thai_font(10.0)
     paths = f.text_glyph_paths("น้ำ", 10.0)
     # Should decompose into [น, ํ, ้, า]
     assert len(paths) == 4
@@ -78,6 +108,7 @@ def test_thai_sara_am_normalization():
     assert tone_box.extmin[1] > circle_box.extmin[1]
 
 
+@needs_thai_font
 def test_thai_fallback_font_on_arial():
     """Arial has no Thai glyphs; rendering Thai text must use Thai font fallback without error."""
     f = fonts.make_font("arial.ttf", 10.0)
@@ -112,6 +143,7 @@ def test_thai_fallback_font_sentinel_cached(monkeypatch):
     assert call_count == 0
 
 
+@needs_thai_font
 def test_thai_real_text_path_glyph_positions():
     """Through the real drawing frontend, tone mark sits above the upper vowel
 
@@ -155,6 +187,7 @@ def test_thai_real_text_path_glyph_positions():
     assert pytest.approx(k_alone_box.extmin[0], rel=1e-4) == k_clustered_box.extmin[0]
 
 
+@needs_thai_font
 def test_thai_real_mtext_path_glyph_positions():
     """MTEXT rendered through the drawing frontend also shapes Thai syllables correctly."""
     import ezdxf

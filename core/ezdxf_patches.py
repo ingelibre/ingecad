@@ -1560,13 +1560,17 @@ def _get_thai_fallback_font():
             face = fm.find_best_match(family=cand)
             if face is not None:
                 font_name = fm.find_font_name(face)
-                _THAI_FALLBACK_FONT = fonts.make_font(font_name, 1.0)
-                return _THAI_FALLBACK_FONT
+                f = fonts.make_font(font_name, 1.0)
+                if hasattr(f, "glyph_cache") and 0x0E01 in f.glyph_cache.cmap:
+                    _THAI_FALLBACK_FONT = f
+                    return _THAI_FALLBACK_FONT
         except Exception:
             pass
     try:
-        _THAI_FALLBACK_FONT = fonts.make_font("tahoma.ttf", 1.0)
-        return _THAI_FALLBACK_FONT
+        f = fonts.make_font("tahoma.ttf", 1.0)
+        if hasattr(f, "glyph_cache") and 0x0E01 in f.glyph_cache.cmap:
+            _THAI_FALLBACK_FONT = f
+            return _THAI_FALLBACK_FONT
     except Exception:
         pass
     _THAI_FALLBACK_FONT = _NOT_FOUND
