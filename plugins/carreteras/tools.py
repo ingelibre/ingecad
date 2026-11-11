@@ -4,10 +4,11 @@
 the way AutoCAD prompts (English keys, translated through the pack)."""
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 
 from core.i18n import tr
-from core.surveying import format_dms, format_station
+from core.surveying import format_station
 from tools.base import Tool
 
 from . import actions, geometry
@@ -231,7 +232,7 @@ class _TableTool(_AxisTool):
 
     def _ask(self) -> None:
         self._await_height = False
-        self.prompt("Specify insertion point (top-left) or [Height]:")
+        self.prompt("Specify insertion point (top-left) or [Height/Angles]:")
 
     def on_option(self, text: str) -> bool:
         if self._entity is None:
@@ -246,9 +247,17 @@ class _TableTool(_AxisTool):
                 return True
             self._ask()
             return True
-        if self.option(text) == "H":
+        key = self.option(text)
+        if key == "H":
             self._await_height = True
             self.prompt("Text height <{v:g}>:", v=self._height)
+            return True
+        if key == "A":
+            unit = "deg" if actions.angle_unit() == "grad" else "grad"
+            actions.set_angle_unit(unit)
+            self.ctx.echo(tr("Angles in grads (gisements).") if unit == "grad"
+                          else tr("Angles in degrees (bearings)."))
+            self._ask()
             return True
         return False
 
@@ -289,6 +298,18 @@ class CurveTableTool(_TableTool):
         return actions.curve_table(document, self._entity, point, self._height)
 
 
+class ElementTableTool(_TableTool):
+    """AXISELEMENTS: the tableau des éléments -- every straight, arc and
+    clothoid of the axis with its stations, length, radius and A."""
+
+    def start(self) -> None:
+        super().start()
+        self.name = "AXISELEMENTS"
+
+    def table(self, document, point):
+        return actions.element_table(document, self._entity, point, self._height)
+
+
 class HorizontalCurvesTool(_AxisTool):
     """HCURVES: a chain of tangents (its vertices are the PIs) becomes an
     axis with a simple circular curve at every PI: one radius for all, or
@@ -296,6 +317,11 @@ class HorizontalCurvesTool(_AxisTool):
 
     #: the last radius typed, offered again as the default
     last_radius = 100.0
+    #: the last clothoid length (0: plain circles)
+    last_spiral = 0.0
+    #: whether HCURVES asks for clothoids after the radius ([Clothoid]
+    #: switches it, and it is remembered)
+    with_spirals = False
 
     def start(self) -> None:
         super().start()
@@ -303,7 +329,10 @@ class HorizontalCurvesTool(_AxisTool):
         self._points = None
         self._turns = []
         self._radii = []
+        self._spirals = []
         self._each = False
+        self._stage = "radius"
+        self._as_parameter = False
 
     def selection_prompt(self) -> str:
         return tr("Select the polyline of tangents:")
@@ -321,25 +350,54 @@ class HorizontalCurvesTool(_AxisTool):
 
     def _ask_all(self) -> None:
         self._each = False
-        self.prompt("Radius for every PI <{r:g}> or [Each]:", r=HorizontalCurvesTool.last_radius)
+        self._stage = "radius"
+        self.prompt("Radius for every PI <{r:g}> or [Each/Clothoid]:", r=HorizontalCurvesTool.last_radius)
+
+    def _ask_spiral(self) -> None:
+        """The clothoid after the radius: a length, or A with [Parameter]."""
+        self._stage = "spiral"
+        if self._as_parameter:
+            a = math.sqrt(HorizontalCurvesTool.last_spiral * self._current_radius())
+            self.prompt("Clothoid parameter A (0 = none) <{a:g}>:", a=round(a, 3))
+        elif self._each:
+            self.prompt("Clothoid length at PI-{n} (0 = none) <{l:g}> or [Parameter]:",
+                        n=len(self._radii), l=HorizontalCurvesTool.last_spiral)
+        else:
+            self.prompt("Clothoid length for every PI (0 = none) <{l:g}> or [Parameter]:",
+                        l=HorizontalCurvesTool.last_spiral)
+
+    def _current_radius(self) -> float:
+        return self._radii[-1] if self._radii else HorizontalCurvesTool.last_radius
 
     def _next_pi(self) -> None:
         """Ask the radius of the next PI that turns; build after the last."""
         while len(self._radii) < len(self._turns) and abs(self._turns[len(self._radii)]) < 1e-7:
             self._radii.append(0.0)                 # aligned tangents: no curve
+            self._spirals.append(0.0)
         if len(self._radii) == len(self._turns):
             self._build()
             return
         i = len(self._radii)
+        self._stage = "radius"
         self.prompt("Radius at PI-{n} (deflection {d}) <{r:g}>:", n=i + 1,
-                    d=format_dms(abs(self._turns[i])), r=HorizontalCurvesTool.last_radius)
+                    d=actions.format_angle(abs(self._turns[i]), actions.angle_unit()),
+                    r=HorizontalCurvesTool.last_radius)
 
     def on_option(self, text: str) -> bool:
         if self._points is None:
             return False
+        if self._stage == "spiral":
+            return self._on_spiral(text)
+        if not self._each and self.option(text) == "C":
+            HorizontalCurvesTool.with_spirals = not HorizontalCurvesTool.with_spirals
+            self.ctx.echo(tr("Curves with clothoids.") if HorizontalCurvesTool.with_spirals
+                          else tr("Curves without clothoids."))
+            self._ask_all()
+            return True
         if not self._each and self.option(text) == "E":
             self._each = True
             self._radii = []
+            self._spirals = []
             self._next_pi()
             return True
         try:
@@ -357,25 +415,68 @@ class HorizontalCurvesTool(_AxisTool):
         if self._points is None:
             self.ctx.finish()
             return
+        if self._stage == "spiral":
+            self._take_spiral(HorizontalCurvesTool.last_spiral)
+            return
         self._take(HorizontalCurvesTool.last_radius)
 
     def _take(self, radius: float) -> None:
         if self._each:
             self._radii.append(radius)
-            self._next_pi()
         else:
             self._radii = [radius] * len(self._turns)
+        self._as_parameter = False
+        if HorizontalCurvesTool.with_spirals:
+            self._ask_spiral()
+        elif self._each:
+            self._spirals.append(0.0)
+            self._next_pi()
+        else:
+            self._spirals = [0.0] * len(self._turns)
+            self._build()
+
+    def _on_spiral(self, text: str) -> bool:
+        if not self._as_parameter and self.option(text) == "P":
+            self._as_parameter = True
+            self._ask_spiral()
+            return True
+        try:
+            value = _number(text)
+            if value < 0:
+                raise ValueError(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        if self._as_parameter:
+            value = value * value / self._current_radius() if value > 0 else 0.0
+        self._take_spiral(value)
+        return True
+
+    def _take_spiral(self, length: float) -> None:
+        HorizontalCurvesTool.last_spiral = length
+        self._as_parameter = False
+        if self._each:
+            self._spirals.append(length)
+            self._next_pi()
+        else:
+            self._spirals = [length if r > 0 else 0.0 for r in self._radii]
             self._build()
 
     def _build(self) -> None:
         try:
-            command = actions.fit_axis(_document(self.ctx), self._entity, self._radii)
+            command = actions.fit_axis(_document(self.ctx), self._entity, self._radii,
+                                       spirals=self._spirals)
         except geometry.TangentOverlap as exc:
             where = (f"PI-{exc.first}" if exc.first == exc.second
                      else f"PI-{exc.first} / PI-{exc.second}")
             self.ctx.echo(tr("Cannot fit the curves: the tangents overlap at {where} "
                              "(T1 + T2 = {need:.3f} m > {have:.3f} m). Use smaller radii.",
                              where=where, need=exc.needed, have=exc.available))
+            self.ctx.finish()
+            return
+        except geometry.SpiralTooLong as exc:
+            self.ctx.echo(tr("Cannot fit the clothoids: {error}. Use shorter clothoids or a larger "
+                             "radius.", error=exc))
             self.ctx.finish()
             return
         except ValueError as exc:
@@ -391,7 +492,115 @@ class HorizontalCurvesTool(_AxisTool):
         self.ctx.finish()
 
 
+class RoadCheckTool(_AxisTool):
+    """ROADCHECK: every curve of the axis against a design standard (ARP,
+    ICTAAL, ICTAVRU... from the norms folder) -- minimum radius,
+    superelevation, clothoids, chaining of the radii."""
+
+    last_norm = "ARP1994"
+    last_category: dict = {}
+    last_lanes = 2
+
+    def start(self) -> None:
+        super().start()
+        self.name = "ROADCHECK"
+        from . import norms
+
+        self._norms = norms.available()
+        self._norm = None
+        self._stage = "select"
+
+    def picked(self) -> None:
+        if not self._norms:
+            self.ctx.echo(tr("No design standard found in the norms folder."))
+            self.ctx.finish()
+            return
+        if RoadCheckTool.last_norm not in self._norms:
+            RoadCheckTool.last_norm = next(iter(self._norms))
+        self._ask_norm()
+
+    def _ask_norm(self) -> None:
+        self._stage = "norm"
+        self.prompt("Design standard ({ids}) <{d}>:", ids=", ".join(self._norms), d=RoadCheckTool.last_norm)
+
+    def _ask_category(self) -> None:
+        self._stage = "category"
+        cats = list(self._norm.categories)
+        default = RoadCheckTool.last_category.get(self._norm.id, cats[0])
+        self.prompt("Category ({cats}) <{d}>:", cats=", ".join(cats), d=default)
+
+    def _ask_lanes(self) -> None:
+        self._stage = "lanes"
+        self.prompt("Lanes in the cross-section (2, 3 or 4) <{n}>:", n=RoadCheckTool.last_lanes)
+
+    def on_option(self, text: str) -> bool:
+        if self._entity is None:
+            return False
+        value = text.strip()
+        if self._stage == "norm":
+            match = next((k for k in self._norms if k.lower() == value.lower()), None)
+            if match is None:
+                self.ctx.echo(tr("Unknown standard: {text}", text=value))
+                return True
+            RoadCheckTool.last_norm = match
+            self._norm = self._norms[match]
+            self._ask_category()
+            return True
+        if self._stage == "category":
+            try:
+                name = self._norm.category_name(value)
+            except KeyError:
+                self.ctx.echo(tr("Unknown category: {text}", text=value))
+                return True
+            RoadCheckTool.last_category[self._norm.id] = name
+            self._ask_lanes()
+            return True
+        if self._stage == "lanes":
+            if value not in ("2", "3", "4"):
+                self.ctx.echo(tr("Invalid number: {text}", text=value))
+                return True
+            RoadCheckTool.last_lanes = int(value)
+            self._run()
+            return True
+        return False
+
+    def on_enter(self) -> None:
+        if self._stage == "norm":
+            self.on_option(RoadCheckTool.last_norm)
+        elif self._stage == "category":
+            self.on_option(RoadCheckTool.last_category.get(self._norm.id, next(iter(self._norm.categories))))
+        elif self._stage == "lanes":
+            self._run()
+        else:
+            self.ctx.finish()
+
+    def _run(self) -> None:
+        from . import norms
+
+        try:
+            report = norms.check(actions.alignment_of(self._entity), self._norm,
+                                 RoadCheckTool.last_category.get(self._norm.id, next(iter(self._norm.categories))),
+                                 RoadCheckTool.last_lanes)
+        except ValueError as exc:
+            self.ctx.echo(tr("Cannot do it: {error}", error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.echo(tr("{name}, category {cat}.", name=report.norm.name, cat=report.category))
+        if not report.norm.verified:
+            self.ctx.echo(tr("Values to check against the guide: {note}", note=report.norm.note))
+        marks = {"error": tr("ERROR"), "warning": tr("WARNING"), "info": "-"}
+        for f in report.findings:
+            self.ctx.echo(f"{marks[f.level]} {f.text}")
+        if not report.findings:
+            self.ctx.echo(tr("The axis has no curves."))
+        self.ctx.echo(tr("{e} error(s), {w} warning(s). Source: {source}", e=report.errors,
+                         w=report.warnings, source=report.norm.source))
+        self.ctx.finish()
+
+
 TOOL_CLASSES = {
+    "AXISELEMENTS": ElementTableTool,
+    "ROADCHECK": RoadCheckTool,
     "ROADAXIS": RoadAxisTool,
     "STATIONING": StationingTool,
     "RESTATION": RestationTool,

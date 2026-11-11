@@ -31,6 +31,9 @@ from . import geometry
 APPID = "INGECAD_CARRETERAS"
 AXIS_TAG = "CAR-AXIS"
 ANNOT_TAG = "CAR-ANNOT"
+#: after the axis parameters, an axis with clothoids keeps its exact
+#: elements (the polyline only draws them, by chords)
+ELEM_TAG = "CAR-ELEMENTS"
 
 #: (layer, ACI colour) per kind of object.
 LAYERS = {
@@ -107,9 +110,54 @@ def polyline_vertices(entity) -> list:
     return out
 
 
+def _fingerprint(verts) -> str:
+    """What the polyline looked like when its elements were written: a
+    grip edit since changes it, and the elements are then not trusted."""
+    import zlib
+
+    text = ";".join(f"{x:.3f},{y:.3f},{b:.6f}" for x, y, b in verts)
+    return f"{len(verts)};{zlib.crc32(text.encode()):08x}"
+
+
+def element_tags(elements, verts) -> list:
+    return [(1000, ELEM_TAG), (1000, _fingerprint(verts))] + [(1000, e.encode()) for e in elements]
+
+
+def _split_tags(tags):
+    """(axis parameter tags, element tags) of an axis' XDATA."""
+    tags = list(tags or [])
+    for i, (_code, value) in enumerate(tags):
+        if value == ELEM_TAG:
+            return tags[:i], tags[i:]
+    return tags, []
+
+
+def stored_elements(entity) -> list | None:
+    """The exact elements an axis keeps (clothoids), or None when it keeps
+    none or the polyline was edited since."""
+    _params, tail = _split_tags(_tags(entity))
+    if len(tail) < 3:
+        return None
+    try:
+        verts = polyline_vertices(entity)
+    except ValueError:
+        return None
+    if str(tail[1][1]) != _fingerprint(verts):
+        return None
+    try:
+        return [geometry.Element.decode(v) for _c, v in tail[2:]]
+    except ValueError:
+        return None
+
+
 def alignment_of(entity, params: AxisParams | None = None) -> geometry.Alignment:
-    """The axis as stationed geometry, walked the way its stationing runs."""
+    """The axis as stationed geometry, walked the way its stationing runs:
+    its exact elements when it keeps clothoids, else its polyline."""
     params = params or axis_params(entity) or AxisParams()
+    elements = stored_elements(entity)
+    if elements:
+        alignment = geometry.ElementAlignment(elements, params.start)
+        return alignment.reversed() if params.reverse else alignment
     verts = polyline_vertices(entity)
     if params.reverse:
         verts = geometry.reverse_vertices(verts)
@@ -168,7 +216,8 @@ class SetAxisCommand(Command):
         self._old_xdata = _tags(self.entity)
         if self.layer and self.layer in document.doc.layers:
             self.entity.dxf.layer = self.layer
-        self.entity.set_xdata(APPID, self.params.xdata())
+        _old, elements = _split_tags(self._old_xdata)
+        self.entity.set_xdata(APPID, self.params.xdata() + elements)
         document.dirty = True
 
     def undo(self, document) -> None:
@@ -271,7 +320,12 @@ def curve_mark_commands(alignment: geometry.Alignment, params: AxisParams, link)
         d = math.hypot(dx, dy) or 1.0
         out.append(_text(f"PI-{pi.number}", (px + dx / d * 1.5 * h, py + dy / d * 1.5 * h),
                          h, layer, CURVES, link))
-        for name, point, station in (("PC", pi.pc, pi.pc_station), ("PT", pi.pt, pi.pt_station)):
+        if pi.spiral:
+            stops = ((tr("TS"), pi.pc, pi.pc_station), (tr("SC"), pi.sc, pi.sc_station),
+                     (tr("CS"), pi.cs, pi.cs_station), (tr("ST"), pi.pt, pi.pt_station))
+        else:
+            stops = ((tr("PC"), pi.pc, pi.pc_station), (tr("PT"), pi.pt, pi.pt_station))
+        for name, point, station in stops:
             _, angle = alignment.at_station(station)
             rad = math.radians(angle)
             nx, ny = -math.sin(rad), math.cos(rad)
@@ -356,9 +410,47 @@ def _f(value: float, decimals: int = 3) -> str:
     return f"{value:.{decimals}f}"
 
 
-def axis_table_rows(alignment: geometry.Alignment) -> list[list[str]]:
+# -- angles: degrees (DMS, bearings) or grads (gisements), as the office works ---------------
+
+SETTING_ANGLES = "carreteras/angles"
+UNITS = ("deg", "grad")
+
+
+def angle_unit() -> str:
+    try:
+        from PySide6.QtCore import QSettings
+
+        unit = str(QSettings().value(SETTING_ANGLES, "deg"))
+    except Exception:
+        unit = "deg"
+    return unit if unit in UNITS else "deg"
+
+
+def set_angle_unit(unit: str) -> None:
+    try:
+        from PySide6.QtCore import QSettings
+
+        QSettings().setValue(SETTING_ANGLES, unit if unit in UNITS else "deg")
+    except Exception:
+        pass
+
+
+def format_angle(degrees: float, unit: str = "deg") -> str:
+    """An angle (a deflection, Δ): DMS, or grads to the ten-thousandth."""
+    if unit == "grad":
+        return f"{degrees * 400.0 / 360.0:.4f} gr"
+    return format_dms(degrees)
+
+
+def gisement(cad_angle: float) -> float:
+    """The direction as a French gisement: grads, from north, clockwise."""
+    return cad_to_azimuth(cad_angle) * 400.0 / 360.0 % 400.0
+
+
+def axis_table_rows(alignment: geometry.Alignment, unit: str = "deg") -> list[list[str]]:
     """Start, every PI, end: station, east, north, and the tangent leaving
-    it -- bearing, azimuth and distance to the next one."""
+    it -- bearing, azimuth and distance to the next one (in grads: the
+    gisement and the distance)."""
     pis = geometry.points_of_intersection(alignment)
     (x0, y0), _ = alignment.at(0.0)
     (x1, y1), _ = alignment.at(alignment.length)
@@ -367,63 +459,145 @@ def axis_table_rows(alignment: geometry.Alignment) -> list[list[str]]:
     stops.append((tr("END"), (x1, y1), alignment.end_station))
     rows = []
     for i, (name, (x, y), station) in enumerate(stops):
-        row = [name, format_station(station), _f(x), _f(y), "", "", ""]
+        if unit == "grad":
+            row = [name, format_station(station), _f(x), _f(y), "", ""]
+        else:
+            row = [name, format_station(station), _f(x), _f(y), "", "", ""]
         if i + 1 < len(stops):
             nx, ny = stops[i + 1][1]
-            az = cad_to_azimuth(math.degrees(math.atan2(ny - y, nx - x)))
-            row[4] = format_bearing(az)
-            row[5] = format_dms(az)
-            row[6] = _f(math.hypot(nx - x, ny - y))
+            cad = math.degrees(math.atan2(ny - y, nx - x))
+            if unit == "grad":
+                row[4] = f"{gisement(cad):.4f}"
+                row[5] = _f(math.hypot(nx - x, ny - y))
+            else:
+                az = cad_to_azimuth(cad)
+                row[4] = format_bearing(az)
+                row[5] = format_dms(az)
+                row[6] = _f(math.hypot(nx - x, ny - y))
         rows.append(row)
     return rows
 
 
-def axis_table(document, entity, insert, text_height: float = 2.0) -> CompositeCommand:
+def axis_table(document, entity, insert, text_height: float = 2.0,
+               unit: str | None = None) -> CompositeCommand:
     """AXISTABLE: the cuadro del eje at ``insert`` (top-left)."""
+    unit = unit or angle_unit()
     alignment = alignment_of(entity)
-    rows = axis_table_rows(alignment)
+    rows = axis_table_rows(alignment, unit)
     h = text_height
-    headers = ["PI", tr("STATION"), tr("EAST"), tr("NORTH"), tr("BEARING"),
-               tr("AZIMUTH"), tr("DISTANCE")]
-    widths = [w * h for w in (7.0, 9.0, 10.0, 11.0, 12.0, 10.0, 10.0)]
-    table = tables.insert_table(insert, cols=7, col_width=10.0 * h, data_rows=len(rows),
+    if unit == "grad":
+        headers = ["PI", tr("STATION"), tr("EAST"), tr("NORTH"), tr("GISEMENT (gr)"), tr("DISTANCE")]
+        widths = [w * h for w in (7.0, 9.0, 10.0, 11.0, 11.0, 10.0)]
+    else:
+        headers = ["PI", tr("STATION"), tr("EAST"), tr("NORTH"), tr("BEARING"),
+                   tr("AZIMUTH"), tr("DISTANCE")]
+        widths = [w * h for w in (7.0, 9.0, 10.0, 11.0, 12.0, 10.0, 10.0)]
+    table = tables.insert_table(insert, cols=len(headers), col_width=10.0 * h, data_rows=len(rows),
                                 row_height=2.0 * h, text_height=h, title=tr("AXIS TABLE"),
                                 headers=headers, data=rows, col_widths=widths)
     return _on_table_layer(document, table, "axis table")
 
 
-def curve_table_rows(alignment: geometry.Alignment) -> list[list[str]]:
+def has_spirals(alignment: geometry.Alignment) -> bool:
+    return any(e.is_spiral for e in geometry.as_elements(alignment))
+
+
+def curve_table_rows(alignment: geometry.Alignment, unit: str = "deg") -> list[list[str]]:
+    """One row per curve. With clothoids: Δ, direction, R, Ls, A, T, the
+    circle's length, E and the four points' stations (TS, SC, CS, ST)."""
     rows = []
     n = 0
+    spirals = has_spirals(alignment)
     for pi in geometry.points_of_intersection(alignment):
         c = pi.curve
         if c is None:
             continue
         n += 1
-        rows.append([f"C-{n}", f"PI-{pi.number}", format_dms(c.delta),
-                     tr("Left") if pi.left else tr("Right"),
-                     _f(c.radius, 2), _f(c.tangent), _f(c.length), _f(c.external),
-                     _f(c.middle_ordinate), _f(c.chord),
-                     format_station(pi.pc_station), format_station(pi.pt_station)])
+        side = tr("Left") if pi.left else tr("Right")
+        if spirals:
+            ls = getattr(c, "ls", 0.0)
+            arc = getattr(c, "arc_length", c.length)
+            a = _f(math.sqrt(ls * c.radius), 2) if ls > 0 else "-"
+            rows.append([f"C-{n}", f"PI-{pi.number}", format_angle(c.delta, unit), side,
+                         _f(c.radius, 2), _f(ls, 2) if ls > 0 else "-", a, _f(c.tangent), _f(arc),
+                         _f(c.external), format_station(pi.pc_station),
+                         format_station(pi.sc_station) if pi.sc_station is not None else "-",
+                         format_station(pi.cs_station) if pi.cs_station is not None else "-",
+                         format_station(pi.pt_station)])
+        else:
+            rows.append([f"C-{n}", f"PI-{pi.number}", format_angle(c.delta, unit), side,
+                         _f(c.radius, 2), _f(c.tangent), _f(c.length), _f(c.external),
+                         _f(c.middle_ordinate), _f(c.chord),
+                         format_station(pi.pc_station), format_station(pi.pt_station)])
     return rows
 
 
-def curve_table(document, entity, insert, text_height: float = 2.0) -> CompositeCommand:
+def curve_table(document, entity, insert, text_height: float = 2.0,
+                unit: str | None = None) -> CompositeCommand:
     """CURVETABLE: one row per curve of the axis -- Δ, direction, R, T, Lc,
-    E, M, C and the PC and PT stations."""
+    E, M, C and the PC and PT stations (with clothoids: Ls, A and the TS,
+    SC, CS and ST stations)."""
+    unit = unit or angle_unit()
     alignment = alignment_of(entity)
-    rows = curve_table_rows(alignment)
+    rows = curve_table_rows(alignment, unit)
     if not rows:
         raise ValueError(tr("The axis has no curves."))
     h = text_height
-    headers = [tr("CURVE"), "PI", "Δ", tr("DIRECTION"), "R", "T", "Lc", "E", "M", "C",
-               "PC", "PT"]
-    widths = [w * h for w in (7.0, 6.0, 9.0, 10.0, 7.0, 7.0, 7.0, 6.0, 6.0, 7.0, 9.0, 9.0)]
-    table = tables.insert_table(insert, cols=12, col_width=7.0 * h, data_rows=len(rows),
+    if has_spirals(alignment):
+        headers = [tr("CURVE"), "PI", "Δ", tr("DIRECTION"), "R", "Ls", "A", "T", "Lc", "E",
+                   tr("TS"), tr("SC"), tr("CS"), tr("ST")]
+        widths = [w * h for w in (7.0, 6.0, 10.0, 10.0, 7.0, 6.0, 7.0, 7.0, 7.0, 6.0, 9.0, 9.0, 9.0, 9.0)]
+    else:
+        headers = [tr("CURVE"), "PI", "Δ", tr("DIRECTION"), "R", "T", "Lc", "E", "M", "C",
+                   tr("PC"), tr("PT")]
+        widths = [w * h for w in (7.0, 6.0, 10.0, 10.0, 7.0, 7.0, 7.0, 6.0, 6.0, 7.0, 9.0, 9.0)]
+    table = tables.insert_table(insert, cols=len(headers), col_width=7.0 * h, data_rows=len(rows),
                                 row_height=2.0 * h, text_height=h,
                                 title=tr("HORIZONTAL CURVE ELEMENTS"),
                                 headers=headers, data=rows, col_widths=widths)
     return _on_table_layer(document, table, "curve table")
+
+
+def element_table_rows(alignment: geometry.Alignment, unit: str = "deg") -> list[list[str]]:
+    """The French tableau des éléments: every straight, arc and clothoid,
+    with its stations, length, radius, A, direction and start point."""
+    rows = []
+    run = alignment.start_station
+    kinds = {"line": tr("Straight"), "arc": tr("Arc"), "clothoid": tr("Clothoid")}
+    for n, e in enumerate(geometry.as_elements(alignment), 1):
+        if e.is_line:
+            radius, a, side = "-", "-", "-"
+        elif e.is_arc:
+            radius, a = _f(e.radius, 2), "-"
+            side = tr("Left") if e.left else tr("Right")
+        else:
+            r0 = "∞" if abs(e.k0) < 1e-15 else _f(1.0 / abs(e.k0), 2)
+            r1 = "∞" if abs(e.k1) < 1e-15 else _f(1.0 / abs(e.k1), 2)
+            radius, a = f"{r0} → {r1}", _f(e.parameter, 2)
+            side = tr("Left") if e.left else tr("Right")
+        direction = (f"{gisement(e.start_angle):.4f}" if unit == "grad"
+                     else format_dms(cad_to_azimuth(e.start_angle)))
+        rows.append([str(n), kinds[e.kind], side, format_station(run), format_station(run + e.length),
+                     _f(e.length), radius, a, direction, _f(e.start[0]), _f(e.start[1])])
+        run += e.length
+    return rows
+
+
+def element_table(document, entity, insert, text_height: float = 2.0,
+                  unit: str | None = None) -> CompositeCommand:
+    """AXISELEMENTS: the tableau des éléments du tracé en plan."""
+    unit = unit or angle_unit()
+    rows = element_table_rows(alignment_of(entity), unit)
+    h = text_height
+    headers = ["N°", tr("TYPE"), tr("DIRECTION"), tr("STATION START"), tr("STATION END"),
+               tr("LENGTH"), "R", "A", tr("GISEMENT (gr)") if unit == "grad" else tr("AZIMUTH"),
+               "X", "Y"]
+    widths = [w * h for w in (4.0, 9.0, 8.0, 10.0, 10.0, 8.0, 13.0, 7.0, 10.0, 11.0, 12.0)]
+    table = tables.insert_table(insert, cols=len(headers), col_width=9.0 * h, data_rows=len(rows),
+                                row_height=2.0 * h, text_height=h,
+                                title=tr("HORIZONTAL ALIGNMENT ELEMENTS"),
+                                headers=headers, data=rows, col_widths=widths)
+    return _on_table_layer(document, table, "element table")
 
 
 def _on_table_layer(document, table: CompositeCommand, name: str) -> CompositeCommand:
@@ -450,14 +624,24 @@ def tangent_points(entity) -> list:
     return pts
 
 
-def fit_axis(document, tangents_entity, radii, params: AxisParams | None = None) -> CompositeCommand:
+def fit_axis(document, tangents_entity, radii, params: AxisParams | None = None,
+             spirals=None) -> CompositeCommand:
     """HCURVES: a new axis on ``CAR-EJE`` through the tangents with a simple
-    curve of ``radii[i]`` at each PI, and its PI, PC and PT marks. The chain
-    of tangents stays as it was. Raises geometry.TangentOverlap."""
+    curve of ``radii[i]`` at each PI -- introduced by symmetric clothoids
+    of length ``spirals[i]`` when given -- and its PI, PC and PT (TS, SC,
+    CS, ST) marks. The chain of tangents stays as it was. Raises
+    geometry.TangentOverlap and geometry.SpiralTooLong."""
     params = params or AxisParams()
-    vertices = geometry.fit_curves(tangent_points(tangents_entity), radii)
-    alignment = geometry.Alignment(vertices, params.start)
-    xdata = params.xdata()
+    points = tangent_points(tangents_entity)
+    if spirals and any(ls > 0 for ls in spirals):
+        elements = geometry.fit_spiral_curves(points, radii, spirals)
+        alignment = geometry.ElementAlignment(elements, params.start)
+        vertices = alignment.vertices
+        xdata = params.xdata() + element_tags(elements, vertices)
+    else:
+        vertices = geometry.fit_curves(points, radii)
+        alignment = geometry.Alignment(vertices, params.start)
+        xdata = params.xdata()
 
     def make(msp):
         ensure_appid(msp.doc, APPID)
