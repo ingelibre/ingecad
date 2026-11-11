@@ -117,5 +117,9 @@
   "A more accurate conversion exists for this system, through a grid PROJ downloads from cdn.proj.org, but it could not be read here. Connect to the internet and run GEOREF again for it.": "Une conversion plus précise existe pour ce système, par une grille que PROJ télécharge sur cdn.proj.org, mais elle n'a pas pu être lue ici. Connectez-vous à Internet et relancez GEOREF pour l'obtenir.",
   "empty: UTM": "vide : UTM",
   "Default coordinate system (EPSG:2154, L93, CC44...):": "Système de coordonnées par défaut (EPSG:2154, L93, CC44...) :",
-  "Automatic (IGN BD ORTHO HR in France, Esri elsewhere)": "Automatique (IGN BD ORTHO HR en France, Esri ailleurs)"
+  "Automatic (IGN BD ORTHO HR in France, Esri elsewhere)": "Automatique (IGN BD ORTHO HR en France, Esri ailleurs)",
+  "Heights in {vertical}.": "Altitudes en {vertical}.",
+  "Automatic (IGN RGE ALTI in France, AWS elsewhere)": "Automatique (IGN RGE ALTI en France, AWS ailleurs)",
+  "IGN RGE ALTI (France, 1 m, NGF heights)": "IGN RGE ALTI (France, 1 m, altitudes NGF)",
+  "IGN RGE ALTI needs no key either: 1 m over France, heights in NGF-IGN69.": "IGN RGE ALTI ne demande pas de clé non plus : 1 m sur toute la France, altitudes en NGF-IGN69."
 }

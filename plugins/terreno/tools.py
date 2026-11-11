@@ -371,7 +371,9 @@ from . import dem as dem_mod                       # noqa: E402
 def _dem_of(ctx):
     """The DEM to sample: an injected one (the suite), else Options'."""
     injected = getattr(ctx.services, "dem", None)
-    return injected if injected is not None else dem_mod.default_dem()
+    if injected is not None:
+        return injected
+    return dem_mod.default_dem(actions.georef_of(_document(ctx)))
 
 
 def _flush_ui() -> None:

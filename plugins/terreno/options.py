@@ -53,16 +53,20 @@ class TerrainOptionsPage(QWidget):
         self.dem_url.setPlaceholderText("https://.../{z}/{x}/{y}.png")
         form.addRow(tr("DEM tiles URL ({z}/{x}/{y}):"), self.dem_url)
         self.dem_encoding = QComboBox(self)
+        self.dem_encoding.addItem(tr("Automatic (IGN RGE ALTI in France, AWS elsewhere)"), "auto")
         self.dem_encoding.addItem("Terrarium (AWS Terrain Tiles)", "terrarium")
         self.dem_encoding.addItem("Mapbox Terrain-RGB", "mapbox")
-        self.dem_encoding.setCurrentIndex(max(0, self.dem_encoding.findData(source.encoding)))
+        self.dem_encoding.addItem(tr("IGN RGE ALTI (France, 1 m, NGF heights)"), "ign")
+        saved = prefs._setting(prefs.SETTING_DEM_ENCODING, "auto").strip().lower() or "auto"
+        self.dem_encoding.setCurrentIndex(max(0, self.dem_encoding.findData(saved)))
         form.addRow(tr("DEM encoding:"), self.dem_encoding)
         self.dem_zoom = QSpinBox(self)
         self.dem_zoom.setRange(8, 15)
         self.dem_zoom.setValue(prefs.dem_zoom())
         form.addRow(tr("DEM zoom level (13 = about 18 m per pixel):"), self.dem_zoom)
         dem_note = QLabel(tr("AWS Terrain Tiles need no key; the data is a 30 m DEM (SRTM and others), "
-                             "for preliminary design only. Tiles are kept in the cache folder."))
+                             "for preliminary design only. Tiles are kept in the cache folder.") + " "
+                          + tr("IGN RGE ALTI needs no key either: 1 m over France, heights in NGF-IGN69."))
         dem_note.setWordWrap(True)
         form.addRow(dem_note)
 

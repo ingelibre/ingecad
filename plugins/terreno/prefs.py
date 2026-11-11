@@ -80,7 +80,21 @@ def dem_source():
         return AWS_TERRAIN
     if encoding not in ENCODINGS:
         encoding = "terrarium"
-    return DemSource("custom", "custom DEM tiles", url, encoding, 15, "")
+    return DemSource("custom", "custom DEM tiles", url, max_zoom=15, attribution="", encoding=encoding)
+
+
+def dem_is_ign(georef=None) -> bool:
+    """IGN's RGE ALTI, when Options choose it -- or, left on Automatic with
+    no DEM URL of the user's own, for a drawing in a French system."""
+    choice = _setting(SETTING_DEM_ENCODING, "auto").strip().lower()
+    if choice == "ign":
+        return True
+    if choice not in ("", "auto"):
+        return False
+    from .dem import AWS_TERRAIN
+
+    url = _setting(SETTING_DEM_URL, "").strip()
+    return (not url or url == AWS_TERRAIN.url_template) and is_french(georef)
 
 
 def dem_zoom() -> int:
