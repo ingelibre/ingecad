@@ -20,5 +20,23 @@
   },
   "CURVETABLE": {
     "name": "CUADROCURVAS"
+  },
+  "AXISELEMENTS": {
+    "name": "CUADROELEMENTOS"
+  },
+  "ROADCHECK": {
+    "name": "VERIFICARNORMA"
+  },
+  "VCURVES": {
+    "name": "CURVASVERT"
+  },
+  "VCURVETABLE": {
+    "name": "CUADROCURVASVERT"
+  },
+  "SUPERELEV": {
+    "name": "PERALTES"
+  },
+  "MASSHAUL": {
+    "name": "CURVAMASA"
   }
 }

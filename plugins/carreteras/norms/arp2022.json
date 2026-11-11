@@ -1,0 +1,20 @@
+{
+  "id": "ARP2022",
+  "name": "ARP - Aménagement des routes principales (Cerema, 2022)",
+  "country": "FR",
+  "verified": true,
+  "source": "ARP, Cerema, août 2022 (ISBN 978-2-37180-564-4): chap. 4 §1.1 tableau 10 (rayons), §1.2 (enchaînements), §2.1 tableau 12 (profil en long); chap. 3 §4.2 (dévers), tableau 11 (raccordements progressifs); chap. 6 §2.2 et §2.4 (relief difficile).",
+  "note": "Clothoïdes pour R < 1,5 Rdn, longueur max(2 l |Δd| ; k R^0,4), l = largeur basculée (une voie de 3,50 m de chaque côté de l'axe ici). Dévers ramené à 5 % possible (verglas, raisons techniques). Surlargeurs des routes ordinaires (chap. 3 §2.3, tableau 6) non reprises: seules celles du relief difficile le sont.",
+  "superelevation": {"law": "inverse_linear", "max": 7.0, "min": 2.5, "crown": -2.5, "reduced_max": 5.0},
+  "clothoid": {"required_below": "rnd", "factor": 1.5, "length": {"formula": "max_2ldd_kr04", "k": {"2": 6, "3": 12, "4": 12}, "lane_width": 3.5}},
+  "chaining": {"rule": "ratio_both", "ratio": 1.5, "applies_below_factor": 1.5},
+  "arc_fraction_min": 0.2,
+  "categories": {
+    "R1": {"rm": 240, "rdm": 400, "rnd": 400, "crest_min": 3100, "sag_min": 2100, "grade_max": 6},
+    "R2": {"rm": 125, "rdm": 400, "rnd": 400, "crest_min": 1300, "sag_min": 1300, "grade_max": 7},
+    "Artere110": {"rm": 400, "rdm": 650, "rnd": 650, "crest_min": 5200, "sag_min": 3000, "grade_max": 6},
+    "Relief-difficile": {"rm": null, "rdm": 400, "rnd": 400, "superelevation_flat_below": 125,
+                          "widening": [{"min_radius": 50, "max_radius": 200, "k": 25}, {"min_radius": 0, "max_radius": 50, "k": 30}],
+                          "widening_note": "chap. 6 §2.2: largeur de voie 3,50 + 25/R (50 à 200 m), 3,50 + 30/R (< 50 m); giration par épures sous 125 m."}
+  }
+}

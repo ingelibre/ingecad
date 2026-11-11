@@ -141,7 +141,8 @@ def test_turning_roads_off_leaves_no_trace(win):
         gone = before - set(win.dispatcher._commands)
         assert {"ROADAXIS", "STATIONING", "RESTATION", "AXISREVERSE", "AXISTABLE",
                 "HCURVES", "CURVETABLE"} <= gone
-        assert all(name.startswith(("ROAD", "STATION", "RESTATION", "AXIS", "HCURVE", "CURVE"))
+        assert all(name.startswith(("ROAD", "STATION", "RESTATION", "AXIS", "HCURVE", "CURVE",
+                                    "VCURVE", "SUPERELEV", "MASSHAUL"))
                    for name in gone), gone
     finally:
         assert win.plugins.activate("carreteras")

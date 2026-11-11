@@ -250,5 +250,11 @@
   "LOT": "LOTE",
   "AREA (m²)": "ÁREA (m²)",
   "PERIMETER (m)": "PERÍMETRO (m)",
-  "TECHNICAL DATA (coordinate system {crs})": "DATOS TÉCNICOS (sistema de coordenadas {crs})"
+  "TECHNICAL DATA (coordinate system {crs})": "DATOS TÉCNICOS (sistema de coordenadas {crs})",
+  "Ditch depth in cut (0 = none) <{v:g}>:": "Profundidad de la cuneta en corte (0 = ninguna) <{v:g}>:",
+  "Ditch bottom width <{v:g}>:": "Ancho del fondo de la cuneta <{v:g}>:",
+  "Ditch side towards the road H:V <{v:g}>:": "Talud de la cuneta del lado de la vía H:V <{v:g}>:",
+  "Ditch in cut: depth {d:g} m, bottom {b:g} m, side {h:g}:1.": "Cuneta en corte: profundidad {d:g} m, fondo {b:g} m, talud {h:g}:1.",
+  "No ditch in the cross-sections.": "Sin cuneta en las secciones transversales.",
+  "Ditch in cut...": "Cuneta en corte..."
 }

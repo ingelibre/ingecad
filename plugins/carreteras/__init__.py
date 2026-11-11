@@ -9,6 +9,16 @@ N metres (``0+020``), reversed or redrawn on demand; the axis table.
 C2, simple horizontal curves: a chain of tangents with a radius per PI
 becomes the axis with its arcs, the PI, PC and PT marked, and the table of
 curve elements (Δ, R, T, Lc, E, M, C, PC, PT, direction).
+Clothoids (raccordements progressifs, the French practice): a curve may be
+introduced and left by symmetric clothoids (A² = R·L); the axis then keeps
+its exact elements in XDATA. ROADCHECK checks the curves against a design
+standard read from ``norms/*.json`` (ARP, ICTAAL, ICTAVRU), AXISELEMENTS draws
+the table of elements, and the tables can give angles in grads.
+C3, the vertical alignment: VCURVES puts a parabolic curve of radius R at
+each sommet of Topography's grade line (a new grade line Topography reads),
+VCURVETABLE tabulates them, ROADCHECK checks grades and crest and sag radii.
+SUPERELEV tabulates the superelevation (and widening) along the axis; C4,
+MASSHAUL draws the mass-haul diagram of the earthworks.
 Everything it draws is plain DXF (LWPOLYLINE, LINE, TEXT, layers); what the
 axis remembers rides in XDATA under the plugin's own APPID.
 """
@@ -24,7 +34,8 @@ PLUGIN = PluginSpec(
     id="carreteras",
     name="Roads",
     version="0.1.0",
-    description="Road axis, stationing and horizontal curves after the Peruvian DG-2018.",
+    description="Road axis, stationing, horizontal curves and clothoids, checked against design "
+                "standards (Peru's DG-2018; France's ARP, ICTAAL, ICTAVRU).",
     tools=dict(TOOL_CLASSES),
     menu=(
         Submenu("Axis", (
@@ -37,8 +48,18 @@ PLUGIN = PluginSpec(
             MenuItem("Fit curves at the PIs...", "HCURVES"),
             MenuItem("Curve table...", "CURVETABLE"),
         )),
+        Submenu("Vertical alignment", (
+            MenuItem("Vertical curves on a grade line...", "VCURVES"),
+            MenuItem("Vertical curve table...", "VCURVETABLE"),
+        )),
+        Submenu("Cross-section", (
+            MenuItem("Superelevation table...", "SUPERELEV"),
+            MenuItem("Mass-haul diagram...", "MASSHAUL"),
+        )),
         SEPARATOR,
         MenuItem("Axis table...", "AXISTABLE"),
+        MenuItem("Element table...", "AXISELEMENTS"),
+        MenuItem("Check against a design standard...", "ROADCHECK"),
     ),
     toolbar=(
         ToolbarItem("Define axis...", "ROADAXIS"),

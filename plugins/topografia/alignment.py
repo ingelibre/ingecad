@@ -58,9 +58,23 @@ def point_at(points: list[Point], s: float) -> Station:
     return Station(run, q[0], q[1], math.degrees(math.atan2(q[1] - p[1], q[0] - p[0])))
 
 
+#: A vertex is a station of its own when the axis turns there by more
+#: than this: an angle point. The vertices that only draw a curve --
+#: an arc flattened to 1 cm, a clothoid drawn by chords -- turn by less
+#: and are not stations, or a curved axis would get one every metre.
+CORNER_DEGREES = 2.0
+
+
+def _turn(a: Point, b: Point, c: Point) -> float:
+    """How much the direction changes at ``b``, degrees."""
+    d1 = math.atan2(b[1] - a[1], b[0] - a[0])
+    d2 = math.atan2(c[1] - b[1], c[0] - b[0])
+    return abs(math.degrees((d2 - d1 + math.pi) % (2.0 * math.pi) - math.pi))
+
+
 def stations(points: list[Point], step: float, start: float = 0.0) -> list[Station]:
-    """Every ``step`` from ``start``, plus every vertex and the end, in
-    chainage order without duplicates."""
+    """Every ``step`` from ``start``, plus every angle point and the end,
+    in chainage order without duplicates."""
     total = polyline_length(points)
     if step <= 0:
         raise ValueError("the station step must be positive")
@@ -70,8 +84,10 @@ def stations(points: list[Point], step: float, start: float = 0.0) -> list[Stati
         wanted[round(s, 6)] = False
         s += step
     run = 0.0
-    for p, q in zip(points, points[1:]):
-        wanted[round(run, 6)] = True
+    wanted[0.0] = True
+    for i, (p, q) in enumerate(zip(points, points[1:])):
+        if i > 0 and _turn(points[i - 1], p, q) > CORNER_DEGREES:
+            wanted[round(run, 6)] = True
         run += math.hypot(q[0] - p[0], q[1] - p[1])
     wanted[round(total, 6)] = True
     out = []

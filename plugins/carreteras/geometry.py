@@ -236,6 +236,16 @@ class PI:
     pt: Point | None = None
     pc_station: float | None = None
     pt_station: float | None = None
+    #: with clothoids: where the circle itself starts and ends (SC, CS);
+    #: pc / pt are then the ends of the clothoids (TS, ST)
+    sc: Point | None = None
+    cs: Point | None = None
+    sc_station: float | None = None
+    cs_station: float | None = None
+
+    @property
+    def spiral(self) -> bool:
+        return self.sc is not None
 
 
 def _deflection(a_in: float, a_out: float) -> float:
@@ -246,7 +256,10 @@ def _deflection(a_in: float, a_out: float) -> float:
 
 def points_of_intersection(alignment: Alignment) -> list[PI]:
     """The PIs of the axis in stationing order: one per arc (where its two
-    tangents meet) and one per corner between straight pieces."""
+    tangents meet) and one per corner between straight pieces. An axis
+    with clothoids gives one PI per curve -- clothoid, arc, clothoid."""
+    if isinstance(alignment, ElementAlignment) and any(e.is_spiral for e in alignment.elements):
+        return _spiral_pis(alignment)
     out: list[PI] = []
     runs = alignment.segment_runs()
     for i, (seg, run) in enumerate(runs):
@@ -357,3 +370,454 @@ def parse_station(text: str) -> float:
             raise ValueError(text)
         return km_v * 1000.0 + m_v
     return float(raw)
+
+
+# =========================================================================================
+# Clothoids (raccordements progressifs) -- the French practice: ARP, ICTAAL and ICTAVRU
+# introduce a circle by a clothoid, whose curvature grows linearly with its length,
+# A^2 = R * L. Every element of such an axis -- straight, arc or clothoid -- is one thing:
+# a curve whose signed curvature k varies linearly from k0 to k1 over its length.
+# =========================================================================================
+
+def _gauss_nodes(n: int = 8):
+    """Gauss-Legendre nodes and weights on [0, 1]."""
+    import numpy as np
+
+    x, w = np.polynomial.legendre.leggauss(n)
+    return [(float((xi + 1.0) / 2.0), float(wi / 2.0)) for xi, wi in zip(x, w)]
+
+
+_GAUSS = None
+
+
+@dataclass(frozen=True)
+class Element:
+    """A piece of axis of linear curvature: ``k0 == k1 == 0`` is a straight,
+    ``k0 == k1 != 0`` an arc, anything else a clothoid. Curvature is signed
+    (positive = turning left, counterclockwise); the start point and the
+    direction there (degrees CCW from east) place it."""
+
+    start: Point
+    start_angle: float
+    length: float
+    k0: float = 0.0
+    k1: float = 0.0
+
+    # -- what it is ------------------------------------------------------------------
+    @property
+    def is_line(self) -> bool:
+        return abs(self.k0) < 1e-15 and abs(self.k1) < 1e-15
+
+    @property
+    def is_arc(self) -> bool:
+        return not self.is_line and abs(self.k1 - self.k0) < 1e-15
+
+    @property
+    def is_spiral(self) -> bool:
+        return abs(self.k1 - self.k0) >= 1e-15
+
+    @property
+    def kind(self) -> str:
+        return "line" if self.is_line else ("arc" if self.is_arc else "clothoid")
+
+    @property
+    def radius(self) -> float:
+        """The arc's radius; for a clothoid the smaller of its two ends."""
+        k = max(abs(self.k0), abs(self.k1))
+        return 1.0 / k if k > 0 else math.inf
+
+    @property
+    def parameter(self) -> float:
+        """A, with A^2 = L / |k1 - k0| (= R * L from a straight)."""
+        dk = abs(self.k1 - self.k0)
+        return math.sqrt(self.length / dk) if dk > 0 else math.inf
+
+    @property
+    def left(self) -> bool:
+        return (self.k0 + self.k1) > 0
+
+    @property
+    def bulge(self) -> float:
+        """What an LWPOLYLINE stores for it: exact for a straight or an arc."""
+        if self.is_arc:
+            return math.tan(self.k0 * self.length / 4.0)
+        return 0.0
+
+    @property
+    def theta(self) -> float:
+        """Total change of direction, radians, signed."""
+        return (self.k0 + self.k1) / 2.0 * self.length
+
+    @property
+    def end_angle(self) -> float:
+        return self.start_angle + math.degrees(self.theta)
+
+    def heading(self, t: float) -> float:
+        """Direction at ``t`` metres, radians."""
+        return math.radians(self.start_angle) + self.k0 * t + (self.k1 - self.k0) * t * t / (2.0 * self.length)
+
+    def at(self, t: float) -> tuple[Point, float]:
+        """(point, direction in degrees) ``t`` metres from the start."""
+        t = max(0.0, min(self.length, t))
+        x0, y0 = self.start
+        a0 = math.radians(self.start_angle)
+        if self.is_line:
+            return (x0 + t * math.cos(a0), y0 + t * math.sin(a0)), self.start_angle
+        if self.is_arc:
+            r = 1.0 / self.k0
+            a = a0 + self.k0 * t
+            return ((x0 + r * (math.sin(a) - math.sin(a0)),
+                     y0 - r * (math.cos(a) - math.cos(a0))), math.degrees(a))
+        global _GAUSS
+        if _GAUSS is None:
+            _GAUSS = _gauss_nodes(8)
+        # heading is quadratic in t: Gauss-Legendre on pieces short enough that
+        # the error stays far under a micrometre on any road clothoid
+        pieces = max(1, int(math.ceil(t / 5.0)))
+        h = t / pieces
+        x, y = x0, y0
+        for p in range(pieces):
+            s0 = p * h
+            for u, w in _GAUSS:
+                ang = self.heading(s0 + u * h)
+                x += w * h * math.cos(ang)
+                y += w * h * math.sin(ang)
+        return (x, y), math.degrees(self.heading(t))
+
+    @property
+    def end(self) -> Point:
+        return self.at(self.length)[0]
+
+    def reversed(self) -> "Element":
+        """The same piece walked the other way."""
+        point, angle = self.at(self.length)
+        return Element(point, angle + 180.0, self.length, -self.k1, -self.k0)
+
+    def encode(self) -> str:
+        """One XDATA string, what the axis keeps to rebuild it exactly."""
+        return (f"E;{self.start[0]:.6f};{self.start[1]:.6f};{self.start_angle:.12f};"
+                f"{self.length:.6f};{self.k0:.15g};{self.k1:.15g}")
+
+    @classmethod
+    def decode(cls, text: str) -> "Element":
+        parts = str(text).split(";")
+        if len(parts) != 7 or parts[0] != "E":
+            raise ValueError(f"not an axis element: {text!r}")
+        return cls((float(parts[1]), float(parts[2])), float(parts[3]), float(parts[4]),
+                   float(parts[5]), float(parts[6]))
+
+    def polyline(self, sagitta: float = 0.002) -> list[Vertex]:
+        """Vertices standing for it in an LWPOLYLINE, without the end
+        vertex: one for a straight or an arc (exact), and for a clothoid
+        enough chords that none strays more than ``sagitta`` from it."""
+        if not self.is_spiral:
+            return [(self.start[0], self.start[1], self.bulge)]
+        kmax = max(abs(self.k0), abs(self.k1))
+        step = math.sqrt(8.0 * sagitta / kmax) if kmax > 0 else self.length
+        n = max(2, int(math.ceil(self.length / max(step, 1e-3))))
+        out = []
+        for i in range(n):
+            (x, y), _ = self.at(self.length * i / n)
+            out.append((x, y, 0.0))
+        return out
+
+
+def element_of_segment(seg: "Segment") -> Element:
+    """A bulge segment as an Element (exact)."""
+    if seg.is_arc:
+        k = math.copysign(1.0 / seg.radius, seg.bulge)
+        return Element(seg.start, seg.start_angle, seg.length, k, k)
+    return Element(seg.start, seg.start_angle, seg.chord, 0.0, 0.0)
+
+
+class ElementAlignment(Alignment):
+    """An axis made of :class:`Element`s -- the one that can hold clothoids.
+    Everything that reads an :class:`Alignment` reads it the same way."""
+
+    def __init__(self, elements, start_station: float = 0.0) -> None:  # noqa: D107
+        self.elements = [e for e in elements if e.length > EPS]
+        if not self.elements:
+            raise ValueError("the axis has no length")
+        self.start_station = float(start_station)
+        self.segments = self.elements
+        self._runs = []
+        run = 0.0
+        for e in self.elements:
+            self._runs.append(run)
+            run += e.length
+        self.length = run
+        self.vertices = elements_polyline(self.elements)
+
+    def reversed(self, start_station: float | None = None) -> "ElementAlignment":
+        return ElementAlignment([e.reversed() for e in reversed(self.elements)],
+                                self.start_station if start_station is None else start_station)
+
+
+def elements_polyline(elements, sagitta: float = 0.002) -> list[Vertex]:
+    """The LWPOLYLINE that draws the elements: arcs exact, clothoids by chords."""
+    out: list[Vertex] = []
+    for e in elements:
+        out.extend(e.polyline(sagitta))
+    end = elements[-1].end
+    out.append((end[0], end[1], 0.0))
+    return out
+
+
+def as_elements(alignment: Alignment) -> list[Element]:
+    if isinstance(alignment, ElementAlignment):
+        return list(alignment.elements)
+    return [element_of_segment(s) for s in alignment.segments]
+
+
+# -- the symmetric clothoid - arc - clothoid at a PI ------------------------------------------
+
+@dataclass(frozen=True)
+class SpiralCurve:
+    """The elements of a curve introduced and left by symmetric clothoids
+    of length ``ls`` (``ls == 0``: a simple circle). Angles in degrees."""
+
+    delta: float
+    radius: float
+    ls: float
+
+    @property
+    def theta_s(self) -> float:
+        """Direction change along one clothoid, radians: L / 2R."""
+        return self.ls / (2.0 * self.radius)
+
+    @property
+    def parameter(self) -> float:
+        return math.sqrt(self.radius * self.ls) if self.ls > 0 else 0.0
+
+    def _spiral_end(self) -> Point:
+        if self.ls <= 0:
+            return (0.0, 0.0)
+        return Element((0.0, 0.0), 0.0, self.ls, 0.0, 1.0 / self.radius).end
+
+    @property
+    def shift(self) -> float:
+        """p, the ripage: how far the circle moves inward."""
+        xs, ys = self._spiral_end()
+        return ys - self.radius * (1.0 - math.cos(self.theta_s)) if self.ls > 0 else 0.0
+
+    @property
+    def k(self) -> float:
+        xs, _ys = self._spiral_end()
+        return xs - self.radius * math.sin(self.theta_s) if self.ls > 0 else 0.0
+
+    @property
+    def tangent(self) -> float:
+        """From the PI to the start of the first clothoid (and from the end
+        of the second back to the PI)."""
+        return (self.radius + self.shift) * math.tan(math.radians(self.delta) / 2.0) + self.k
+
+    @property
+    def arc_angle(self) -> float:
+        """What the circle itself turns, degrees."""
+        return self.delta - 2.0 * math.degrees(self.theta_s)
+
+    @property
+    def arc_length(self) -> float:
+        return math.radians(self.arc_angle) * self.radius
+
+    @property
+    def length(self) -> float:
+        return 2.0 * self.ls + self.arc_length
+
+    @property
+    def external(self) -> float:
+        return (self.radius + self.shift) / math.cos(math.radians(self.delta) / 2.0) - self.radius
+
+
+class SpiralTooLong(ValueError):
+    """The two clothoids turn more than the PI does."""
+
+
+def fit_spiral_curves(points, radii, spirals) -> list[Element]:
+    """The axis through a chain of tangents, each PI turned by a circle of
+    ``radii[i]`` between two symmetric clothoids of length ``spirals[i]``
+    (0: a plain circle; radius 0: the corner is kept). Raises
+    :class:`TangentOverlap` like :func:`fit_curves`, and
+    :class:`SpiralTooLong` when 2 L / 2R exceeds the deflection."""
+    pts = [(float(p[0]), float(p[1])) for p in points]
+    if len(pts) < 3:
+        raise ValueError("a chain of tangents needs at least three vertices")
+    turns = deflections(pts)
+    if not (len(radii) == len(spirals) == len(turns)):
+        raise ValueError(f"{len(radii)} radii and {len(spirals)} clothoids for {len(turns)} PIs")
+    curves: list[SpiralCurve | None] = []
+    tangents = []
+    for i, (turn, r, ls) in enumerate(zip(turns, radii, spirals)):
+        if abs(abs(turn) - 180.0) < 1e-7:
+            raise ValueError(f"PI-{i + 1} turns back on itself")
+        if r < 0 or ls < 0:
+            raise ValueError(f"PI-{i + 1}: radius and clothoid length must be positive")
+        if abs(turn) < 1e-7 or r == 0:
+            curves.append(None)
+            tangents.append(0.0)
+            continue
+        curve = SpiralCurve(abs(turn), r, ls)
+        if curve.arc_angle < -1e-9:
+            raise SpiralTooLong(f"PI-{i + 1}: two clothoids of {ls:g} m turn "
+                                f"{2 * math.degrees(curve.theta_s):.4f}° > {abs(turn):.4f}°")
+        curves.append(curve)
+        tangents.append(curve.tangent)
+    for j in range(len(pts) - 1):
+        length = math.hypot(pts[j + 1][0] - pts[j][0], pts[j + 1][1] - pts[j][1])
+        before = tangents[j - 1] if j >= 1 else 0.0
+        after = tangents[j] if j < len(tangents) else 0.0
+        if before + after > length + 1e-9:
+            if j == 0 or j == len(pts) - 2:
+                which = j + 1 if j == 0 else j
+                raise TangentOverlap(which, which, before + after, length)
+            raise TangentOverlap(j, j + 1, before + after, length)
+
+    elements: list[Element] = []
+    cursor = pts[0]
+
+    def straight_to(point):
+        nonlocal cursor
+        d = math.hypot(point[0] - cursor[0], point[1] - cursor[1])
+        if d > 1e-9:
+            ang = math.degrees(math.atan2(point[1] - cursor[1], point[0] - cursor[0]))
+            elements.append(Element(cursor, ang, d))
+        cursor = point
+
+    for i, curve in enumerate(curves):
+        a, b, c = pts[i], pts[i + 1], pts[i + 2]
+        if curve is None:
+            straight_to(b)
+            continue
+        lin = math.hypot(b[0] - a[0], b[1] - a[1])
+        t = curve.tangent
+        ts = (b[0] - (b[0] - a[0]) / lin * t, b[1] - (b[1] - a[1]) / lin * t)
+        straight_to(ts)
+        sign = 1.0 if turns[i] > 0 else -1.0
+        k = sign / curve.radius
+        ang = math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))
+        if curve.ls > 0:
+            e = Element(cursor, ang, curve.ls, 0.0, k)
+            elements.append(e)
+            cursor, ang = e.at(e.length)
+        if curve.arc_length > 1e-9:
+            e = Element(cursor, ang, curve.arc_length, k, k)
+            elements.append(e)
+            cursor, ang = e.at(e.length)
+        if curve.ls > 0:
+            e = Element(cursor, ang, curve.ls, k, 0.0)
+            elements.append(e)
+            cursor, ang = e.at(e.length)
+        # land exactly on the outgoing tangent: the numeric clothoid is
+        # within micrometres, and the next straight starts from here
+        lout = math.hypot(c[0] - b[0], c[1] - b[1])
+        cursor = (b[0] + (c[0] - b[0]) / lout * t, b[1] + (c[1] - b[1]) / lout * t)
+    straight_to(pts[-1])
+    return elements
+
+
+# -- curves read back from an axis of elements ----------------------------------------------
+
+@dataclass(frozen=True)
+class CurveGroup:
+    """One curve of an axis between two straights: its elements and what a
+    table says of it."""
+
+    number: int
+    elements: tuple
+    first_run: float               # distance from the axis start to its first element
+    pi: Point
+    delta: float                   # degrees
+    left: bool
+
+    @property
+    def radius(self) -> float:
+        return min(e.radius for e in self.elements)
+
+    @property
+    def spiral_in(self) -> Element | None:
+        e = self.elements[0]
+        return e if e.is_spiral else None
+
+    @property
+    def spiral_out(self) -> Element | None:
+        e = self.elements[-1]
+        return e if e.is_spiral and len(self.elements) > 1 else None
+
+    @property
+    def length(self) -> float:
+        return sum(e.length for e in self.elements)
+
+
+def _line_intersection(p, a_deg, q, b_deg) -> Point | None:
+    ax, ay = math.cos(math.radians(a_deg)), math.sin(math.radians(a_deg))
+    bx, by = math.cos(math.radians(b_deg)), math.sin(math.radians(b_deg))
+    den = ax * by - ay * bx
+    if abs(den) < 1e-12:
+        return None
+    t = ((q[0] - p[0]) * by - (q[1] - p[1]) * bx) / den
+    return (p[0] + t * ax, p[1] + t * ay)
+
+
+def curve_groups(alignment: Alignment) -> list[CurveGroup]:
+    """Every run of curved elements between straights, as one curve."""
+    elements = as_elements(alignment)
+    out: list[CurveGroup] = []
+    run = 0.0
+    i = 0
+    while i < len(elements):
+        if elements[i].is_line:
+            run += elements[i].length
+            i += 1
+            continue
+        j, start_run = i, run
+        group = []
+        while j < len(elements) and not elements[j].is_line:
+            group.append(elements[j])
+            run += elements[j].length
+            j += 1
+        first, last = group[0], group[-1]
+        delta = _deflection(first.start_angle, last.end_angle)
+        pi = _line_intersection(first.start, first.start_angle, last.end, last.end_angle) or first.start
+        out.append(CurveGroup(len(out) + 1, tuple(group), start_run, pi, abs(delta), delta > 0))
+        i = j
+    return out
+
+
+def _spiral_pis(alignment: "ElementAlignment") -> list[PI]:
+    out: list[PI] = []
+    groups = {g.first_run: g for g in curve_groups(alignment)}
+    elements = alignment.elements
+    run = 0.0
+    i = 0
+    s0 = alignment.start_station
+    while i < len(elements):
+        e = elements[i]
+        if e.is_line:
+            nxt = elements[i + 1] if i + 1 < len(elements) else None
+            if nxt is not None and nxt.is_line:
+                turn = _deflection(e.end_angle, nxt.start_angle)
+                if abs(turn) > 1e-7:
+                    out.append(PI(len(out) + 1, e.end, s0 + run + e.length, None, turn > 0))
+            run += e.length
+            i += 1
+            continue
+        g = groups[run]
+        start = g.elements[0].start
+        end = g.elements[-1].end
+        ls = g.spiral_in.length if g.spiral_in else 0.0
+        curve = SpiralCurve(g.delta, g.radius, ls) if ls > 0 else CurveElements(g.delta, g.radius)
+        pc_station = s0 + run
+        sc = cs = None
+        sc_station = cs_station = None
+        if ls > 0:
+            sc = g.elements[0].end
+            sc_station = pc_station + ls
+            last = g.spiral_out
+            cs = last.start if last is not None else end
+            cs_station = pc_station + g.length - (last.length if last is not None else 0.0)
+        t_in = math.hypot(g.pi[0] - start[0], g.pi[1] - start[1])
+        out.append(PI(len(out) + 1, g.pi, pc_station + t_in, curve, g.left, start, end,
+                      pc_station, pc_station + g.length, sc, cs, sc_station, cs_station))
+        run += g.length
+        i += len(g.elements)
+    return out

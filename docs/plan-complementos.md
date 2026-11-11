@@ -447,6 +447,14 @@ Norma **DG-2018** del MTC, no SCT.
 > diseño: la tabla de radios mínimos de la DG-2018 no está en
 > `docs/reference/` y no se inventa; entra cuando esté la tabla oficial.
 
+> **Estado (2026-11-11, contribución de Yann Steffan):** clotoides (A² = R·L)
+> en `HCURVES` con `[Clothoid]`; normas como datos en `plugins/carreteras/norms/`
+> (ARP 1994 y 2022, ICTAAL 2015, ICTAVRU 2009, cada una con su fuente) y
+> `ROADCHECK`; `AXISELEMENTS` y ángulos en grados centesimales; C3 con
+> `VCURVES` / `VCURVETABLE` sobre la rasante de T5; peraltes (`SUPERELEV`) y
+> C4 con `MASSHAUL`. La tabla de la DG-2018 sigue sin inventarse: basta
+> con añadir su `.json`.
+
 - **C1 — Eje y estacado:** progresivas, cuadro del eje, invertir
   cadenamiento, separar eje.
 - **C2 — Curvas horizontales simples:** PI, radio, tangentes; cuadro de

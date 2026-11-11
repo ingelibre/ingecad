@@ -1,0 +1,68 @@
+{
+  "id": "ICTAVRU2009",
+  "name": "ICTAVRU - Voies rapides urbaines (Certu, 1990, réédition 2009)",
+  "country": "FR",
+  "verified": true,
+  "source": "ICTAVRU, Certu, 1990, réédition de mars 2009: §2.1 voies de type A, §2.2 voies de type U, §3 profil en long.",
+  "note": "Type A: dévers 5 % au rayon minimal, 2,5 % au rayon au dévers minimal, interpolation en 1/R. Type U: entre Rm et Rnd, dévers vers l'intérieur entre 1 % et 2,5 %. Clothoïdes pour R < Rnd, de longueur max(14 (δ - δ0), R/9). Les rayons en angle saillant peuvent avoir été révisés par le guide Cerema de 2018 sur la visibilité: à vérifier.",
+  "superelevation": {
+    "law": "inverse_linear",
+    "max": 5.0,
+    "min": 2.5,
+    "crown": -2.5
+  },
+  "clothoid": {
+    "required_below": "rnd",
+    "factor": 1.0,
+    "length": {
+      "formula": "max_14dd_r9"
+    }
+  },
+  "chaining": null,
+  "categories": {
+    "A80": {
+      "rm": 240,
+      "rdm": 300,
+      "rnd": 400,
+      "crest_min": 3000,
+      "crest_normal": 6000,
+      "sag_min": 1000,
+      "grade_max": 6
+    },
+    "A100": {
+      "rm": 425,
+      "rdm": 500,
+      "rnd": 800,
+      "crest_min": 6000,
+      "crest_normal": 10000,
+      "sag_min": 1500,
+      "grade_max": 5
+    },
+    "U60": {
+      "rm": 120,
+      "rdm": 200,
+      "rnd": 200,
+      "crest_min": 1500,
+      "crest_normal": 2500,
+      "sag_min": 800,
+      "grade_max": 6,
+      "superelevation_range": [
+        1.0,
+        2.5
+      ]
+    },
+    "U80": {
+      "rm": 240,
+      "rdm": 400,
+      "rnd": 400,
+      "crest_min": 3000,
+      "crest_normal": 6000,
+      "sag_min": 1000,
+      "grade_max": 6,
+      "superelevation_range": [
+        1.0,
+        2.5
+      ]
+    }
+  }
+}
