@@ -18,6 +18,10 @@ class TerrainOptionsPage(QWidget):
     def __init__(self, dialog, window) -> None:
         super().__init__(dialog)
         form = QFormLayout(self)
+        self.crs = QLineEdit(self)
+        self.crs.setText(prefs.default_crs())
+        self.crs.setPlaceholderText(tr("empty: UTM"))
+        form.addRow(tr("Default coordinate system (EPSG:2154, L93, CC44...):"), self.crs)
         self.zone = QSpinBox(self)
         self.zone.setRange(1, 60)
         self.zone.setValue(prefs.default_zone())
@@ -66,11 +70,13 @@ class TerrainOptionsPage(QWidget):
         from .tiles import PRESETS
 
         source = prefs.imagery_source()
+        saved = prefs._setting(prefs.SETTING_IMG_SOURCE, "auto").strip() or "auto"
         self.img_source = QComboBox(self)
+        self.img_source.addItem(tr("Automatic (IGN BD ORTHO HR in France, Esri elsewhere)"), "auto")
         for preset in PRESETS.values():
             self.img_source.addItem(preset.name, preset.id)
         self.img_source.addItem(tr("Custom XYZ tiles"), "custom")
-        chosen = "custom" if source.id.startswith("custom") else source.id
+        chosen = "custom" if source.id.startswith("custom") else ("auto" if saved == "auto" else source.id)
         self.img_source.setCurrentIndex(max(0, self.img_source.findData(chosen)))
         form.addRow(tr("Satellite image source:"), self.img_source)
         self.img_url = QLineEdit(self)
@@ -86,8 +92,24 @@ class TerrainOptionsPage(QWidget):
         img_note.setWordWrap(True)
         form.addRow(img_note)
 
+    def _crs_code(self) -> str:
+        """What was typed, as an EPSG code PROJ accepts; "" when empty or
+        not a projected system (then GEOREF asks the UTM questions)."""
+        from . import datum
+
+        text = self.crs.text().strip()
+        if not text:
+            return ""
+        code = datum.french_system(text) if not text.replace(".", "").isdigit() else None
+        try:
+            crs = datum.check_crs(code or text)
+        except (ValueError, RuntimeError):
+            return ""
+        authority = crs.to_authority()
+        return ":".join(authority) if authority else (code or text)
+
     def apply(self) -> None:
         prefs.save_defaults(self.zone.value(), self.hemisphere.currentData() == "N",
-                            tuple(box.value() for box in self.shift))
+                            tuple(box.value() for box in self.shift), self._crs_code())
         prefs.save_dem(self.dem_url.text(), self.dem_encoding.currentData(), self.dem_zoom.value())
         prefs.save_imagery(self.img_source.currentData(), self.img_url.text(), self.img_maxzoom.value())
