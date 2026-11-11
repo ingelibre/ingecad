@@ -43,13 +43,14 @@ class Norm:
     clothoid: dict
     chaining: dict | None
     categories: dict
+    arc_fraction_min: float | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Norm":
         return cls(str(d["id"]), str(d.get("name", d["id"])), bool(d.get("verified", False)),
                    str(d.get("source", "")), str(d.get("note", "")),
                    dict(d.get("superelevation") or {}), dict(d.get("clothoid") or {}),
-                   d.get("chaining"), dict(d["categories"]))
+                   d.get("chaining"), dict(d["categories"]), d.get("arc_fraction_min"))
 
     def category(self, name: str) -> dict:
         for key, value in self.categories.items():
@@ -94,7 +95,8 @@ def superelevation(norm: Norm, cat: dict, radius: float) -> float | None:
     """The superelevation (%, towards the inside; negative: the crown kept)
     the standard gives a curve of ``radius``; None when it gives no law."""
     law = norm.superelevation
-    rnd, rdm, rm = cat.get("rnd"), cat.get("rdm"), cat.get("rm")
+    rnd, rdm = cat.get("rnd"), cat.get("rdm")
+    rm = cat.get("rm") if cat.get("rm") is not None else cat.get("superelevation_flat_below")
     crown = law.get("crown", -2.5)
     if rnd is not None and radius >= rnd:
         return crown
@@ -128,11 +130,27 @@ def clothoid_length(norm: Norm, cat: dict, radius: float, lanes: int = 2) -> flo
         value = float(k) * radius ** 0.4
         cap = (length.get("cap") or {}).get(str(lanes))
         return min(value, float(cap)) if cap else value
+    if formula == "max_2ldd_kr04":
+        k = length.get("k", {}).get(str(lanes)) or length.get("k", {}).get("2")
+        d = superelevation(norm, cat, radius)
+        crown = norm.superelevation.get("crown", -2.5)
+        dd = abs(d - crown) if d is not None else 0.0
+        width = float(length.get("lane_width", 3.5)) * max(lanes, 2) / 2.0
+        return max(2.0 * width * dd, float(k) * radius ** 0.4) if k else None
     if formula == "max_14dd_r9":
         d = superelevation(norm, cat, radius)
         crown = norm.superelevation.get("crown", -2.5)
         dd = (d - crown) if d is not None else 0.0
         return max(14.0 * dd, radius / 9.0)
+    return None
+
+
+def widening(cat: dict, radius: float) -> float | None:
+    """The widening of each lane (m) the category gives a curve of
+    ``radius``, or None when it gives none."""
+    for rule in cat.get("widening") or []:
+        if rule.get("min_radius", 0) <= radius <= rule.get("max_radius", math.inf):
+            return float(rule["k"]) / radius
     return None
 
 
@@ -203,6 +221,15 @@ def check(alignment: geometry.Alignment, norm: Norm, category: str, lanes: int =
                 report.add("info", tr("{label}: clothoids {ls:.1f} m (A = {a:.1f}), {l:.1f} m recommended.",
                                       label=label, ls=min(ls_in, ls_out), a=math.sqrt(min(ls_in, ls_out) * r),
                                       l=wanted))
+        widen = widening(cat, r)
+        if widen:
+            report.add("info", tr("{label}: widening {w:.2f} m per lane.", label=label, w=widen))
+        if norm.arc_fraction_min and (ls_in > 0 or ls_out > 0):
+            arc = sum(e.length for e in g.elements if e.is_arc)
+            if arc < norm.arc_fraction_min * g.length - 1e-6:
+                report.add("warning", tr("{label}: the circle is {a:.1f} m of {t:.1f} m, less than "
+                                         "{f:.0%} of the curve.", label=label, a=arc, t=g.length,
+                                         f=norm.arc_fraction_min))
     chaining = norm.chaining or {}
     rule = chaining.get("rule")
     for a, b in zip(groups, groups[1:]):
@@ -211,6 +238,9 @@ def check(alignment: geometry.Alignment, norm: Norm, category: str, lanes: int =
         if rule == "ratio_both":
             above = chaining.get("unless_both_above")
             if above is not None and r1 > above and r2 > above:
+                continue
+            factor = chaining.get("applies_below_factor")
+            if factor is not None and rnd is not None and min(r1, r2) >= float(factor) * rnd:
                 continue
             if not (1.0 / ratio < r1 / r2 < ratio):
                 report.add("warning", tr("C-{a} then C-{b}: radii {r1:.0f} m and {r2:.0f} m, ratio outside "
@@ -225,4 +255,28 @@ def check(alignment: geometry.Alignment, norm: Norm, category: str, lanes: int =
                     report.add("warning", tr("C-{a} then C-{b}: R1 = {r1:.0f} m > {k:g} x R2 = {r2:.0f} m.",
                                              a=first.number, b=second.number, r1=first.radius, k=ratio,
                                              r2=second.radius))
+    return report
+
+
+def check_vertical(profile, norm: Norm, category: str, report: Report | None = None) -> Report:
+    """A vertical alignment (:class:`vertical.VerticalAlignment`) against
+    the standard: every grade against the maximum, every crest and sag
+    radius against its minimum."""
+    cat_name = norm.category_name(category)
+    cat = norm.categories[cat_name]
+    report = report or Report(norm, cat_name)
+    gmax, crest, sag = cat.get("grade_max"), cat.get("crest_min"), cat.get("sag_min")
+    for n, slope in enumerate(profile.slopes(), 1):
+        if gmax is not None and abs(slope) * 100.0 > gmax + 1e-9:
+            report.add("error", tr("Grade {n}: {p:+.2f} %, steeper than {m:g} %.", n=n, p=slope * 100.0, m=gmax))
+    for v in profile.curves():
+        limit = crest if v.crest else sag
+        kind = tr("crest") if v.crest else tr("sag")
+        if v.radius <= 0:
+            report.add("warning", tr("S{n} ({kind}): no vertical curve.", n=v.number, kind=kind))
+        elif limit is not None and v.radius < limit - 1e-6:
+            report.add("error", tr("S{n} ({kind}): R = {r:.0f} m, below the minimum {m:g} m.",
+                                   n=v.number, kind=kind, r=v.radius, m=limit))
+        else:
+            report.add("info", tr("S{n} ({kind}): R = {r:.0f} m.", n=v.number, kind=kind, r=v.radius))
     return report

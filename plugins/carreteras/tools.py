@@ -577,10 +577,12 @@ class RoadCheckTool(_AxisTool):
     def _run(self) -> None:
         from . import norms
 
+        category = RoadCheckTool.last_category.get(self._norm.id, next(iter(self._norm.categories)))
         try:
-            report = norms.check(actions.alignment_of(self._entity), self._norm,
-                                 RoadCheckTool.last_category.get(self._norm.id, next(iter(self._norm.categories))),
+            report = norms.check(actions.alignment_of(self._entity), self._norm, category,
                                  RoadCheckTool.last_lanes)
+            for valign in actions.verticals_of_axis(_document(self.ctx), self._entity):
+                norms.check_vertical(valign, self._norm, category, report)
         except ValueError as exc:
             self.ctx.echo(tr("Cannot do it: {error}", error=exc))
             self.ctx.finish()
@@ -609,3 +611,314 @@ TOOL_CLASSES = {
     "HCURVES": HorizontalCurvesTool,
     "CURVETABLE": CurveTableTool,
 }
+
+
+# ======================================================================
+# C3: vertical curves; superelevation; C4: mass haul
+# ======================================================================
+
+def _topo_tools():
+    import importlib
+    import sys
+
+    module = sys.modules.get("ingecad_plugin_topografia.tools")
+    if module is not None:
+        return module
+    try:
+        return importlib.import_module("plugins.topografia.tools")
+    except ImportError:
+        return None
+
+
+class VerticalCurvesTool(Tool):
+    """VCURVES: a grade line registered with GRADELINE (its vertices are
+    the sommets) becomes a design line with a parabolic curve at each
+    sommet -- one radius for all, or one per sommet."""
+
+    wants_selection = True
+    last_radius = 3000.0
+
+    def start(self) -> None:
+        self.name = "VCURVES"
+        self._entity = None
+        self._sommets = None
+        self._radii = []
+        self._each = False
+
+    def selection_prompt(self) -> str:
+        return tr("Select the grade line:")
+
+    def on_selection(self, entities: list) -> None:
+        document = _document(self.ctx)
+        topo = actions.topography()
+        for entity in entities:
+            if topo is not None and topo.is_grade(entity) and actions.vertical_of(entity) is None:
+                try:
+                    self._sommets, _anchor, _frame = actions.grade_sommets(document, entity)
+                except ValueError as exc:
+                    self.ctx.echo(tr("Cannot do it: {error}", error=exc))
+                    self.ctx.finish()
+                    return
+                self._entity = entity
+                break
+        if self._entity is None:
+            self.ctx.echo(tr("Select a grade line registered with GRADELINE."))
+            self.ctx.finish()
+            return
+        if len(self._sommets) < 3:
+            self.ctx.echo(tr("The grade line has no sommet between its ends."))
+            self.ctx.finish()
+            return
+        self.ctx.echo(tr("{n} sommets.", n=len(self._sommets) - 2))
+        self.prompt("Vertical radius for every sommet <{r:g}> or [Each]:", r=VerticalCurvesTool.last_radius)
+
+    def _next(self) -> None:
+        i = len(self._radii)
+        if i == len(self._sommets) - 2:
+            self._build()
+            return
+        (s0, z0), (s1, z1), (s2, z2) = self._sommets[i:i + 3]
+        p1, p2 = (z1 - z0) / (s1 - s0), (z2 - z1) / (s2 - s1)
+        kind = tr("crest") if p2 < p1 else tr("sag")
+        self.prompt("Vertical radius at S{n} ({kind}, {p1:+.2f} % to {p2:+.2f} %) <{r:g}>:", n=i + 1,
+                    kind=kind, p1=p1 * 100, p2=p2 * 100, r=VerticalCurvesTool.last_radius)
+
+    def on_option(self, text: str) -> bool:
+        if self._sommets is None:
+            return False
+        if not self._each and self.option(text) == "E":
+            self._each = True
+            self._next()
+            return True
+        try:
+            radius = _number(text)
+            if radius < 0:
+                raise ValueError(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid radius: {text}", text=text))
+            return True
+        self._take(radius)
+        return True
+
+    def on_enter(self) -> None:
+        if self._sommets is None:
+            self.ctx.finish()
+            return
+        self._take(VerticalCurvesTool.last_radius)
+
+    def _take(self, radius: float) -> None:
+        if radius > 0:
+            VerticalCurvesTool.last_radius = radius
+        if self._each:
+            self._radii.append(radius)
+            self._next()
+        else:
+            self._radii = [radius] * (len(self._sommets) - 2)
+            self._build()
+
+    def _build(self) -> None:
+        try:
+            command = actions.vertical_curves(_document(self.ctx), self._entity, self._radii)
+        except ValueError as exc:
+            self.ctx.echo(tr("Cannot fit the vertical curves: {error}. Use smaller radii.", error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.execute(command)
+        for c in command.vertical.curves():
+            if c.radius > 0:
+                self.ctx.echo(tr("S{n}: {kind} R = {r:.0f} m, T = {t:.2f} m, f = {f:.3f} m.", n=c.number,
+                                 kind=tr("crest") if c.crest else tr("sag"), r=c.radius, t=c.tangent, f=c.flech))
+        self.ctx.finish()
+
+
+class VerticalTableTool(_TableTool):
+    """VCURVETABLE: the table of the vertical curves of a design line."""
+
+    def start(self) -> None:
+        super().start()
+        self.name = "VCURVETABLE"
+
+    def selection_prompt(self) -> str:
+        return tr("Select the design line drawn by VCURVES:")
+
+    def on_selection(self, entities: list) -> None:
+        self._entity = next((e for e in entities if actions.vertical_of(e) is not None), None)
+        if self._entity is None:
+            self.ctx.echo(tr("Select a design line drawn by VCURVES."))
+            self.ctx.finish()
+            return
+        self._ask()
+
+    def table(self, document, point):
+        return actions.vertical_table(document, self._entity, point, self._height)
+
+
+class SuperelevationTool(RoadCheckTool):
+    """SUPERELEV: the table of dévers (and widening) along the axis, from a
+    design standard and category."""
+
+    def start(self) -> None:
+        super().start()
+        self.name = "SUPERELEV"
+
+    def _run(self) -> None:
+        self._stage = "point"
+        self.prompt("Specify insertion point (top-left):")
+
+    def on_point(self, point) -> None:
+        if self._stage != "point":
+            return
+        category = RoadCheckTool.last_category.get(self._norm.id, next(iter(self._norm.categories)))
+        try:
+            command = actions.superelevation_table(_document(self.ctx), self._entity, point, self._norm,
+                                                   category, RoadCheckTool.last_lanes,
+                                                   (actions.axis_params(self._entity) or actions.AxisParams()).height)
+        except ValueError as exc:
+            self.ctx.echo(tr("Cannot do it: {error}", error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.execute(command)
+        if not self._norm.verified:
+            self.ctx.echo(tr("Values to check against the guide: {note}", note=self._norm.note))
+        self.ctx.finish()
+
+    def on_enter(self) -> None:
+        if self._stage == "point":
+            self.ctx.finish()
+            return
+        super().on_enter()
+
+
+class MassHaulTool(Tool):
+    """MASSHAUL: the mass-haul diagram (épure de Lalanne / Brückner) of the
+    earthworks between the ground and a grade line -- with the coefficient
+    that turns a cubic metre dug into the fill it makes."""
+
+    wants_selection = True
+    last_coefficient = 1.0
+
+    def start(self) -> None:
+        self.name = "MASSHAUL"
+        topo_tools = _topo_tools()
+        self._topo = actions.topography()
+        self._tin = topo_tools._surface(self.ctx) if topo_tools is not None else None
+        self._grade = None
+        self._frame = None
+        self._axis = None
+        self._haul = None
+        if self._topo is None or self._tin is None:
+            self.ctx.echo(tr("The mass diagram needs the Topography plugin and a surface (TIN)."))
+            self.ctx.finish()
+            return
+        self._template = self._topo._profile.template_from_settings()
+        self._stage = "select"
+
+    def selection_prompt(self) -> str:
+        return tr("Select the grade line:")
+
+    def on_selection(self, entities: list) -> None:
+        document = _document(self.ctx)
+        grade = next((e for e in entities if self._topo.is_grade(e)), None)
+        anchor = self._topo.grade_profile_anchor(document, grade) if grade is not None else None
+        if anchor is None:
+            self.ctx.echo(tr("Select a grade line registered with GRADELINE."))
+            self.ctx.finish()
+            return
+        self._frame = self._topo.ProfileFrame.from_entity(anchor)
+        valign = actions.vertical_of(grade)
+        if valign is not None:
+            self._grade = valign.sample(1.0)
+        else:
+            self._grade = self._topo.grade_of(grade, self._frame)
+        self._axis = next((e for e in document.current_space() if e.dxf.handle == self._frame.axis_handle), None)
+        if self._axis is None:
+            self.ctx.echo(tr("The profile's axis is no longer in the drawing."))
+            self.ctx.finish()
+            return
+        self._stage = "platform"
+        self.prompt("Platform width <{w:g}>:", w=self._template.width)
+
+    def _ask(self) -> None:
+        if self._stage == "cut":
+            self.prompt("Cut slope H:V <{v:g}>:", v=self._template.cut_hv)
+        elif self._stage == "fill":
+            self.prompt("Fill slope H:V <{v:g}>:", v=self._template.fill_hv)
+        elif self._stage == "coefficient":
+            self.prompt("Coefficient applied to the cut (swell, reuse) <{k:g}>:", k=MassHaulTool.last_coefficient)
+        elif self._stage == "point":
+            self.prompt("Specify the bottom-left corner of the diagram:")
+
+    def on_option(self, text: str) -> bool:
+        if self._stage in ("select", "point"):
+            return False
+        try:
+            value = _number(text)
+            if value <= 0:
+                raise ValueError(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        if self._stage == "platform":
+            self._template.width = value
+            self._stage = "cut"
+        elif self._stage == "cut":
+            self._template.cut_hv = value
+            self._stage = "fill"
+        elif self._stage == "fill":
+            self._template.fill_hv = value
+            self._stage = "coefficient"
+        elif self._stage == "coefficient":
+            MassHaulTool.last_coefficient = value
+            self._compute()
+            return True
+        self._ask()
+        return True
+
+    def on_enter(self) -> None:
+        order = ["platform", "cut", "fill", "coefficient"]
+        if self._stage in order:
+            if self._stage == "coefficient":
+                self._compute()
+                return
+            self._stage = order[order.index(self._stage) + 1]
+            self._ask()
+        else:
+            self.ctx.finish()
+
+    def _compute(self) -> None:
+        rows = self._topo.earthworks_rows(self._tin, self._axis, self._grade, self._frame.step, self._template)
+        self._haul = actions.mass_haul(rows, MassHaulTool.last_coefficient)
+        last = rows[-1] if rows else None
+        if last is not None:
+            self.ctx.echo(tr("Cut {c:.0f} m³ (x {k:g}), fill {f:.0f} m³.", c=last.cut_total,
+                             k=MassHaulTool.last_coefficient, f=last.fill_total))
+        for n, seg in enumerate(self._haul.segments, 1):
+            self.ctx.echo(tr("Segment {n}: {a} to {b}, {v:.0f} m³ carried {dir}, mean distance {d:.0f} m.",
+                             n=n, a=format_station(seg.start), b=format_station(seg.end), v=seg.volume,
+                             dir=tr("forward") if seg.forward else tr("backward"), d=seg.distance))
+        surplus = self._haul.surplus
+        self.ctx.echo(tr("Surplus to spoil: {v:.0f} m³", v=surplus) if surplus > 0
+                      else tr("Deficit to borrow: {v:.0f} m³", v=-surplus))
+        self._stage = "point"
+        self._ask()
+
+    def on_point(self, point) -> None:
+        if self._stage != "point":
+            return
+        try:
+            command = actions.mass_haul_diagram(_document(self.ctx), self._haul, point,
+                                                self._frame.hscale, name=self._frame.name)
+        except ValueError as exc:
+            self.ctx.echo(tr("Cannot do it: {error}", error=exc))
+            self.ctx.finish()
+            return
+        self.ctx.execute(command)
+        self.ctx.finish()
+
+
+TOOL_CLASSES.update({
+    "VCURVES": VerticalCurvesTool,
+    "VCURVETABLE": VerticalTableTool,
+    "SUPERELEV": SuperelevationTool,
+    "MASSHAUL": MassHaulTool,
+})

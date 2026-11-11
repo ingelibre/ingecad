@@ -656,3 +656,398 @@ def fit_axis(document, tangents_entity, radii, params: AxisParams | None = None,
     command = CompositeCommand("horizontal curves", commands)
     command.axis_command = axis_cmd
     return command
+
+
+# =========================================================================================
+# C3: the vertical alignment -- parabolic curves on Topography's grade line
+# C4: the mass-haul diagram -- from Topography's earthworks
+# and the superelevation table of the axis
+# =========================================================================================
+
+from . import vertical as _vertical  # noqa: E402
+
+VERT_TAG = "CAR-VERTICAL"
+VERTICAL = "vertical"
+LAYERS["vertical"] = ("CAR-RASANTE", 1)
+LAYERS["vertical_text"] = ("CAR-RASANTE-TEXTO", 7)
+LAYERS["masshaul"] = ("CAR-MOVIMIENTO-TIERRAS", 3)
+
+
+def topography():
+    """Topography's actions: the loaded plugin (one instance, the window's),
+    else the package (the suite); None when neither imports."""
+    import importlib
+    import sys
+
+    module = sys.modules.get("ingecad_plugin_topografia.actions")
+    if module is not None:
+        return module
+    try:
+        return importlib.import_module("plugins.topografia.actions")
+    except ImportError:
+        return None
+
+
+def vertical_of(entity) -> _vertical.VerticalAlignment | None:
+    """The vertical alignment a design line keeps, or None."""
+    tags = _tags(entity)
+    if not tags or tags[0][1] != VERT_TAG:
+        return None
+    try:
+        return _vertical.VerticalAlignment.decode(v for _c, v in tags[1:])
+    except ValueError:
+        return None
+
+
+def grade_sommets(document, grade_entity) -> tuple:
+    """(sommets, anchor, frame) of a grade line Topography registered."""
+    topo = topography()
+    if topo is None:
+        raise ValueError(tr("Vertical curves need the Topography plugin."))
+    if not topo.is_grade(grade_entity):
+        raise ValueError(tr("Select a grade line registered with GRADELINE."))
+    anchor = topo.grade_profile_anchor(document, grade_entity)
+    if anchor is None:
+        raise ValueError(tr("The grade line's profile is no longer in the drawing."))
+    frame = topo.ProfileFrame.from_entity(anchor)
+    sommets = topo.grade_of(grade_entity, frame)
+    return sommets, anchor, frame
+
+
+def vertical_curves(document, grade_entity, radii, text_height: float = 1.0) -> CompositeCommand:
+    """VCURVES: the design line with a parabolic curve of ``radii[i]`` at
+    each sommet of the grade line, drawn on the profile as a new grade line
+    Topography reads (sections, volumes) -- 1 m chords, within s²/8R of the
+    parabola -- that keeps its exact sommets and radii; the grades, and each
+    curve's sommet, R, T and flèche, and its high or low point, written."""
+    topo = topography()
+    sommets, anchor, frame = grade_sommets(document, grade_entity)
+    valign = _vertical.VerticalAlignment(sommets, radii)
+    points = [frame.to_drawing(s, z) for s, z in valign.sample(1.0)]
+    xdata = [(1000, VERT_TAG)] + [(1000, item) for item in valign.encode()]
+    anchor_handle = anchor.dxf.handle
+
+    def make(msp):
+        ensure_appid(msp.doc, APPID)
+        ensure_appid(msp.doc)
+        entity = msp.add_lwpolyline(points)
+        entity.set_xdata(APPID, xdata)
+        entity.set_xdata(topo.APPID, [(1000, topo.GRADE_TAG), (1005, anchor_handle)])
+        return entity
+
+    commands = layer_commands(document, ("vertical", "vertical_text"))
+    line = AddEntityCommand("CAR-VERTICAL", make, layer=LAYERS["vertical"][0])
+    commands.append(line)
+    link = _link(line)
+    layer = LAYERS["vertical_text"][0]
+    h = text_height
+    # the grade of each straight stretch, between the curves
+    bounds = [(valign.start, None)] + [(c.start, c.end) for c in valign.curves()] + [(None, valign.end)]
+    for (s0, z0), (s1, z1), (_a, left), (right, _b), p in zip(
+            valign.sommets, valign.sommets[1:], bounds, bounds[1:], valign.slopes()):
+        a = left if left is not None else s0
+        b = right if right is not None else s1
+        if b - a < 1e-6:
+            continue
+        mid = (a + b) / 2.0
+        x, y = frame.to_drawing(mid, valign.z_at(mid))
+        xa, ya = frame.to_drawing(a, valign.z_at(a))
+        xb, yb = frame.to_drawing(b, valign.z_at(b))
+        angle = math.degrees(math.atan2(yb - ya, xb - xa))
+        commands.append(_text(tr("{p:+.2f} % over {l:.2f} m", p=p * 100.0, l=b - a),
+                              (x, y + 1.5 * h), h, layer, VERTICAL, link, readable_rotation(angle)))
+    for c in valign.curves():
+        x, y = frame.to_drawing(c.s, c.z)
+        kind = tr("crest") if c.crest else tr("sag")
+        commands.append(_line((x, y - 4.0 * h), (x, y + 4.0 * h), layer, VERTICAL, link))
+        commands.append(_text(f"S{c.number}  {format_station(c.s)}  {c.z:.2f}", (x, y + 5.5 * h), h,
+                              layer, VERTICAL, link))
+        if c.radius > 0:
+            commands.append(_text(tr("{kind} R = {r:.0f}  T = {t:.2f}  f = {f:.3f}", kind=kind,
+                                     r=c.radius, t=c.tangent, f=c.flech),
+                                  (x, y + 7.0 * h), 0.8 * h, layer, VERTICAL, link))
+            for s_end in (c.start, c.end):
+                xe, ye = frame.to_drawing(s_end, c.z_at(s_end))
+                commands.append(_line((xe, ye - 2.0 * h), (xe, ye + 2.0 * h), layer, VERTICAL, link))
+            ext = c.extremum
+            if ext is not None:
+                xe, ye = frame.to_drawing(*ext)
+                label = tr("high point") if c.crest else tr("low point")
+                commands.append(_text(f"{label} {format_station(ext[0])}  {ext[1]:.2f}",
+                                      (xe, ye - 2.5 * h), 0.8 * h, layer, VERTICAL, link))
+    command = CompositeCommand("vertical curves", commands)
+    command.line_command = line
+    command.vertical = valign
+    return command
+
+
+def vertical_table_rows(valign: _vertical.VerticalAlignment) -> list[list[str]]:
+    rows = []
+    for c in valign.curves():
+        ext = c.extremum
+        rows.append([f"S{c.number}", format_station(c.s), _f(c.z), f"{c.p1 * 100:+.3f}",
+                     f"{c.p2 * 100:+.3f}", tr("Crest") if c.crest else tr("Sag"),
+                     _f(c.radius, 0) if c.radius > 0 else "-",
+                     _f(c.tangent) if c.radius > 0 else "-", _f(c.flech) if c.radius > 0 else "-",
+                     format_station(c.start) if c.radius > 0 else "-",
+                     format_station(c.end) if c.radius > 0 else "-",
+                     f"{format_station(ext[0])} / {ext[1]:.3f}" if ext else "-"])
+    return rows
+
+
+def vertical_table(document, entity, insert, text_height: float = 2.0) -> CompositeCommand:
+    """VCURVETABLE: one row per sommet -- station, elevation, grades in and
+    out, crest or sag, R, T, flèche, start and end, high or low point."""
+    valign = vertical_of(entity)
+    if valign is None:
+        raise ValueError(tr("Select a design line drawn by VCURVES."))
+    rows = vertical_table_rows(valign)
+    if not rows:
+        raise ValueError(tr("The design line has no sommet."))
+    h = text_height
+    headers = [tr("SOMMET"), tr("STATION"), "Z", "p1 %", "p2 %", tr("TYPE"), "R", "T", "f",
+               tr("STATION START"), tr("STATION END"), tr("HIGH / LOW POINT")]
+    widths = [w * h for w in (7.0, 9.0, 8.0, 7.0, 7.0, 8.0, 7.0, 7.0, 6.0, 10.0, 10.0, 16.0)]
+    table = tables.insert_table(insert, cols=len(headers), col_width=8.0 * h, data_rows=len(rows),
+                                row_height=2.0 * h, text_height=h, title=tr("VERTICAL CURVES"),
+                                headers=headers, data=rows, col_widths=widths)
+    return _on_table_layer(document, table, "vertical table")
+
+
+def verticals_of_axis(document, axis) -> list:
+    """Every design line VCURVES drew on a profile of ``axis``."""
+    topo = topography()
+    if topo is None:
+        return []
+    out = []
+    for entity in document.current_space():
+        valign = vertical_of(entity) if entity.dxftype() == "LWPOLYLINE" else None
+        if valign is None:
+            continue
+        anchor = topo.grade_profile_anchor(document, entity)
+        frame = topo.ProfileFrame.from_entity(anchor) if anchor is not None else None
+        if frame is not None and frame.axis_handle == axis.dxf.handle:
+            out.append(valign)
+    return out
+
+
+# -- superelevation -------------------------------------------------------------------------
+
+def superelevation_rows(alignment: geometry.Alignment, norm, category: str,
+                        lanes: int = 2) -> list[list[str]]:
+    """The dévers along the axis: for each curve the stations where the
+    cross-slope changes, with the slope of the left and right lanes in %
+    (negative: falling away from the axis; the crown is -2.5 / -2.5). The
+    outer lane turns linearly along the clothoid from the crown to the
+    curve's superelevation; the inner lane keeps the crown until the outer
+    one reaches it. A curve without clothoids gets its value only."""
+    from . import norms as _norms
+
+    cat = norm.categories[norm.category_name(category)]
+    crown = norm.superelevation.get("crown", -2.5)
+    rows = []
+    for pi in geometry.points_of_intersection(alignment):
+        c = pi.curve
+        if c is None:
+            continue
+        d = _norms.superelevation(norm, cat, c.radius)
+        name = f"PI-{pi.number}"
+        widen = _norms.widening(cat, c.radius)
+        wtxt = _f(widen, 2) if widen else "-"
+        if d is None or d < 0:
+            rows.append([name, format_station(pi.pc_station), tr("crown kept"),
+                         _f(crown, 2), _f(crown, 2), wtxt])
+            continue
+
+        def lanes_at(outer: float, inner: float) -> tuple[str, str]:
+            # left curve: the right lane is the outer one
+            left, right = (inner, outer) if pi.left else (outer, inner)
+            return _f(left, 2), _f(right, 2)
+
+        if not pi.spiral:
+            l_, r_ = lanes_at(d, -d)
+            rows.append([name, format_station(pi.pc_station), tr("PC: superelevation reached before"),
+                         l_, r_, wtxt])
+            rows.append([name, format_station(pi.pt_station), tr("PT: kept until after"), l_, r_, wtxt])
+            continue
+        ls = pi.sc_station - pi.pc_station
+        span = d - crown
+
+        def station_of(value: float, start: float, rising: bool) -> float:
+            frac = (value - crown) / span
+            return start + (frac if rising else 1.0 - frac) * ls
+
+        pts = []
+        for start, rising, tag in ((pi.pc_station, True, "in"), (pi.cs_station, False, "out")):
+            seq = [(crown, crown, tr("crown")), (0.0, crown, tr("outer lane flat")),
+                   (-crown, crown, tr("outer lane at the crown slope")), (d, -d, tr("full superelevation"))]
+            if not rising:
+                seq = list(reversed(seq))
+            for outer, inner, what in seq:
+                pts.append((station_of(outer, start, rising), outer, inner, what))
+        for station, outer, inner, what in pts:
+            l_, r_ = lanes_at(outer, inner)
+            rows.append([name, format_station(station), what, l_, r_, wtxt])
+    return rows
+
+
+def superelevation_table(document, entity, insert, norm, category: str, lanes: int = 2,
+                         text_height: float = 2.0) -> CompositeCommand:
+    """SUPERELEV: the table of dévers (and widening) along the axis."""
+    rows = superelevation_rows(alignment_of(entity), norm, category, lanes)
+    if not rows:
+        raise ValueError(tr("The axis has no curves."))
+    h = text_height
+    headers = ["PI", tr("STATION"), tr("POINT"), tr("LEFT %"), tr("RIGHT %"), tr("WIDENING")]
+    widths = [w * h for w in (7.0, 10.0, 26.0, 9.0, 9.0, 10.0)]
+    table = tables.insert_table(insert, cols=len(headers), col_width=10.0 * h, data_rows=len(rows),
+                                row_height=2.0 * h, text_height=h,
+                                title=tr("SUPERELEVATION - {norm} {cat}", norm=norm.id,
+                                         cat=norm.category_name(category)),
+                                headers=headers, data=rows, col_widths=widths)
+    return _on_table_layer(document, table, "superelevation table")
+
+
+# -- the mass-haul diagram ---------------------------------------------------------------------
+
+@dataclass
+class HaulSegment:
+    start: float
+    end: float
+    volume: float            # moved within the segment (the largest ordinate)
+    moment: float            # m³·m, the area of the diagram
+    forward: bool            # cut carried forward (the ordinate is positive)
+
+    @property
+    def distance(self) -> float:
+        """Mean haul distance."""
+        return self.moment / self.volume if self.volume > 1e-9 else 0.0
+
+
+@dataclass
+class MassHaul:
+    stations: list            # s
+    ordinates: list           # cumulative cut x coefficient - fill, m³
+    segments: list
+    balance: float = 0.0
+
+    @property
+    def surplus(self) -> float:
+        """Positive: to spoil (dépôt); negative: to borrow (emprunt)."""
+        return self.ordinates[-1] - self.balance if self.ordinates else 0.0
+
+
+def mass_haul(rows, coefficient: float = 1.0, balance: float = 0.0) -> MassHaul:
+    """The Brückner/Lalanne mass diagram of Topography's earthworks rows:
+    the cut is multiplied by ``coefficient`` (what a cubic metre dug
+    becomes in the fill), the fill taken as is. Between two points where
+    the ordinate crosses the balance line the earth is moved within the
+    segment; its volume is the largest ordinate there, its moment the
+    area of the diagram, and their quotient the mean haul distance."""
+    stations, ordinates = [], []
+    m = 0.0
+    for r in rows:
+        m += r.cut_volume * coefficient - r.fill_volume
+        stations.append(r.s)
+        ordinates.append(m)
+    segments = []
+    if len(stations) >= 2:
+        y = [o - balance for o in ordinates]
+        eps = 1e-9
+        start, peak, area, sign = stations[0], abs(y[0]), 0.0, 0.0
+
+        def close(end):
+            nonlocal start, peak, area, sign
+            if peak > eps:
+                segments.append(HaulSegment(start, end, peak, area, sign > 0))
+            start, peak, area, sign = end, 0.0, 0.0, 0.0
+
+        for i in range(1, len(stations)):
+            s0, s1, y0, y1 = stations[i - 1], stations[i], y[i - 1], y[i]
+            if y0 * y1 < 0:                              # crosses inside the interval
+                sc = s0 + (s1 - s0) * y0 / (y0 - y1)
+                area += abs(y0) * (sc - s0) / 2.0
+                peak = max(peak, abs(y0))
+                sign = sign or y0
+                close(sc)
+                area = abs(y1) * (s1 - sc) / 2.0
+                peak, sign = abs(y1), y1
+            else:
+                area += (abs(y0) + abs(y1)) * (s1 - s0) / 2.0
+                peak = max(peak, abs(y0), abs(y1))
+                sign = sign or (y1 if abs(y1) > eps else y0)
+                if abs(y1) <= eps:                       # lands on the balance line
+                    close(s1)
+        if peak > eps:
+            segments.append(HaulSegment(start, stations[-1], peak, area, sign > 0))
+    return MassHaul(stations, ordinates, segments, balance)
+
+
+def mass_haul_diagram(document, haul: MassHaul, insert, hscale: float = 1.0, height: float = 60.0,
+                      text_height: float = 1.0, name: str = "EJE") -> CompositeCommand:
+    """The mass diagram at ``insert`` (bottom-left): the ordinate against
+    the station, the balance line, the station of each balance point,
+    each segment's volume and mean haul distance, and the surplus or
+    deficit at the end."""
+    if len(haul.stations) < 2:
+        raise ValueError(tr("Not enough stations for a mass diagram."))
+    layer = LAYERS["masshaul"][0]
+    h = text_height
+    s0 = haul.stations[0]
+    span = max(abs(o - haul.balance) for o in haul.ordinates) or 1.0
+    vscale = height / 2.0 / span
+    x0, ymid = insert[0], insert[1] + height / 2.0 + 4.0 * h
+
+    def xy(s, m):
+        return (x0 + (s - s0) * hscale, ymid + (m - haul.balance) * vscale)
+
+    commands = layer_commands(document, ("masshaul",))
+    tag = [(1000, "CAR-MASSHAUL"), (1000, name)]
+
+    def line(a, b):
+        def make(msp):
+            ensure_appid(msp.doc, APPID)
+            e = msp.add_line(a, b)
+            e.set_xdata(APPID, tag)
+            return e
+        return AddEntityCommand("CAR-MASSHAUL", make, layer=layer)
+
+    def text(t, pos, height_, align="MIDDLE_CENTER", rotation=0.0):
+        def make(msp):
+            ensure_appid(msp.doc, APPID)
+            e = _text_entity(msp, t, pos, height_, rotation, align)
+            e.set_xdata(APPID, tag)
+            return e
+        return AddEntityCommand("CAR-MASSHAUL", make, layer=layer)
+
+    x_end = xy(haul.stations[-1], haul.balance)[0]
+    commands.append(line((x0, ymid), (x_end, ymid)))                       # the balance line
+    commands.append(line((x0, ymid - height / 2.0), (x0, ymid + height / 2.0)))
+    pts = [xy(s, m) for s, m in zip(haul.stations, haul.ordinates)]
+
+    def curve(msp):
+        ensure_appid(msp.doc, APPID)
+        e = msp.add_lwpolyline(pts)
+        e.set_xdata(APPID, tag)
+        return e
+    commands.append(AddEntityCommand("CAR-MASSHAUL", curve, layer=layer))
+    commands.append(text(f"+{span:.0f} m³", (x0 - 0.8 * h, ymid + height / 2.0), 0.8 * h, "MIDDLE_RIGHT"))
+    commands.append(text(f"-{span:.0f} m³", (x0 - 0.8 * h, ymid - height / 2.0), 0.8 * h, "MIDDLE_RIGHT"))
+    for seg in haul.segments:
+        for s in (seg.start, seg.end):
+            x, y = xy(s, haul.balance)
+            commands.append(line((x, y - 1.0 * h), (x, y + 1.0 * h)))
+        mid = (seg.start + seg.end) / 2.0
+        x, _y = xy(mid, haul.balance)
+        y = ymid + (1 if seg.forward else -1) * (height / 2.0 + 2.0 * h)
+        commands.append(text(tr("{v:.0f} m³ over {d:.0f} m", v=seg.volume, d=seg.distance), (x, y), 0.8 * h))
+    for s in sorted({round(seg.end, 3) for seg in haul.segments[:-1]}):
+        x, y = xy(s, haul.balance)
+        commands.append(text(format_station(s), (x, y - 2.0 * h), 0.7 * h, rotation=90.0, align="MIDDLE_RIGHT"))
+    surplus = haul.surplus
+    end_note = (tr("Surplus to spoil: {v:.0f} m³", v=surplus) if surplus > 0
+                else tr("Deficit to borrow: {v:.0f} m³", v=-surplus))
+    commands.append(text(tr("MASS DIAGRAM {name}", name=name), (x0, insert[1] + height + 10.0 * h),
+                         1.4 * h, "MIDDLE_LEFT"))
+    commands.append(text(end_note, (x0, insert[1] + 1.0 * h), h, "MIDDLE_LEFT"))
+    return CompositeCommand("mass diagram", commands)

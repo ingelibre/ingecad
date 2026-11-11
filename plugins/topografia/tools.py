@@ -1299,7 +1299,7 @@ class SectionsTool(Tool):
         self._grade = None
         self._step = 20.0
         self._half = 15.0
-        self._template = profile_mod.Template()
+        self._template = profile_mod.template_from_settings()
         self._stage = "step"
         if self._tin is None:
             self.ctx.echo(tr("There is no surface in this space."))
@@ -1404,7 +1404,7 @@ class VolumesTool(Tool):
         self._axis = None
         self._grade = None
         self._frame = None
-        self._template = profile_mod.Template()
+        self._template = profile_mod.template_from_settings()
         self._method = "prismoidal"
         self._rows = []
         self._stage = "platform"
@@ -1898,6 +1898,63 @@ class AreaReportTool(Tool):
         self.ctx.finish()
 
 
+class DitchTool(Tool):
+    """DITCH: the ditch at the foot of each cut slope that SECTIONS and
+    VOLUMES (and the roads' mass diagram) draw and measure from now on --
+    its depth (0: none), bottom width and inner side slope; remembered."""
+
+    def start(self) -> None:
+        self.name = "DITCH"
+        self._t = profile_mod.template_from_settings()
+        self._stage = "depth"
+        self._ask()
+
+    def _ask(self) -> None:
+        if self._stage == "depth":
+            self.prompt("Ditch depth in cut (0 = none) <{v:g}>:", v=self._t.ditch_depth)
+        elif self._stage == "bottom":
+            self.prompt("Ditch bottom width <{v:g}>:", v=self._t.ditch_bottom)
+        else:
+            self.prompt("Ditch side towards the road H:V <{v:g}>:", v=self._t.ditch_inner_hv)
+
+    def on_option(self, text: str) -> bool:
+        try:
+            value = _number(text)
+            if value < 0 or (self._stage == "inner" and value <= 0):
+                raise ValueError(text)
+        except ValueError:
+            self.ctx.echo(tr("Invalid number: {text}", text=text))
+            return True
+        if self._stage == "depth":
+            self._t.ditch_depth = value
+        elif self._stage == "bottom":
+            self._t.ditch_bottom = value
+        else:
+            self._t.ditch_inner_hv = value
+        self._advance()
+        return True
+
+    def on_enter(self) -> None:
+        self._advance()
+
+    def _advance(self) -> None:
+        if self._stage == "depth" and self._t.ditch_depth > 0:
+            self._stage = "bottom"
+            self._ask()
+            return
+        if self._stage == "bottom":
+            self._stage = "inner"
+            self._ask()
+            return
+        profile_mod.save_ditch(self._t.ditch_depth, self._t.ditch_bottom, self._t.ditch_inner_hv)
+        if self._t.ditch_depth > 0:
+            self.ctx.echo(tr("Ditch in cut: depth {d:g} m, bottom {b:g} m, side {h:g}:1.",
+                             d=self._t.ditch_depth, b=self._t.ditch_bottom, h=self._t.ditch_inner_hv))
+        else:
+            self.ctx.echo(tr("No ditch in the cross-sections."))
+        self.ctx.finish()
+
+
 TOOL_CLASSES = {
     "MEMORIA": MemoriaTool,
     "AREAREPORT": AreaReportTool,
@@ -1908,6 +1965,7 @@ TOOL_CLASSES = {
     "GRADELINE": GradeLineTool,
     "SECTIONS": SectionsTool,
     "VOLUMES": VolumesTool,
+    "DITCH": DitchTool,
     "CONTOUR": ContourTool,
     "CONTOURLABEL": ContourLabelTool,
     "SLOPEZONES": SlopeZonesTool,

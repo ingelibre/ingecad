@@ -126,6 +126,44 @@ class Template:
     width: float = 6.0            # platform, total
     cut_hv: float = 1.0           # cut slope H:V (1.0 = 1:1)
     fill_hv: float = 1.5          # fill slope H:V
+    #: a trapezoidal ditch at the foot of each cut slope (fossé en
+    #: déblai): its depth below the platform edge (0: none), its bottom
+    #: width, and the H:V of its side towards the road; the side away from
+    #: the road is the cut slope itself
+    ditch_depth: float = 0.0
+    ditch_bottom: float = 0.5
+    ditch_inner_hv: float = 1.0
+
+    @property
+    def has_ditch(self) -> bool:
+        return self.ditch_depth > 0.0
+
+
+SETTING_DITCH = "topografia/ditch"
+
+
+def template_from_settings() -> Template:
+    """A template with the ditch DITCH last set (none unless set)."""
+    template = Template()
+    try:
+        from PySide6.QtCore import QSettings
+
+        parts = str(QSettings().value(SETTING_DITCH, "")).split(",")
+        if len(parts) == 3:
+            template.ditch_depth, template.ditch_bottom, template.ditch_inner_hv = (
+                max(0.0, float(p)) for p in parts)
+    except Exception:
+        pass
+    return template
+
+
+def save_ditch(depth: float, bottom: float, inner_hv: float) -> None:
+    try:
+        from PySide6.QtCore import QSettings
+
+        QSettings().setValue(SETTING_DITCH, f"{max(depth, 0.0):g},{max(bottom, 0.0):g},{max(inner_hv, 0.01):g}")
+    except Exception:
+        pass
 
 
 def design_section(ground: list[Point], z_design: float, template: Template) -> list[Point]:
@@ -142,14 +180,25 @@ def design_section(ground: list[Point], z_design: float, template: Template) -> 
             continue
         rising = zg > z_design                                  # ground above: cut
         hv = template.cut_hv if rising else template.fill_hv
-        day = _daylight(ground, edge, hv, direction, rising)
+        foot = [edge]
+        if rising and template.has_ditch:
+            # down the inner side, across the bottom; the cut slope rises
+            # from the ditch's outer foot
+            d = template.ditch_depth
+            o1 = edge[0] + direction * d * template.ditch_inner_hv
+            o2 = o1 + direction * template.ditch_bottom
+            foot = [edge, (o1, z_design - d), (o2, z_design - d)]
+        start = foot[-1]
+        day = _daylight(ground, start, hv, direction, rising)
         if day is None:
             end = ground[-1] if direction > 0 else ground[0]
-            day = (end[0], z_design + (1.0 if rising else -1.0) / max(hv, 1e-9) * abs(end[0] - edge[0]))
+            day = (end[0], start[1] + (1.0 if rising else -1.0) / max(hv, 1e-9) * abs(end[0] - start[0]))
+        extra = foot[1:] + [day]
         if direction > 0:
-            out.append(day)
+            out.extend(extra)
         else:
-            out.insert(0, day)
+            for p in extra:
+                out.insert(0, p)
     return out
 
 

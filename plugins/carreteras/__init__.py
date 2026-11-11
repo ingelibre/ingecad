@@ -14,6 +14,11 @@ introduced and left by symmetric clothoids (A² = R·L); the axis then keeps
 its exact elements in XDATA. ROADCHECK checks the curves against a design
 standard read from ``norms/*.json`` (ARP, ICTAAL, ICTAVRU), AXISELEMENTS draws
 the table of elements, and the tables can give angles in grads.
+C3, the vertical alignment: VCURVES puts a parabolic curve of radius R at
+each sommet of Topography's grade line (a new grade line Topography reads),
+VCURVETABLE tabulates them, ROADCHECK checks grades and crest and sag radii.
+SUPERELEV tabulates the superelevation (and widening) along the axis; C4,
+MASSHAUL draws the mass-haul diagram of the earthworks.
 Everything it draws is plain DXF (LWPOLYLINE, LINE, TEXT, layers); what the
 axis remembers rides in XDATA under the plugin's own APPID.
 """
@@ -42,6 +47,14 @@ PLUGIN = PluginSpec(
         Submenu("Horizontal curves", (
             MenuItem("Fit curves at the PIs...", "HCURVES"),
             MenuItem("Curve table...", "CURVETABLE"),
+        )),
+        Submenu("Vertical alignment", (
+            MenuItem("Vertical curves on a grade line...", "VCURVES"),
+            MenuItem("Vertical curve table...", "VCURVETABLE"),
+        )),
+        Submenu("Cross-section", (
+            MenuItem("Superelevation table...", "SUPERELEV"),
+            MenuItem("Mass-haul diagram...", "MASSHAUL"),
         )),
         SEPARATOR,
         MenuItem("Axis table...", "AXISTABLE"),

@@ -250,5 +250,11 @@
   "LOT": "LOT",
   "AREA (m²)": "SURFACE (m²)",
   "PERIMETER (m)": "PÉRIMÈTRE (m)",
-  "TECHNICAL DATA (coordinate system {crs})": "DONNÉES TECHNIQUES (système de coordonnées {crs})"
+  "TECHNICAL DATA (coordinate system {crs})": "DONNÉES TECHNIQUES (système de coordonnées {crs})",
+  "Ditch depth in cut (0 = none) <{v:g}>:": "Profondeur du fossé en déblai (0 = aucun) <{v:g}> :",
+  "Ditch bottom width <{v:g}>:": "Largeur du fond du fossé <{v:g}> :",
+  "Ditch side towards the road H:V <{v:g}>:": "Talus du fossé côté chaussée H:V <{v:g}> :",
+  "Ditch in cut: depth {d:g} m, bottom {b:g} m, side {h:g}:1.": "Fossé en déblai : profondeur {d:g} m, fond {b:g} m, talus {h:g}/1.",
+  "No ditch in the cross-sections.": "Pas de fossé dans les profils en travers.",
+  "Ditch in cut...": "Fossé en déblai..."
 }

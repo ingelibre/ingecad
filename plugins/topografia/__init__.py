@@ -65,6 +65,7 @@ PLUGIN = PluginSpec(
             MenuItem("Grade line", "GRADELINE"),
             MenuItem("Cross sections...", "SECTIONS"),
             MenuItem("Earthworks (cut and fill)...", "VOLUMES"),
+            MenuItem("Ditch in cut...", "DITCH"),
         )),
         SEPARATOR,
         MenuItem("UTM grid...", "UTMGRID"),

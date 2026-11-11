@@ -159,7 +159,8 @@ def test_the_bundled_standards_load_and_name_their_sources():
     assert {"ARP1994", "ARP2022", "ICTAAL2015", "ICTAVRU2009"} <= set(found)
     for norm in found.values():
         assert norm.source and norm.categories
-    assert found["ARP2022"].verified is False             # read from a secondary source
+    assert found["ARP2022"].category("R2")["rm"] == 125
+    assert found["ARP2022"].category("Artere110")["crest_min"] == 5200
     arp = found["ARP1994"]
     assert arp.category("r80") == {"rm": 240, "rdm": 650, "rnd": 900, "crest_min": 3000,
                                    "sag_min": 2200, "grade_max": 6}
@@ -245,9 +246,13 @@ def test_roadcheck_tool_asks_standard_category_and_lanes():
     assert echoed[-1].startswith("1 error(s)")
 
 
-def test_the_unverified_standard_says_so():
+def test_a_standard_marked_unverified_says_so(tmp_path, monkeypatch):
     from plugins.carreteras.tools import RoadCheckTool
 
+    (tmp_path / "draft.json").write_text(
+        '{"id": "DRAFT", "name": "Draft", "verified": false, "note": "to check", "source": "x",'
+        ' "categories": {"C1": {"rm": 100, "rdm": 200, "rnd": 300}}}', encoding="utf-8")
+    monkeypatch.setattr(norms, "_user_dir", lambda: tmp_path)
     document, history, axis = _fit(300.0, 60.0)
     echoed = []
     ctx = ToolContext(execute=history.execute, prompt=lambda *_: None, echo=echoed.append,
@@ -255,7 +260,20 @@ def test_the_unverified_standard_says_so():
     tool = RoadCheckTool(ctx)
     tool.start()
     tool.on_selection([axis])
-    tool.on_option("ARP2022")
-    tool.on_option("R1")
+    tool.on_option("draft")
+    tool.on_option("C1")
     tool.on_option("2")
-    assert echoed[1].startswith("Values to check against the guide:")
+    assert echoed[1] == "Values to check against the guide: to check"
+
+
+def test_arp_2022_clothoid_length_and_circle_share():
+    arp = norms.find("ARP2022")
+    cat = arp.category("R1")
+    d = norms.superelevation(arp, cat, 300.0)
+    # max(2 l |Δd|, 6 R^0.4) with l = 3.50 m
+    assert norms.clothoid_length(arp, cat, 300.0, 2) == pytest.approx(max(2 * 3.5 * (d + 2.5), 6 * 300 ** 0.4))
+    assert norms.clothoid_needed_below(arp, cat) == pytest.approx(600.0)      # 1.5 Rdn
+    pts = [(0.0, 0.0), (400.0, 0.0), (400.0 + 400.0 * math.cos(math.radians(12)), 400.0 * math.sin(math.radians(12)))]
+    alignment = geometry.ElementAlignment(geometry.fit_spiral_curves(pts, [300.0], [60.0]))
+    report = norms.check(alignment, arp, "R1")
+    assert any("less than 20% of the curve" in f.text for f in report.findings)

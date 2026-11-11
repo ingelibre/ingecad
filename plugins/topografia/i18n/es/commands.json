@@ -74,5 +74,8 @@
   },
   "AREAREPORT": {
     "name": "AREASLOTES"
+  },
+  "DITCH": {
+    "name": "CUNETA"
   }
 }
