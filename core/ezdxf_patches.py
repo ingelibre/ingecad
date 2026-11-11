@@ -44,6 +44,7 @@ def apply() -> None:
     _patch_narrow_linear_dimension_text()
     _patch_narrow_linear_dimension_arrows()
     _patch_outside_text_placement()
+    _patch_thai_text_shaping_and_fallback()
     _patch_two_line_angular_sector()
     _patch_three_point_angular_sector()
     _patch_angular_extension_from_vertex()
@@ -1876,3 +1877,227 @@ def _patch_linetype_dots() -> None:
     draw_line._ingecad_patch = True
     LinetypeStage2d.draw_line = draw_line
     LinetypeStage2d.draw_path = draw_path
+
+
+_NOT_FOUND = object()
+_THAI_FALLBACK_FONT = None
+
+
+def _get_thai_fallback_font():
+    global _THAI_FALLBACK_FONT
+    if _THAI_FALLBACK_FONT is _NOT_FOUND:
+        return None
+    if _THAI_FALLBACK_FONT is not None:
+        return _THAI_FALLBACK_FONT
+    from ezdxf.fonts import fonts
+
+    fm = fonts.font_manager
+    candidates = (
+        "tahoma", "leelawadee ui", "leelawadee", "noto sans thai",
+        "loma", "waree", "garuda", "thonburi", "cordia new",
+        "angsana new", "umpush", "sawasdee",
+    )
+    for cand in candidates:
+        try:
+            face = fm.find_best_match(family=cand)
+            if face is not None:
+                font_name = fm.find_font_name(face)
+                f = fonts.make_font(font_name, 1.0)
+                if hasattr(f, "glyph_cache") and 0x0E01 in f.glyph_cache.cmap:
+                    _THAI_FALLBACK_FONT = f
+                    return _THAI_FALLBACK_FONT
+        except Exception:
+            pass
+    try:
+        f = fonts.make_font("tahoma.ttf", 1.0)
+        if hasattr(f, "glyph_cache") and 0x0E01 in f.glyph_cache.cmap:
+            _THAI_FALLBACK_FONT = f
+            return _THAI_FALLBACK_FONT
+    except Exception:
+        pass
+    _THAI_FALLBACK_FONT = _NOT_FOUND
+    return None
+
+
+def _normalize_thai_text(s: str) -> str:
+    res = []
+    i = 0
+    n = len(s)
+    while i < n:
+        if i + 1 < n and 0x0E48 <= ord(s[i]) <= 0x0E4C and s[i + 1] == "\u0e33":
+            res.append("\u0e4d")  # Nikhahit circle (Level 1)
+            res.append(s[i])      # Tone mark (Level 2)
+            res.append("\u0e32")  # SARA AA (spacing)
+            i += 2
+        else:
+            res.append(s[i])
+            i += 1
+    return "".join(res)
+
+
+def _patch_thai_text_shaping_and_fallback() -> None:
+    """Thai text renders with proper font fallback and complex text shaping.
+
+    Upstream ezdxf TTFontRenderer processes characters linearly:
+    1. Characters not present in the active font's cmap (e.g. Arial or standard
+       styles) produce missing glyph (.notdef) tofu blocks.
+    2. Thai combining characters (upper vowels, lower vowels, tone marks)
+       advance x_offset erroneously or collide vertically:
+       - Upper vowels and tone marks sit at the same height (Level 1), causing
+         tone marks to overlap directly into upper vowels (e.g. ที่, ปิ้, น้ำ).
+       - Ascender consonants (ป, ฝ, ฟ, ฬ) collide with upper vowels and tone marks.
+       - Descender consonants (ฎ, ฏ) collide with lower vowels (ุ, ู).
+       - SARA AM (ำ) preceded by a tone mark (e.g. น้ำ) overlaps the Nikhahit circle.
+
+    This patch:
+    - Automatically falls back to an installed Thai font (Tahoma, Leelawadee UI,
+      Cordia New, Noto Sans Thai, Loma, Waree, etc.) when the active font lacks
+      Thai glyphs.
+    - Accurately shapes Thai syllables:
+      * Normalizes tone mark + SARA AM (น + ้ + ำ -> น + ํ + ้ + า).
+      * Zeroes advance width for Thai combining characters (Level 1/2 vowels & tone marks).
+      * Elevates tone marks to Level 2 (dy ~ +0.28 * cap_height) when an upper vowel is present.
+      * Shifts upper vowels and tone marks slightly left (dx ~ -0.15 * cap_height) on ascender consonants (ป, ฝ, ฟ, ฬ).
+      * Shifts lower vowels slightly down (dy ~ -0.22 * cap_height) on descender consonants (ฎ, ฏ).
+      * Accurately calculates text line length by excluding zero-width combining marks.
+    """
+    from ezdxf.fonts import fonts
+    from ezdxf.fonts.ttfonts import TTFontRenderer
+    from ezdxf.math import Matrix44
+
+    if getattr(TTFontRenderer.get_text_glyph_paths, "_ingecad_thai_patch", False):
+        return
+
+    orig_glyph_paths = TTFontRenderer.get_text_glyph_paths
+    orig_text_length = TTFontRenderer.get_text_length
+
+    thai_upper_vowels = frozenset({0x0E31, 0x0E34, 0x0E35, 0x0E36, 0x0E37, 0x0E47, 0x0E4D})
+    thai_tone_marks = frozenset({0x0E48, 0x0E49, 0x0E4A, 0x0E4B, 0x0E4C, 0x0E4E})
+    thai_lower_vowels = frozenset({0x0E38, 0x0E39, 0x0E3A})
+    thai_combining = thai_upper_vowels | thai_tone_marks | thai_lower_vowels
+    thai_ascenders = frozenset({0x0E1B, 0x0E1D, 0x0E1F, 0x0E2C})
+    thai_descenders = frozenset({0x0E0E, 0x0E0F})
+
+    def is_thai_text(text: str) -> bool:
+        return any(0x0E00 <= ord(c) <= 0x0E7F for c in text)
+
+    def shaped_thai_glyph_paths(self, s: str, cap_height: float = 1.0, width_factor: float = 1.0):
+        s = _normalize_thai_text(s)
+        glyph_paths = []
+        x_offset: float = 0.0
+        last_base: int | None = None
+        has_upper: bool = False
+
+        thai_font = _get_thai_fallback_font()
+        thai_renderer = getattr(thai_font, "glyph_cache", None) if thai_font else None
+
+        for char in s:
+            code = ord(char)
+            is_thai = (0x0E00 <= code <= 0x0E7F)
+
+            has_glyph = (code in self.cmap and self.cmap[code] != 0)
+            renderer = self if has_glyph or not is_thai or not thai_renderer else thai_renderer
+
+            dx: float = 0.0
+            dy: float = 0.0
+
+            if is_thai:
+                if code in thai_upper_vowels:
+                    has_upper = True
+                    if last_base in thai_ascenders:
+                        dx = -0.15 * cap_height * width_factor
+                elif code in thai_tone_marks:
+                    if has_upper:
+                        dy = 0.28 * cap_height
+                    if last_base in thai_ascenders:
+                        dx = -0.15 * cap_height * width_factor
+                elif code in thai_lower_vowels:
+                    if last_base in thai_descenders:
+                        dy = -0.22 * cap_height
+                else:
+                    last_base = code
+                    has_upper = False
+            else:
+                last_base = None
+                has_upper = False
+
+            resize_factor = renderer.get_scaling_factor(cap_height)
+            y_factor = resize_factor
+            x_factor = resize_factor * width_factor
+
+            m = Matrix44.scale(x_factor, y_factor, 1.0)
+            m[3, 0] = x_offset + dx
+            m[3, 1] = -renderer.font_measurements.baseline * y_factor + dy
+
+            gp = renderer.get_glyph_path(char)
+            gp.transform_inplace(m)
+            if len(gp):
+                glyph_paths.append(gp)
+
+            if not (is_thai and code in thai_combining):
+                x_offset += renderer.get_glyph_width(char) * x_factor
+
+        return glyph_paths
+
+    def patched_get_text_glyph_paths(self, s: str, cap_height: float = 1.0, width_factor: float = 1.0):
+        if not is_thai_text(s):
+            return orig_glyph_paths(self, s, cap_height, width_factor)
+        return shaped_thai_glyph_paths(self, s, cap_height, width_factor)
+
+    def patched_get_text_length(self, s: str, cap_height: float = 1.0, width_factor: float = 1.0) -> float:
+        if not is_thai_text(s):
+            return orig_text_length(self, s, cap_height, width_factor)
+
+        s = _normalize_thai_text(s)
+        total_width: float = 0.0
+        thai_font = _get_thai_fallback_font()
+        thai_renderer = getattr(thai_font, "glyph_cache", None) if thai_font else None
+
+        for char in s:
+            code = ord(char)
+            is_thai = (0x0E00 <= code <= 0x0E7F)
+            if is_thai and code in thai_combining:
+                continue
+            has_glyph = (code in self.cmap and self.cmap[code] != 0)
+            renderer = self if has_glyph or not is_thai or not thai_renderer else thai_renderer
+            total_width += renderer.get_glyph_width(char) * renderer.get_scaling_factor(cap_height) * width_factor
+
+        return total_width
+
+    patched_get_text_glyph_paths._ingecad_patch = True
+    patched_get_text_glyph_paths._ingecad_thai_patch = True
+    patched_get_text_length._ingecad_patch = True
+
+    TTFontRenderer.get_text_glyph_paths = patched_get_text_glyph_paths
+    TTFontRenderer.get_text_length = patched_get_text_length
+
+    try:
+        from ezdxf.addons.drawing.unified_text_renderer import UnifiedTextRenderer
+
+        orig_utr_paths = UnifiedTextRenderer.get_text_glyph_paths
+        orig_utr_width = UnifiedTextRenderer.get_text_line_width
+
+        def patched_utr_paths(self, text: str, font_face: fonts.FontFace, cap_height: float = 1.0):
+            if is_thai_text(text):
+                abstract_font = self.get_font(font_face)
+                if isinstance(abstract_font, fonts.ShapeFileFont):
+                    tf = _get_thai_fallback_font()
+                    if tf is not None:
+                        return tf.text_glyph_paths(text, cap_height)
+            return orig_utr_paths(self, text, font_face, cap_height)
+
+        def patched_utr_width(self, text: str, font_face: fonts.FontFace, cap_height: float = 1.0) -> float:
+            if is_thai_text(text):
+                abstract_font = self.get_font(font_face)
+                if isinstance(abstract_font, fonts.ShapeFileFont):
+                    tf = _get_thai_fallback_font()
+                    if tf is not None:
+                        return tf.text_width_ex(text, cap_height)
+            return orig_utr_width(self, text, font_face, cap_height)
+
+        patched_utr_paths._ingecad_patch = True
+        patched_utr_width._ingecad_patch = True
+        UnifiedTextRenderer.get_text_glyph_paths = patched_utr_paths
+        UnifiedTextRenderer.get_text_line_width = patched_utr_width
+    except Exception:
+        pass
