@@ -802,14 +802,30 @@ def _patch_mtext_mask_rendering() -> None:
     """
     from ezdxf.addons.drawing import frontend as _frontend
 
-    original = _frontend.is_complex_mtext
+    if hasattr(_frontend, "is_complex_mtext"):
+        original = _frontend.is_complex_mtext
 
-    def is_complex_mtext(mtext) -> bool:
-        if mtext.dxf.get("bg_fill", 0):
-            return True
-        return original(mtext)
+        def is_complex_mtext(mtext) -> bool:
+            if mtext.dxf.get("bg_fill", 0):
+                return True
+            return original(mtext)
 
-    _frontend.is_complex_mtext = is_complex_mtext
+        _frontend.is_complex_mtext = is_complex_mtext
+    elif hasattr(_frontend, "Frontend") and hasattr(_frontend.Frontend, "draw_mtext_entity"):
+        orig_draw = _frontend.Frontend.draw_mtext_entity
+
+        def draw_mtext_entity(self, entity, properties):
+            mtext = entity
+            if hasattr(mtext, "dxf") and mtext.dxf.get("bg_fill", 0):
+                if hasattr(self, "draw_complex_mtext"):
+                    try:
+                        self.draw_complex_mtext(mtext, properties)
+                        return
+                    except Exception:
+                        pass
+            return orig_draw(self, entity, properties)
+
+        _frontend.Frontend.draw_mtext_entity = draw_mtext_entity
 
 
 def _patch_exact_family_fonts() -> None:
@@ -1587,6 +1603,11 @@ def _normalize_thai_text(s: str) -> str:
             res.append(s[i])      # Tone mark (Level 2)
             res.append("\u0e32")  # SARA AA (spacing)
             i += 2
+        elif i + 1 < n and s[i] == "\u0e33" and 0x0E48 <= ord(s[i + 1]) <= 0x0E4C:
+            res.append("\u0e4d")  # Nikhahit circle (Level 1)
+            res.append(s[i + 1])  # Tone mark (Level 2)
+            res.append("\u0e32")  # SARA AA (spacing)
+            i += 2
         else:
             res.append(s[i])
             i += 1
@@ -1644,7 +1665,10 @@ def _patch_thai_text_shaping_and_fallback() -> None:
         glyph_paths = []
         x_offset: float = 0.0
         last_base: int | None = None
+        last_base_right: float | None = None
         has_upper: bool = False
+        last_upper_code: int | None = None
+        last_upper_center: float | None = None
 
         thai_font = _get_thai_fallback_font()
         thai_renderer = getattr(thai_font, "glyph_cache", None) if thai_font else None
@@ -1656,18 +1680,42 @@ def _patch_thai_text_shaping_and_fallback() -> None:
             has_glyph = (code in self.cmap and self.cmap[code] != 0)
             renderer = self if has_glyph or not is_thai or not thai_renderer else thai_renderer
 
+            resize_factor = renderer.get_scaling_factor(cap_height)
+            y_factor = resize_factor
+            x_factor = resize_factor * width_factor
+
             dx: float = 0.0
             dy: float = 0.0
 
             if is_thai:
                 if code in thai_upper_vowels:
                     has_upper = True
+                    last_upper_code = code
+                    upper_gp = renderer.get_glyph_path(char)
+                    if len(upper_gp):
+                        u_bbox = upper_gp.bbox()
+                        last_upper_center = x_offset + (u_bbox.extmin[0] + u_bbox.extmax[0]) * x_factor / 2.0
+                    else:
+                        last_upper_center = x_offset
                     if last_base in thai_ascenders:
                         dx = -0.15 * cap_height * width_factor
                 elif code in thai_tone_marks:
                     if has_upper:
-                        dy = 0.28 * cap_height
-                    if last_base in thai_ascenders:
+                        dy = 0.35 * cap_height
+                    if code == 0x0E49 and last_upper_code == 0x0E4D and last_upper_center is not None:
+                        # Mai Tho over Sara Am (Nikhahit circle): center Mai Tho over the circle
+                        tho_gp = renderer.get_glyph_path(char)
+                        if len(tho_gp):
+                            t_bbox = tho_gp.bbox()
+                            tho_center = x_offset + (t_bbox.extmin[0] + t_bbox.extmax[0]) * x_factor / 2.0
+                            dx = last_upper_center - tho_center
+                    elif code == 0x0E49 and last_base_right is not None:
+                        # Right edge of Mai Tho aligns with rightmost edge of the base consonant
+                        tho_gp = renderer.get_glyph_path(char)
+                        if len(tho_gp):
+                            tho_raw_right = x_offset + tho_gp.bbox().extmax[0] * x_factor
+                            dx = last_base_right - tho_raw_right
+                    elif last_base in thai_ascenders:
                         dx = -0.15 * cap_height * width_factor
                 elif code in thai_lower_vowels:
                     if last_base in thai_descenders:
@@ -1675,13 +1723,19 @@ def _patch_thai_text_shaping_and_fallback() -> None:
                 else:
                     last_base = code
                     has_upper = False
+                    last_upper_code = None
+                    last_upper_center = None
+                    base_gp = renderer.get_glyph_path(char)
+                    if len(base_gp):
+                        last_base_right = x_offset + base_gp.bbox().extmax[0] * x_factor
+                    else:
+                        last_base_right = x_offset + renderer.get_glyph_width(char) * x_factor
             else:
                 last_base = None
+                last_base_right = None
                 has_upper = False
-
-            resize_factor = renderer.get_scaling_factor(cap_height)
-            y_factor = resize_factor
-            x_factor = resize_factor * width_factor
+                last_upper_code = None
+                last_upper_center = None
 
             m = Matrix44.scale(x_factor, y_factor, 1.0)
             m[3, 0] = x_offset + dx
