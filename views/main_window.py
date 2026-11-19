@@ -434,6 +434,9 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         self.plugins = PluginManager(host=self)
         self.plugins.discover()
         self._plugin_bars: dict = {}     # plugin id -> {bar id: QToolBar}
+        #: plugin id -> [(BarControl, widget, toolbar action or None)]
+        self._bar_controls: dict = {}
+        self._layer_control_actions: list = []
 
         self._build_menus()
         self._build_status_bar()
@@ -2080,6 +2083,80 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             self.removeToolBar(bar)
             bar.setParent(None)        # gone from findChildren at once,
             bar.deleteLater()          # not at the next event-loop turn
+
+    # -- plugins' controls in the core's bars (BarControl, level 3) ------------
+    def add_bar_controls(self, spec, ctx) -> None:
+        """Place each of ``spec.bar_controls``: beside the current layer on
+        the Properties bar (after any control already there), or on the
+        status bar. If one cannot be made, those already placed are
+        removed and the error goes on (the plugin does not activate)."""
+        placed = self._bar_controls.setdefault(spec.id, [])
+        try:
+            for control in spec.bar_controls:
+                widget = control.create(ctx)
+                widget.setObjectName(f"plugin_{spec.id}_{control.id}")
+                if control.where == "status":
+                    self.statusBar().addPermanentWidget(widget)
+                    action = None
+                else:
+                    action = self._props_toolbar.insertWidget(
+                        self._layer_controls_end(), widget)
+                    self._layer_control_actions.append(action)
+                placed.append((control, widget, action))
+                self._refresh_bar_control(control, widget, ctx)
+        except Exception:
+            self.remove_bar_controls(spec.id)
+            raise
+
+    def _layer_controls_end(self):
+        """The action the next control beside the current layer goes
+        before: the one after the layer combo and the controls already
+        there (None = the end of the bar)."""
+        bar = self._props_toolbar
+        actions = bar.actions()
+        index = next(i for i, a in enumerate(actions)
+                     if bar.widgetForAction(a) is self._layer_combo)
+        index += 1
+        while index < len(actions) and actions[index] in self._layer_control_actions:
+            index += 1
+        return actions[index] if index < len(actions) else None
+
+    def remove_bar_controls(self, plugin_id: str) -> None:
+        for control, widget, action in self._bar_controls.pop(plugin_id, []):
+            if action is not None:
+                self._props_toolbar.removeAction(action)
+                self._layer_control_actions.remove(action)
+            else:
+                self.statusBar().removeWidget(widget)
+            widget.setParent(None)        # gone from findChildren at once
+            widget.deleteLater()
+
+    def plugin_bar_control(self, plugin_id: str, control_id: str):
+        for control, widget, _action in self._bar_controls.get(plugin_id, []):
+            if control.id == control_id:
+                return widget
+        return None
+
+    def _refresh_bar_control(self, control, widget, ctx=None) -> None:
+        if control.refresh is None:
+            return
+        try:
+            control.refresh(ctx or self.plugins.context(), widget)
+        except Exception:
+            import logging
+
+            # a control that cannot show the drawing must not stop the
+            # Properties bar from refreshing for every selection change
+            logging.getLogger("ingecad.plugins").exception(
+                "a plugin's bar control %r failed to refresh", control.id)
+
+    def _refresh_bar_controls(self) -> None:
+        if not getattr(self, "_bar_controls", None):
+            return
+        ctx = self.plugins.context()
+        for placed in self._bar_controls.values():
+            for control, widget, _action in placed:
+                self._refresh_bar_control(control, widget, ctx)
 
     def menus_changed(self) -> None:
         self._build_menus()
@@ -3781,6 +3858,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             self._layer_combo.setCurrentIndex(idx)
         self._show_current_properties()
         self._props_loading = False
+        self._refresh_bar_controls()
 
     def _fill_linetype_combo(self) -> None:
         from core import layers as layer_ops

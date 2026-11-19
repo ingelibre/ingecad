@@ -173,6 +173,14 @@ class Bridge(QObject):
                 self._send(socket, {"error": "bad token"})
                 self._drop(socket)
             return
+        if message.get("list") is True:
+            # the catalogue of this window: the core's tools and those of
+            # its active plugins, which the MCP process cannot know
+            from core.ai import tools as ai
+
+            self._send(socket, {"id": message.get("id"),
+                                "result": {"tools": ai.tool_list()}})
+            return
         self._send(socket, {"id": message.get("id"),
                             "result": self._call(message)})
 

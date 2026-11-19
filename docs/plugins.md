@@ -148,6 +148,8 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `toolbars` | `(ToolbarSpec(id, title, items), ...)`: more bars beside `toolbar`, on and off with it (level 2) |
 | `on_paste` | `callable(ctx, mime) -> bool`: a paste (Ctrl+V, PASTECLIP) asks it first with the clipboard's `QMimeData`; True means the plugin placed it (level 2) |
 | `on_copy` | `callable(ctx, entities, mime)`: a copy going to the system clipboard; add formats of your own to `mime` (level 2) |
+| `ai_tools` | `(AiTool(name, description, handler, properties, required, mutates, confirm_text), ...)`: tools the assistant may call, in IngeCAD and through MCP (level 3, below) |
+| `bar_controls` | `(BarControl(id, create, refresh, where), ...)`: controls of its own beside the current layer or on the status bar (level 3, below) |
 | `reactors` | objects with `before(document)` and `react(document, state)`: keep derived objects true after any command, in its undo step (level 2, below) |
 
 ### A tool's own overlay and preview (level 2)
@@ -248,6 +250,73 @@ U undoes both, REDO and a folded script (`transaction`) replay both.
 as the drawing has nothing of yours. A reactor that raises is logged and
 skipped; the user's command still stands.
 
+### Geometry the user edits only with its source (`ctx.mark_derived`, level 3)
+
+A reactor keeps derived objects true after a command; it cannot stop the
+user from dragging a grip on one line of a wall outline, which the
+plugin's next rebuild then silently puts back. Mark that geometry as
+derived (`core/derived.py`):
+
+```python
+with ctx.transaction("Wall"):
+    ctx.execute(AddWall(...))                  # the object the data lives in
+    ctx.mark_owner([axis], key=wall_id)
+    ctx.mark_derived(outline_lines, key=wall_id)
+    ctx.mark_derived([preview])                # no key: display only
+```
+
+| mark | what the user can do with it |
+|---|---|
+| owner (`key`) | anything, as with any entity |
+| derived (`key`) | MOVE, COPY, ROTATE, ERASE, Delete... only in the same set as an owner of its key (a selectable GROUP of owner and lines does it); alone it is refused like an object on a locked layer, with the reason echoed. It never shows grips |
+| derived, no key | nothing: it is not picked (a click passes through), windows and Ctrl+A skip it |
+
+The marks are XDATA under the APPID `INGECAD_DERIVED`, so they are saved
+with the drawing and copied with the entities: a copied owner and its
+copied lines stay together without translating handles. The plugin itself
+is never restricted. Read-only commands (LIST, distances) see derived
+geometry as usual, and the assistant's tools refuse it like a locked layer.
+Inside a command of its own, a plugin marks the entities it creates with
+`derived.mark_owner(entity, key)` and `derived.mark_derived(entity, key)`
+instead.
+### Tools for the assistant (`ai_tools`, level 3)
+
+The assistant (docs/ai.md) reads and changes the drawing through a
+catalogue of tools. A plugin adds its own, so a model can ask for what the
+plugin keeps instead of guessing it from lines:
+
+```python
+from core.ai.tools import ToolError
+from core.plugins import AiTool
+
+def list_points(ctx, layer="TOPO-PUNTOS"):
+    return {"points": [...]}                   # a dict, sent back as JSON
+
+def renumber(ctx, start):
+    if start < 1:
+        raise ToolError("start must be 1 or more")   # the model reads it
+    ctx.execute(RenumberPoints(start))         # Commands, as always
+    return {"renumbered": n}
+
+PLUGIN = PluginSpec(id="topografia", name="...", api_version=3, ai_tools=(
+    AiTool("topografia_list_points", "The survey points.", list_points,
+           {"layer": {"type": "string"}}),
+    AiTool("topografia_renumber", "Renumber the points.", renumber,
+           {"start": {"type": "integer"}}, ("start",), mutates=True),
+))
+```
+
+- A name starts with the plugin's id and `_`, in lowercase letters, digits
+  and underscores, and must be new; otherwise the plugin does not activate.
+- The handler receives a `PluginContext` and the arguments. A tool that
+  changes the drawing sets `mutates`: it gets `expected_revision` and its
+  changes join the assistant's one undo step, as the core's do.
+  `confirm_text(ctx, args)` returns a question for the user before
+  something U cannot take back.
+- The tools are added on activation and removed on deactivation. Through
+  MCP, `tools/list` asks the open window, so a client sees them while
+  IngeCAD is open with the plugin on.
+
 ### Sections in the Properties panel (`properties_sections`, level 2)
 
 ```python
@@ -295,6 +364,45 @@ only that bar, and it is remembered. Each button's QAction carries the
 on screen, or None while the bars are off. Never reach the window's own
 attributes for them.
 
+### Controls beside the current layer (`bar_controls`, level 3)
+
+A state that qualifies the current layer -- the current level of a
+building, the zone of a survey -- belongs beside it, not on a toolbar of
+the plugin's own across the window. A `BarControl` puts a widget there,
+or on the status bar:
+
+```python
+from PySide6.QtWidgets import QComboBox
+from core.plugins import BarControl
+
+def make_level_combo(ctx):
+    combo = QComboBox()
+    combo.activated.connect(lambda i: ctx.run_command("LEVEL", combo.itemText(i)))
+    return combo
+
+def show_levels(ctx, combo):
+    combo.clear()
+    combo.addItems(levels_of(ctx.document))     # read from the drawing
+
+PLUGIN = PluginSpec(id="arquitectura", name="...", api_version=3, bar_controls=(
+    BarControl("level", make_level_combo, show_levels),             # beside the layer
+    BarControl("units", make_units_label, show_units, where="status"),
+))
+```
+
+- `create(ctx)` runs once, on activation; the host owns the widget and
+  deletes it on deactivation, leaving the bars as they were.
+- `refresh(ctx, widget)` runs with every refresh of the Properties bar: a
+  drawing opened or switched to, the selection or the layers changed, the
+  language changed. Read the state from the drawing there; keep none of
+  your own. A refresh that raises is logged and the bar goes on.
+- Controls beside the layer line up after the current-layer combo, in the
+  order plugins were activated. `ctx.bar_control(plugin_id, id)` returns a
+  widget.
+- A control that cannot be made, a `where` other than `"layer"` or
+  `"status"`, or a repeated `id` keeps the plugin from activating, with
+  nothing left behind.
+
 ### What the context answers (level 2)
 
 A plugin never reads the window's private attributes: they change from one
@@ -311,6 +419,8 @@ release to the next. It asks the `PluginContext` instead.
 | `ctx.regen()` | REGEN in the background; `on_regen_done` hears when it is in view |
 | `with ctx.transaction(name):` | the commands executed inside are one undo step called `name`; if the block raises, they are undone and the error goes on |
 | `ctx.mark()` / `ctx.fold_since(mark, name)` / `ctx.undo_to(mark)` | the same by hand: where the history stands, fold what came after into one step, or take it all back with nothing left to redo |
+| `ctx.mark_owner(entities, key)` / `ctx.mark_derived(entities, key=None)` / `ctx.unmark_derived(entities)` | geometry the user edits only with its source, one undo step each (level 3, above) |
+| `ctx.bar_control(plugin_id, id)` | a plugin's control beside the current layer or on the status bar, or None (level 3) |
 
 ## Contract levels (`api_version`)
 
@@ -325,6 +435,7 @@ written for level 1 keeps working on every later IngeCAD.
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
 | 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, `properties_sections` with `Row`, `toolbars` with `ToolbarSpec`, `on_paste`, `on_copy`, `ToolbarItem.key`, the tool's `overlay`, `preview_entities`, `on_key`, `extra_osnaps`, `extra_osnaps_always`, `last_segment_direction`, `on_selection_step` and `suppress_selection_highlight`, and the context's `toolbar`, `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
+| 3 | next | `ai_tools` with `AiTool`, `bar_controls` with `BarControl`, and the context's `mark_owner`, `mark_derived`, `unmark_derived` (`core/derived.py`) and `bar_control` |
 
 ## The rules a plugin lives by
 

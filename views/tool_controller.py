@@ -16,6 +16,7 @@ import numpy as np
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 from core import actions
+from core import derived
 from core import gc_guard
 from core import layouts as layout_ops
 from core.coords import (CoordinateError, ParsedPoint, is_direct_distance,
@@ -910,7 +911,7 @@ class ToolController(QObject):
         handles = []
         for entity in entities:
             handle = entity.dxf.get("handle")
-            if not handle or handle in hidden:
+            if not handle or handle in hidden or derived.is_display_only(entity):
                 continue
             name = entity.dxf.get("layer", "0")
             out = refused.get(name)
@@ -958,6 +959,16 @@ class ToolController(QObject):
         elif locked:
             self.window.command_line.echo(
                 tr("{n} were on a locked layer.", n=locked))
+        # a plugin's derived geometry moves with its owner, never alone
+        # (core/derived.py): the same refusal as a locked layer's
+        kept, refused = derived.user_editable(kept)
+        if len(refused) == 1:
+            self.window.command_line.echo(
+                tr("1 was derived geometry: select it with the object it comes from."))
+        elif refused:
+            self.window.command_line.echo(
+                tr("{n} were derived geometry: select them with the object they come from.",
+                   n=len(refused)))
         return kept
 
     def select_all(self) -> int:
@@ -3953,8 +3964,8 @@ class ToolController(QObject):
         out = []
         for h in sorted(self.selection):
             e = self.index.entity(h)
-            if e is None or not e.is_alive:
-                continue
+            if e is None or not e.is_alive or derived.is_derived(e):
+                continue                  # derived geometry has no grips
             for i, (x, y, role) in enumerate(entity_grips(e)):
                 out.append((x, y, role, h, i))
         self._grips_cache = (key, out)

@@ -31,7 +31,7 @@ from core.paths import app_root
 #: the reason and never activated half-working. Raised by one each time the
 #: contract grows (docs/plugins.md says what every level added); a level is
 #: never taken back, so a plugin for an older level keeps working.
-API_VERSION = 2
+API_VERSION = 3
 
 
 # -- what a plugin declares ----------------------------------------------------
@@ -74,6 +74,27 @@ class ToolbarSpec:
     id: str
     title: str
     items: tuple = ()
+
+
+@dataclass(frozen=True)
+class BarControl:
+    """A control of a plugin in the host's own bars (``PluginSpec.
+    bar_controls``, level 3): beside the current layer on the Properties
+    bar (``where="layer"``), or on the status bar (``where="status"``).
+
+    ``create(ctx)`` returns the QWidget, made once when the plugin is
+    activated; the host owns it from then on and deletes it on
+    deactivation. ``refresh(ctx, widget)``, if given, is called whenever
+    the host refreshes the Properties bar -- a drawing opened or switched
+    to, the selection or the layers changed, the language changed -- so the
+    control shows the drawing's state without timers of its own. ``id`` is
+    unique within the plugin; ``ctx.bar_control(plugin_id, id)`` returns the
+    widget."""
+
+    id: str
+    create: Callable
+    refresh: Optional[Callable] = None
+    where: str = "layer"
 
 
 class _Consumed:
@@ -122,6 +143,27 @@ class Row:
         self.apply_each = apply_each   # (entity, value) -> None
 
 
+@dataclass(frozen=True)
+class AiTool:
+    """A tool the assistant may call, in IngeCAD and through MCP
+    (``PluginSpec.ai_tools``, level 3). ``name`` starts with the plugin's id
+    and an underscore; ``properties`` and ``required`` are the JSON Schema
+    of its arguments; ``handler(ctx, **args)`` returns a dict (or raises
+    ``core.ai.tools.ToolError`` with the reason). A tool that changes the
+    drawing sets ``mutates``: its call is refused when the drawing changed
+    since the model read it, and runs in the assistant's one undo step.
+    ``confirm_text(ctx, args)`` returns the question to ask the user before
+    something U cannot take back, or None."""
+
+    name: str
+    description: str
+    handler: Callable
+    properties: dict = field(default_factory=dict)
+    required: tuple = ()
+    mutates: bool = False
+    confirm_text: Optional[Callable] = None
+
+
 @dataclass
 class PluginSpec:
     """Everything the host needs to know about a plugin.
@@ -136,7 +178,10 @@ class PluginSpec:
     a missing one lists the plugin as unavailable with the reason instead of
     breaking the start-up. ``api_version`` is the contract level the plugin
     was written for (:data:`API_VERSION`); a level this IngeCAD does not
-    reach lists it as unavailable the same way.
+    reach lists it as unavailable the same way. ``ai_tools`` are
+    :class:`AiTool` the assistant may call, in IngeCAD and through MCP;
+    ``bar_controls`` are :class:`BarControl` widgets placed in the host's
+    own bars (level 3).
     """
 
     id: str
@@ -164,6 +209,8 @@ class PluginSpec:
     toolbars: tuple = ()
     on_paste: Optional[Callable] = None
     on_copy: Optional[Callable] = None
+    ai_tools: tuple = ()
+    bar_controls: tuple = ()
 
 
 @dataclass
@@ -212,6 +259,12 @@ class PluginContext:
         """Make ``entities`` the selection, as a pick would (a locked
         layer's stay out with no command running); returns how many."""
         return self.host.tools.select_entities(entities)
+
+    def bar_control(self, plugin_id: str, control_id: str):
+        """A plugin's control in the host's bars (``bar_controls``, level 3),
+        or None while the plugin is off."""
+        find = getattr(self.host, "plugin_bar_control", None)
+        return find(plugin_id, control_id) if find is not None else None
 
     def toolbar(self, plugin_id: str, bar_id: Optional[str] = None):
         """The QToolBar on screen for a plugin: its ``toolbar`` with no
@@ -274,6 +327,29 @@ class PluginContext:
             raise
         self.fold_since(start, name)
 
+    # -- level 3 ---------------------------------------------------------------
+    def mark_owner(self, entities, key: str) -> None:
+        """Make ``entities`` owners of the derived geometry sharing ``key``
+        (core/derived.py); one undo step."""
+        from core.derived import OWNER, MarkCommand
+
+        self.execute(MarkCommand(entities, OWNER, key))
+
+    def mark_derived(self, entities, key: Optional[str] = None) -> None:
+        """Make ``entities`` derived from the owner sharing ``key``: the user
+        modifies them only together with it, and they show no grips.
+        Without a key they are display-only: never picked, never modified by
+        the user. One undo step."""
+        from core.derived import DERIVED, MarkCommand
+
+        self.execute(MarkCommand(entities, DERIVED, key))
+
+    def unmark_derived(self, entities) -> None:
+        """Clear the owner or derived mark of ``entities``; one undo step."""
+        from core.derived import MarkCommand
+
+        self.execute(MarkCommand(entities, None))
+
     def _refresh(self) -> None:
         changed = getattr(getattr(self.host, "tools", None), "changed", None)
         if changed is not None:
@@ -331,6 +407,8 @@ class _Activation:
     toolbar: bool = False
     grip_types: list[str] = field(default_factory=list)
     reactors: bool = False
+    ai_tools: bool = False
+    bar_controls: bool = False
 
 
 # -- where plugins live --------------------------------------------------------
@@ -627,6 +705,11 @@ class PluginManager:
                 for reactor in spec.reactors:
                     core_commands.register_reactor(reactor, spec.id)
                 record.reactors = True
+            if spec.ai_tools:
+                from core.ai import tools as ai_tools
+
+                ai_tools.register_plugin_tools(spec.id, spec.ai_tools)
+                record.ai_tools = True
             if spec.grip_handlers:
                 from core import select
 
@@ -636,6 +719,15 @@ class PluginManager:
             if spec.i18n_dir is not None and Path(spec.i18n_dir).is_dir():
                 host.add_pack_dir(Path(spec.i18n_dir))
                 record.pack_dir = Path(spec.i18n_dir)
+            if spec.bar_controls:
+                for control in spec.bar_controls:
+                    if control.where not in ("layer", "status"):
+                        raise ValueError(f"bar control {control.id!r}: where "
+                                         f"must be 'layer' or 'status'")
+                if len({c.id for c in spec.bar_controls}) != len(spec.bar_controls):
+                    raise ValueError("bar control ids must be unique")
+                record.bar_controls = True
+                host.add_bar_controls(spec, ctx)
             if (spec.toolbar or spec.toolbars) \
                     and self.toolbar_enabled(spec.id):
                 host.add_toolbar(spec)
@@ -662,11 +754,17 @@ class PluginManager:
             from core import commands as core_commands
 
             core_commands.unregister_reactors(plugin_id)
+        if record.ai_tools:
+            from core.ai import tools as ai_tools
+
+            ai_tools.unregister_plugin_tools(plugin_id)
         if record.grip_types:
             from core import select
 
             for dxftype in record.grip_types:
                 select.unregister_grip_handler(dxftype, plugin_id)
+        if record.bar_controls:
+            host.remove_bar_controls(plugin_id)
         if record.tools:
             host.unregister_tools(record.tools, plugin_id)
         if record.pack_dir is not None:
