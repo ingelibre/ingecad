@@ -197,7 +197,8 @@ def _space(host):
 
 def _entities(host, handles) -> list:
     """The live entities of the current space with these handles; an
-    unknown handle or one on a locked layer is an error, not a skip -- the
+    unknown handle, one on a locked layer or a plugin's derived geometry
+    without its owner (core/derived.py) is an error, not a skip -- the
     model must know its change did not happen."""
     space = _space(host)
     doc = host.document.doc
@@ -219,6 +220,13 @@ def _entities(host, handles) -> list:
                         + ", ".join(map(str, missing)))
     if locked:
         raise ToolError("on a locked layer: " + ", ".join(map(str, locked)))
+    from core import derived
+
+    found, refused = derived.user_editable(found)
+    if refused:
+        raise ToolError("derived geometry, modified only with the object it "
+                        "comes from: "
+                        + ", ".join(e.dxf.handle for e in refused))
     return found
 
 

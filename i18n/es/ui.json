@@ -2073,6 +2073,8 @@
   "Everything has been undone": "Se ha deshecho todo",
   "1 was on a locked layer.": "1 estaba en una capa bloqueada.",
   "{n} were on a locked layer.": "{n} estaban en una capa bloqueada.",
+  "1 was derived geometry: select it with the object it comes from.": "1 era geometría derivada: selecciónela junto con el objeto del que procede.",
+  "{n} were derived geometry: select them with the object they come from.": "{n} eran geometría derivada: selecciónelas junto con el objeto del que proceden.",
   "Specify rotation angle or [Copy/Reference] <{a}>:": "Especifique el ángulo de rotación o [Copiar(C)/Referencia(R)] <{a}>:",
   "Specify scale factor or [Copy/Reference]:": "Especifique el factor de escala o [Copiar(C)/Referencia(R)]:",
   "Specify displacement <0,0,0>:": "Precise desplazamiento <0,0,0>:",

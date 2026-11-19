@@ -31,7 +31,7 @@ from core.paths import app_root
 #: the reason and never activated half-working. Raised by one each time the
 #: contract grows (docs/plugins.md says what every level added); a level is
 #: never taken back, so a plugin for an older level keeps working.
-API_VERSION = 2
+API_VERSION = 3
 
 
 # -- what a plugin declares ----------------------------------------------------
@@ -273,6 +273,29 @@ class PluginContext:
             self.undo_to(start)
             raise
         self.fold_since(start, name)
+
+    # -- level 3 ---------------------------------------------------------------
+    def mark_owner(self, entities, key: str) -> None:
+        """Make ``entities`` owners of the derived geometry sharing ``key``
+        (core/derived.py); one undo step."""
+        from core.derived import OWNER, MarkCommand
+
+        self.execute(MarkCommand(entities, OWNER, key))
+
+    def mark_derived(self, entities, key: Optional[str] = None) -> None:
+        """Make ``entities`` derived from the owner sharing ``key``: the user
+        modifies them only together with it, and they show no grips.
+        Without a key they are display-only: never picked, never modified by
+        the user. One undo step."""
+        from core.derived import DERIVED, MarkCommand
+
+        self.execute(MarkCommand(entities, DERIVED, key))
+
+    def unmark_derived(self, entities) -> None:
+        """Clear the owner or derived mark of ``entities``; one undo step."""
+        from core.derived import MarkCommand
+
+        self.execute(MarkCommand(entities, None))
 
     def _refresh(self) -> None:
         changed = getattr(getattr(self.host, "tools", None), "changed", None)

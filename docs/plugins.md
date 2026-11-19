@@ -248,6 +248,36 @@ U undoes both, REDO and a folded script (`transaction`) replay both.
 as the drawing has nothing of yours. A reactor that raises is logged and
 skipped; the user's command still stands.
 
+### Geometry the user edits only with its source (`ctx.mark_derived`, level 3)
+
+A reactor keeps derived objects true after a command; it cannot stop the
+user from dragging a grip on one line of a wall outline, which the
+plugin's next rebuild then silently puts back. Mark that geometry as
+derived (`core/derived.py`):
+
+```python
+with ctx.transaction("Wall"):
+    ctx.execute(AddWall(...))                  # the object the data lives in
+    ctx.mark_owner([axis], key=wall_id)
+    ctx.mark_derived(outline_lines, key=wall_id)
+    ctx.mark_derived([preview])                # no key: display only
+```
+
+| mark | what the user can do with it |
+|---|---|
+| owner (`key`) | anything, as with any entity |
+| derived (`key`) | MOVE, COPY, ROTATE, ERASE, Delete... only in the same set as an owner of its key (a selectable GROUP of owner and lines does it); alone it is refused like an object on a locked layer, with the reason echoed. It never shows grips |
+| derived, no key | nothing: it is not picked (a click passes through), windows and Ctrl+A skip it |
+
+The marks are XDATA under the APPID `INGECAD_DERIVED`, so they are saved
+with the drawing and copied with the entities: a copied owner and its
+copied lines stay together without translating handles. The plugin itself
+is never restricted. Read-only commands (LIST, distances) see derived
+geometry as usual, and the assistant's tools refuse it like a locked layer.
+Inside a command of its own, a plugin marks the entities it creates with
+`derived.mark_owner(entity, key)` and `derived.mark_derived(entity, key)`
+instead.
+
 ### Sections in the Properties panel (`properties_sections`, level 2)
 
 ```python
@@ -311,6 +341,7 @@ release to the next. It asks the `PluginContext` instead.
 | `ctx.regen()` | REGEN in the background; `on_regen_done` hears when it is in view |
 | `with ctx.transaction(name):` | the commands executed inside are one undo step called `name`; if the block raises, they are undone and the error goes on |
 | `ctx.mark()` / `ctx.fold_since(mark, name)` / `ctx.undo_to(mark)` | the same by hand: where the history stands, fold what came after into one step, or take it all back with nothing left to redo |
+| `ctx.mark_owner(entities, key)` / `ctx.mark_derived(entities, key=None)` / `ctx.unmark_derived(entities)` | geometry the user edits only with its source, one undo step each (level 3, above) |
 
 ## Contract levels (`api_version`)
 
@@ -325,6 +356,7 @@ written for level 1 keeps working on every later IngeCAD.
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
 | 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, `properties_sections` with `Row`, `toolbars` with `ToolbarSpec`, `on_paste`, `on_copy`, `ToolbarItem.key`, the tool's `overlay`, `preview_entities`, `on_key`, `extra_osnaps`, `extra_osnaps_always`, `last_segment_direction`, `on_selection_step` and `suppress_selection_highlight`, and the context's `toolbar`, `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
+| 3 | next | the context's `mark_owner`, `mark_derived` and `unmark_derived` (`core/derived.py`) |
 
 ## The rules a plugin lives by
 
