@@ -174,6 +174,14 @@ class CommandLine(QWidget):
         layout.addWidget(self.input)
 
     def set_completions(self, names: list[str]) -> None:
+        """Offer ``names`` as completions. Called again whenever commands
+        are added or removed (plugins register theirs after the window is
+        built): the existing completer keeps its settings and gets the new
+        list."""
+        current = self.input.completer()
+        if current is not None and hasattr(current.model(), "setStringList"):
+            current.model().setStringList(list(names))
+            return
         completer = QCompleter(names, self.input)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         # Inline, not popup: a popup steals the first Enter (and can hijack
@@ -193,7 +201,15 @@ class CommandLine(QWidget):
         self._prompt_open = True
         self._last_prompt = text
 
+    def forget_prompt(self) -> None:
+        """The running command is over: its last prompt must not come back
+        with the answers of the next one (``echo_answer`` repeats it when a
+        message was printed after it)."""
+        self._prompt_open = False
+        self._last_prompt = ""
+
     def echo_input(self, text: str) -> None:
+        self.forget_prompt()                  # a new command starts afresh
         prompt = text.strip() or ""
         self.echo(f"{tr('Command')}: {prompt}")
 

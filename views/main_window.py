@@ -1980,9 +1980,18 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
 
     def register_command(self, name: str, handler) -> None:
         self.dispatcher.register(name, handler)
+        self._refresh_completions()
 
     def unregister_command(self, name: str) -> None:
         self.dispatcher.unregister(name)
+        self._refresh_completions()
+
+    def _refresh_completions(self) -> None:
+        """Keep the command line's completions in step with the dispatcher:
+        plugin commands are registered after the command line is built."""
+        command_line = getattr(self, "command_line", None)
+        if command_line is not None:
+            command_line.set_completions(self.dispatcher.known_names())
 
     def register_tools(self, mapping: dict, owner: str) -> None:
         from views.tool_controller import register_tool_classes
