@@ -108,6 +108,26 @@ class BridgeClient:
         line, self._buffer = self._buffer.split(b"\n", 1)
         return json.loads(line.decode("utf-8"))
 
+    def list_tools(self) -> list:
+        """The open window's catalogue (its plugins' tools included), or
+        raises ConnectionError when no window answers."""
+        for attempt in (0, 1):
+            try:
+                if self._conn is None:
+                    self._connect()
+                self._next += 1
+                self._send({"id": self._next, "list": True})
+                answer = self._receive().get("result") or {}
+                tools = answer.get("tools")
+                if not isinstance(tools, list):
+                    raise ValueError("no tool list")
+                return tools
+            except (OSError, ValueError):
+                self.close()
+                if attempt:
+                    raise ConnectionError(NOT_RUNNING)
+        return []
+
     def call(self, name: str, arguments: dict):
         """The tool's result, or raises OSError when no window answers."""
         for attempt in (0, 1):
@@ -173,11 +193,15 @@ def client_config() -> str:
                                                   "args": args}}}, indent=2)
 
 
-def tool_list() -> list[dict]:
-    from core.ai.tools import tool_list as catalogue
+def tool_list(catalogue=None) -> list[dict]:
+    """``catalogue`` (core.ai.tools.tool_list's shape) as MCP tools; the
+    core's own when none is given."""
+    if catalogue is None:
+        from core.ai.tools import tool_list as core_catalogue
 
+        catalogue = core_catalogue()
     return [{"name": t["name"], "description": t["description"],
-             "inputSchema": t["parameters"]} for t in catalogue()]
+             "inputSchema": t["parameters"]} for t in catalogue]
 
 
 def call_result(result) -> dict:
@@ -224,7 +248,14 @@ class Server:
         if method == "ping":
             return _result(mid, {})
         if method == "tools/list":
-            return _result(mid, {"tools": tool_list()})
+            # the open window knows its plugins' tools; without one, the
+            # core's catalogue, so the client sees the tools before IngeCAD
+            # is open (a call then says how to start the bridge)
+            try:
+                catalogue = self.client.list_tools()
+            except ConnectionError:
+                catalogue = None
+            return _result(mid, {"tools": tool_list(catalogue)})
         if method == "tools/call":
             name = params.get("name")
             if not isinstance(name, str):

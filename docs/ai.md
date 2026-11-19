@@ -126,6 +126,11 @@ Security:
 | History and view | `undo`, `redo`, `zoom` |
 | Files | `save_drawing`, `export_pdf` (absolute paths only) |
 
+Active plugins add tools of their own (`PluginSpec.ai_tools`,
+docs/plugins.md), named after the plugin (`topografia_...`). Through MCP,
+`tools/list` asks the open window, so its plugins' tools are listed; with
+no window open only the core's are.
+
 Every tool that changes the drawing takes an optional `expected_revision`.
 Every answer carries the drawing's `revision`. If the drawing changed in
 between (you edited it while the AI was thinking), the call is refused

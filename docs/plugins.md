@@ -148,6 +148,7 @@ with `i18n/es/ui.json` (`{"Say hello": "Saludar", ...}`) and, optionally,
 | `toolbars` | `(ToolbarSpec(id, title, items), ...)`: more bars beside `toolbar`, on and off with it (level 2) |
 | `on_paste` | `callable(ctx, mime) -> bool`: a paste (Ctrl+V, PASTECLIP) asks it first with the clipboard's `QMimeData`; True means the plugin placed it (level 2) |
 | `on_copy` | `callable(ctx, entities, mime)`: a copy going to the system clipboard; add formats of your own to `mime` (level 2) |
+| `ai_tools` | `(AiTool(name, description, handler, properties, required, mutates, confirm_text), ...)`: tools the assistant may call, in IngeCAD and through MCP (level 3, below) |
 | `reactors` | objects with `before(document)` and `react(document, state)`: keep derived objects true after any command, in its undo step (level 2, below) |
 
 ### A tool's own overlay and preview (level 2)
@@ -277,6 +278,43 @@ geometry as usual, and the assistant's tools refuse it like a locked layer.
 Inside a command of its own, a plugin marks the entities it creates with
 `derived.mark_owner(entity, key)` and `derived.mark_derived(entity, key)`
 instead.
+### Tools for the assistant (`ai_tools`, level 3)
+
+The assistant (docs/ai.md) reads and changes the drawing through a
+catalogue of tools. A plugin adds its own, so a model can ask for what the
+plugin keeps instead of guessing it from lines:
+
+```python
+from core.ai.tools import ToolError
+from core.plugins import AiTool
+
+def list_points(ctx, layer="TOPO-PUNTOS"):
+    return {"points": [...]}                   # a dict, sent back as JSON
+
+def renumber(ctx, start):
+    if start < 1:
+        raise ToolError("start must be 1 or more")   # the model reads it
+    ctx.execute(RenumberPoints(start))         # Commands, as always
+    return {"renumbered": n}
+
+PLUGIN = PluginSpec(id="topografia", name="...", api_version=3, ai_tools=(
+    AiTool("topografia_list_points", "The survey points.", list_points,
+           {"layer": {"type": "string"}}),
+    AiTool("topografia_renumber", "Renumber the points.", renumber,
+           {"start": {"type": "integer"}}, ("start",), mutates=True),
+))
+```
+
+- A name starts with the plugin's id and `_`, in lowercase letters, digits
+  and underscores, and must be new; otherwise the plugin does not activate.
+- The handler receives a `PluginContext` and the arguments. A tool that
+  changes the drawing sets `mutates`: it gets `expected_revision` and its
+  changes join the assistant's one undo step, as the core's do.
+  `confirm_text(ctx, args)` returns a question for the user before
+  something U cannot take back.
+- The tools are added on activation and removed on deactivation. Through
+  MCP, `tools/list` asks the open window, so a client sees them while
+  IngeCAD is open with the plugin on.
 
 ### Sections in the Properties panel (`properties_sections`, level 2)
 
@@ -356,7 +394,7 @@ written for level 1 keeps working on every later IngeCAD.
 |---|---|---|
 | 1 | 0.5 | the fields above up to `on_document_open`; `ctx.document`, `execute`, `start_tool`, `echo` |
 | 2 | 0.8 | `api_version`, `on_regen_done`, `on_selection_changed`, `grip_handlers`, `input_filters`, `on_before`, `on_double_click`, `reactors`, `properties_sections` with `Row`, `toolbars` with `ToolbarSpec`, `on_paste`, `on_copy`, `ToolbarItem.key`, the tool's `overlay`, `preview_entities`, `on_key`, `extra_osnaps`, `extra_osnaps_always`, `last_segment_direction`, `on_selection_step` and `suppress_selection_highlight`, and the context's `toolbar`, `run_command`, `active_layout`, `selection`, `select`, `pick_tolerance`, `redraw`, `regen`, `transaction`, `mark`, `fold_since`, `undo_to` |
-| 3 | next | the context's `mark_owner`, `mark_derived` and `unmark_derived` (`core/derived.py`) |
+| 3 | next | `ai_tools` with `AiTool`, and the context's `mark_owner`, `mark_derived` and `unmark_derived` (`core/derived.py`) |
 
 ## The rules a plugin lives by
 

@@ -175,6 +175,81 @@ class Turn:
             changed.emit()
 
 
+# -- plugins' tools (PluginSpec.ai_tools, plugin contract level 3) -------------
+
+#: owner -> [names, activation count]: a plugin is activated once per window
+#: and the catalogue is one per process, as the reactors are.
+_PLUGIN_TOOLS: dict[str, list] = {}
+
+
+def register_plugin_tools(owner: str, tools) -> None:
+    """Add a plugin's tools (core.plugins.AiTool) to the catalogue, for the
+    in-app assistant and for MCP alike.
+
+    Each name must start with ``<owner>_`` -- a model sees one flat list,
+    and the prefix says whose tool it is -- use lowercase letters, digits
+    and underscores (what every MCP client accepts) and not exist yet. The
+    handler receives a PluginContext, never the window; a tool that
+    ``mutates`` gets ``expected_revision`` and runs inside the assistant's
+    single undo step like the core's own."""
+    import re
+
+    entry = _PLUGIN_TOOLS.get(owner)
+    if entry is not None:
+        entry[1] += 1
+        return
+    names = []
+    for tool in tools:
+        name = tool.name
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", name) \
+                or not name.startswith(owner.lower() + "_"):
+            raise ValueError(f"AI tool {name!r} must be lowercase and start "
+                             f"with {owner.lower() + '_'!r}")
+        if name in TOOLS or name in names:
+            raise ValueError(f"AI tool {name!r} already exists")
+        names.append(name)
+    for tool in tools:
+        _tool(tool.name, tool.description, tool.properties, tool.required,
+              mutates=tool.mutates,
+              confirm_text=_plugin_confirm(tool.confirm_text))(
+                  _plugin_handler(tool.handler))
+    _PLUGIN_TOOLS[owner] = [names, 1]
+
+
+def unregister_plugin_tools(owner: str) -> None:
+    entry = _PLUGIN_TOOLS.get(owner)
+    if entry is None:
+        return
+    entry[1] -= 1
+    if entry[1] <= 0:
+        for name in entry[0]:
+            TOOLS.pop(name, None)
+        del _PLUGIN_TOOLS[owner]
+
+
+def _plugin_context(host):
+    from core.plugins import PluginContext
+
+    line = getattr(host, "command_line", None)
+    return PluginContext(host=host, echo=getattr(line, "echo", None)
+                         or (lambda text: None))
+
+
+def _plugin_handler(handler):
+    def run(host, **args):
+        return handler(_plugin_context(host), **args)
+    return run
+
+
+def _plugin_confirm(confirm_text):
+    if confirm_text is None:
+        return None
+
+    def ask(host, args):
+        return confirm_text(_plugin_context(host), args)
+    return ask
+
+
 def tool_list() -> list[dict]:
     """Every tool as name, description and JSON Schema -- the shape both
     the providers (function calling) and MCP (tools/list) start from."""
