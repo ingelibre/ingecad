@@ -1601,6 +1601,9 @@ class ToolController(QObject):
     def _finish(self) -> None:
         self.tool = None
         self.macro = None
+        forget = getattr(self.window.command_line, "forget_prompt", None)
+        if forget is not None:
+            forget()
         self.snap_hit = None
         self.osnap_override = None
         self._modifier = None
