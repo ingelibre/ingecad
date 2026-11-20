@@ -1343,6 +1343,18 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             elif event.text() and event.text().isprintable():
                 self.tools.text_char(event.text())
             return True
+        # Tab over the canvas: the running tool's fields (Tool.on_tab), with
+        # what is typed in the command line.
+        if (event.type() == QEvent.KeyPress
+                and obj is getattr(self, "viewport", None)
+                and event.key() in (Qt.Key_Tab, Qt.Key_Backtab)
+                and not event.modifiers() & (Qt.ControlModifier
+                                             | Qt.AltModifier)):
+            backwards = (event.key() == Qt.Key_Backtab
+                         or bool(event.modifiers() & Qt.ShiftModifier))
+            edit = self.command_line.input
+            if self._on_tab(edit._typed_text(), backwards):
+                return True
         # AutoCAD feel: typing over the canvas lands in the command line.
         if (
             event.type() == QEvent.KeyPress
@@ -2178,6 +2190,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         self.command_line.input.raw_text_check = (
             lambda: self.tools.tool is not None
             and self.tools.tool.wants_raw_text())
+        self.command_line.input.tab_handler = self._on_tab
         # F2: the classic expanded text window (command history).
         from PySide6.QtGui import QShortcut
         QShortcut(QKeySequence("F2"), self, self._toggle_text_window)
@@ -2190,6 +2203,23 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             shortcut.activated.connect(self._on_free_key)
         self.command_line.echo(tr("IngeCAD — type a command (L, C, Z, ...)"))
         self._build_mode_toggles()
+
+    def _on_tab(self, text: str, backwards: bool) -> bool:
+        """Tab or Shift+Tab, offered to the running tool with the text
+        typed so far (Tool.on_tab). True if the tool used it."""
+        tool = self.tools.tool
+        if tool is None:
+            return False
+        try:
+            used = bool(tool.on_tab(text, backwards))
+        except Exception as exc:          # noqa: BLE001 - a plugin's tool
+            self.command_line.echo(f"Tab: {type(exc).__name__}: {exc}")
+            return False
+        if used:
+            self.command_line.input.clear()
+            self.tools._preview_now()
+            self.tools.changed.emit()
+        return used
 
     def _on_free_key(self) -> None:
         """A free function key goes to the running tool, if it wants it."""

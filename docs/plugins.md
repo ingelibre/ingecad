@@ -170,6 +170,17 @@ pressing one calls `tool.on_key("F5")`; return True if the tool used it
 (the viewport repaints). Without a running tool the keys do nothing, and
 the core's keys (F1-F3, F7-F12) are never offered.
 
+### Tab for a tool's own fields (`Tool.on_tab`)
+
+While a tool runs, Tab and Shift+Tab -- in the command line or over the
+canvas -- call `tool.on_tab(text, backwards)` first, with what is typed in
+the command line so far (maybe ""). A tool with fields of its own (a
+length and an angle, the distances of a temporary dimension) moves to the
+next one, fixing the active one to `text` if given, as CAD dynamic input
+does. Return True if it used the key: the typed text is consumed and the
+preview is rebuilt. The default returns False, and Tab moves the keyboard
+focus as before.
+
 ### Each step of "Select objects:" (`Tool.on_selection_step`, level 2)
 
 A tool with `wants_selection = True` (or one that called
