@@ -218,6 +218,17 @@ class Tool:
         while the tool runs. True if the tool used it (contract level 2)."""
         return False
 
+    def on_tab(self, text: str, backwards: bool = False) -> bool:
+        """Tab (``backwards``: Shift+Tab) pressed while the tool runs, with
+        what is typed in the command line so far (maybe empty).
+
+        For a tool with fields of its own -- a length and an angle, the
+        distances of a temporary dimension -- as CAD dynamic input moves
+        between them: fix the active field to ``text`` if given, then go to
+        the next one. True if used: the typed text is consumed. False (the
+        default) leaves Tab to Qt, which moves the keyboard focus."""
+        return False
+
     def preview_entities(self, cursor: Point) -> list:
         """Virtual entities (built for the drawing, never added to it)
         rendered as what the next click leaves, through the real styles.

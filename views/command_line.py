@@ -50,6 +50,9 @@ class _PromptEdit(QLineEdit):
         # True while the active tool takes literal text (dimension text
         # override): Space inserts a space instead of executing.
         self.raw_text_check = lambda: False
+        # Tab and Shift+Tab with the typed text, offered to the running tool
+        # (Tool.on_tab) before Qt moves the focus. True = used.
+        self.tab_handler = lambda text, backwards: False
 
     def _typed_text(self) -> str:
         """The text the user actually typed, without the inline suggestion.
@@ -74,6 +77,15 @@ class _PromptEdit(QLineEdit):
         all, which is not what that key means in a CAD. Declining the
         override hands it to the window, where it undoes the drawing.
         """
+        if (event.type() == QEvent.KeyPress
+                and event.key() in (Qt.Key_Tab, Qt.Key_Backtab)
+                and not event.modifiers() & (Qt.ControlModifier
+                                             | Qt.AltModifier)):
+            backwards = (event.key() == Qt.Key_Backtab
+                         or bool(event.modifiers() & Qt.ShiftModifier))
+            if self.tab_handler(self._typed_text(), backwards):
+                self.clear()
+                return True
         if event.type() == QEvent.ShortcutOverride:
             mods = event.modifiers() & ~Qt.KeypadModifier
             if (mods, event.key()) in (
