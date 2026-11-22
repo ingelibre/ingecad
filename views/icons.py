@@ -809,18 +809,79 @@ def _regen():
     return pm
 
 
-def _layers():
-    pm, p = _canvas()
-    # the classic stacked-sheets layers glyph
+def _layer_sheet(y: float) -> QPolygonF:
+    return QPolygonF([QPointF(12, y - 3), QPointF(21, y + 1),
+                      QPointF(12, y + 5), QPointF(3, y + 1)])
+
+
+def _draw_layers(p: QPainter) -> None:
     for i, y in enumerate((6, 11, 16)):
         if i == 1:
             p.save()
             p.setPen(QPen(_ACCENT, 1.4))
-        poly = QPolygonF([QPointF(12, y - 3), QPointF(21, y + 1),
-                          QPointF(12, y + 5), QPointF(3, y + 1)])
-        p.drawPolygon(poly)
+        p.drawPolygon(_layer_sheet(y))
         if i == 1:
             p.restore()
+
+
+def _layers():
+    pm, p = _canvas()
+    _draw_layers(p)
+    p.end()
+    return pm
+
+
+def _layer_isolate():
+    pm, p = _canvas()
+    # Lift the selected sheet clear of the two muted layers below it.
+    _pen(p, _DIM, 1.6)
+    for y in (12, 17):
+        p.drawPolyline(QPolygonF([QPointF(3, y), QPointF(12, y + 4),
+                                  QPointF(21, y)]))
+    _pen(p, _STROKE, 1.4)
+    p.setBrush(_ACCENT)
+    p.drawPolygon(_layer_sheet(5))
+    p.end()
+    return pm
+
+
+def _layer_tool_canvas():
+    """Leave room above the stack for a command badge."""
+    pm, p = _canvas()
+    p.save()
+    p.translate(-1, 7)
+    p.scale(0.80, 0.73)
+    _draw_layers(p)
+    p.restore()
+    return pm, p
+
+
+def _layer_unisolate():
+    pm, p = _layer_tool_canvas()
+    path = QPainterPath(QPointF(22, 11))
+    path.quadTo(22, 4, 16, 4)
+    path.lineTo(12, 4)
+    _pen(p, _ACCENT, 2)
+    p.drawPath(path)
+    _tip(p, 11, 4, 180, size=4, color=_ACCENT)
+    p.end()
+    return pm
+
+
+def _layer_visibility(on: bool):
+    pm, p = _layer_tool_canvas()
+    p.save()
+    p.translate(10, 0)
+    p.scale(0.63, 0.63)
+    _draw_bulb(p, on)
+    p.restore()
+    if on:
+        _pen(p, _LAMP, 1.4)
+        p.drawLine(12, 3, 10, 1)
+        p.drawLine(22, 3, 23, 1)
+    else:
+        _pen(p, _STROKE, 1.6)
+        p.drawLine(13, 11, 22, 2)
     p.end()
     return pm
 
@@ -1116,6 +1177,9 @@ _PAINTERS = {
     "SIDEBAR_FOLD": lambda: _chevron(True),
     "SIDEBAR_UNFOLD": lambda: _chevron(False),
     "LAYER": _layers, "LINETYPE": _linetype, "STYLE": _textstyle,
+    "LAYISO": _layer_isolate, "LAYUNISO": _layer_unisolate,
+    "LAYOFF": lambda: _layer_visibility(False),
+    "LAYON": lambda: _layer_visibility(True),
     "BLOCK": _block,
 }
 
@@ -1137,14 +1201,18 @@ _ICE = QColor(0x8F, 0xC8, 0xF0)
 _NO = QColor(0xD8, 0x6B, 0x62)
 
 
-def _bulb(on: bool):
-    pm, p = _canvas()
+def _draw_bulb(p: QPainter, on: bool) -> None:
     p.setPen(QPen(_LAMP if on else _DIM, 1.4))
     p.setBrush(QBrush(_LAMP if on else _DIM_FILL))
     p.drawEllipse(QPointF(12, 10), 6.5, 6.5)          # the glass
     p.setBrush(QBrush(_STROKE if on else _DIM))
     p.setPen(Qt.NoPen)
     p.drawRect(QRectF(9, 16.5, 6, 4.5))               # the screw base
+
+
+def _bulb(on: bool):
+    pm, p = _canvas()
+    _draw_bulb(p, on)
     p.end()
     return pm
 
