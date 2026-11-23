@@ -146,12 +146,36 @@ def _user_agent() -> str:
     return f"IngeCAD/{__version__} (+https://ingecad.org)"
 
 
-def fetch_url(url: str, timeout: float = 20.0) -> bytes:
-    """The bytes at ``url``, or a TileError that names the URL and the cause."""
+#: The largest tile body that is read. A map or elevation tile is a few
+#: hundred kilobytes; a server that answers with more is broken or hostile.
+MAX_TILE_BYTES = 16 * 1024 * 1024
+_CHUNK = 64 * 1024
+
+
+def fetch_url(url: str, timeout: float = 20.0, max_bytes: int = MAX_TILE_BYTES) -> bytes:
+    """The bytes at ``url``, or a TileError that names the URL and the cause.
+
+    Only http and https are fetched (a tile server on the local network may
+    well be plain http); the body is read in chunks and refused once it
+    outgrows ``max_bytes``, whatever Content-Length said."""
+    scheme = url.split(":", 1)[0].lower() if ":" in url else ""
+    if scheme not in ("http", "https"):
+        raise TileError(f"{url}: only http and https tile URLs are fetched")
     request = urllib.request.Request(url, headers={"User-Agent": _user_agent()})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
+            declared = response.headers.get("Content-Length")
+            if declared and declared.isdigit() and int(declared) > max_bytes:
+                raise TileError(f"{url}: {declared} bytes (more than {max_bytes} are not read)")
+            chunks, total = [], 0
+            while True:
+                chunk = response.read(_CHUNK)
+                if not chunk:
+                    return b"".join(chunks)
+                total += len(chunk)
+                if total > max_bytes:
+                    raise TileError(f"{url}: more than {max_bytes} bytes; not read")
+                chunks.append(chunk)
     except urllib.error.HTTPError as exc:
         raise TileError(f"{url}: HTTP {exc.code}") from exc
     except (urllib.error.URLError, OSError, TimeoutError) as exc:

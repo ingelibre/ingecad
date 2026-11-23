@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -221,16 +222,42 @@ def parse(text: str) -> list[Feature]:
     return out
 
 
+#: The largest KML text, or KMZ member, that is read into memory. A KMZ is a
+#: zip: a few megabytes on disk can declare gigabytes once inflated, and
+#: ``ZipFile.read`` would inflate all of it. zipfile never returns more than
+#: the size a member declares (a member that lies fails its CRC), so checking
+#: the declared size before reading is enough.
+MAX_KML_BYTES = 100 * 1024 * 1024
+
+
+def _read_member(archive: zipfile.ZipFile, name: str) -> bytes:
+    """A KMZ member's bytes, refused before inflating when it is too large."""
+    size = archive.getinfo(name).file_size
+    if size > MAX_KML_BYTES:
+        raise ValueError(f"{name} inflates to {size} bytes "
+                         f"(more than {MAX_KML_BYTES} are not read)")
+    return archive.read(name)
+
+
 def parse_file(path) -> list[Feature]:
-    """A ``.kml``, or the ``doc.kml`` (first ``.kml``) inside a ``.kmz``."""
+    """A ``.kml``, or the ``doc.kml`` (first ``.kml``) inside a ``.kmz``.
+
+    ValueError when the file is too large or is a damaged KMZ, so that KMLIN
+    reports it like any other unreadable file."""
     path = Path(path)
     if path.suffix.lower() == ".kmz" or zipfile.is_zipfile(path):
-        with zipfile.ZipFile(path) as archive:
-            names = [n for n in archive.namelist() if n.lower().endswith(".kml")]
-            if not names:
-                return []
-            name = "doc.kml" if "doc.kml" in names else names[0]
-            return parse(archive.read(name).decode("utf-8", "replace"))
+        try:
+            with zipfile.ZipFile(path) as archive:
+                names = [n for n in archive.namelist() if n.lower().endswith(".kml")]
+                if not names:
+                    return []
+                name = "doc.kml" if "doc.kml" in names else names[0]
+                return parse(_read_member(archive, name).decode("utf-8", "replace"))
+        except (zipfile.BadZipFile, zlib.error, EOFError) as exc:
+            raise ValueError(f"damaged KMZ ({exc})") from exc
+    size = path.stat().st_size
+    if size > MAX_KML_BYTES:
+        raise ValueError(f"{size} bytes (more than {MAX_KML_BYTES} are not read)")
     return parse(path.read_text(encoding="utf-8", errors="replace"))
 
 
@@ -330,5 +357,5 @@ def overlay_image(path) -> Optional[bytes]:
     with zipfile.ZipFile(path) as archive:
         for name in archive.namelist():
             if name.lower().endswith((".png", ".jpg", ".jpeg")):
-                return archive.read(name)
+                return _read_member(archive, name)
     return None
