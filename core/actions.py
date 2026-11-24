@@ -991,8 +991,6 @@ class TransformCommand(Command):
 
     def undo(self, document) -> None:
         global _ORPHAN_BLOCKS
-        from ezdxf.math import Matrix44
-
         restored = set()
         _ORPHAN_BLOCKS = set()
         try:
@@ -1004,7 +1002,7 @@ class TransformCommand(Command):
             _ORPHAN_BLOCKS = None
         drop_unreferenced_dim_blocks(document.doc, orphans)
         self._before = []
-        inverse = Matrix44(self.matrix)
+        inverse = self.matrix.copy()
         inverse.inverse()
         for e in self.entities:
             if id(e) not in restored:
