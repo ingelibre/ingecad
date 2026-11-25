@@ -50,7 +50,7 @@ HATCH_DENSITY_REL = 1.0 / 64.0
 # Backstop for hatches that explode combinatorially: ezdxf aborts the pattern
 # after this many seconds and falls back to a solid fill. This is what turned
 # a frozen 287 s open (30 s x ~40 hatches) into ~3 s.
-HATCHING_TIMEOUT = 5.0
+HATCHING_TIMEOUT = 0.1
 
 
 # The canvas colours (model dark, the gray "desk" around the paper sheet,
@@ -1321,8 +1321,12 @@ def build_scene_for_entities(document: Document, entities, flatten: float,
     # live image grip drag this runs per mouse move, which on a scanned
     # sheet re-read 36 MB from disk 30 times per second.
     backend = _CornersOnlyBackend(flatten)
-    context = TolerantRenderContext(document.doc)
-    _apply_space_colors(context, document, canvas)
+    context = getattr(document, "_overlay_render_context", None)
+    if context is None or getattr(context, "_canvas_ref", None) != canvas:
+        context = TolerantRenderContext(document.doc)
+        _apply_space_colors(context, document, canvas)
+        context._canvas_ref = canvas
+        document._overlay_render_context = context
     frontend = TolerantFrontend(context, backend, frontend_config(flatten, document))
     frontend._host_document = document       # xref paths resolve from here
     frontend.hidden_handles = frozenset(hidden_handles(document))
@@ -1455,6 +1459,8 @@ def build_scene(document: Document, layout_name: str | None = None, *,
     """
     if getattr(document, "edit_block", None) and layout_name in (None, "Model"):
         return _build_block_scene(document)
+    if hasattr(document, "_overlay_render_context"):
+        document._overlay_render_context = None
     if layout_name == "Model":
         layout, layout_name = document.doc.modelspace(), None
     elif layout_name and layout_name in document.doc.layouts:
