@@ -1323,7 +1323,8 @@ class ToolController(QObject):
                 if new_style:
                     entity.dxf.style = new_style
             actions.apply_in_place(self.window.history, [entity], mutate)
-            self.window.regen_in_memory()
+            if not self.redraw_entities([entity]):
+                self.window.regen_in_memory()
             self.window.viewport.update()
 
         self._mtext_editor = MTextInPlaceEditor(
@@ -2132,6 +2133,12 @@ class ToolController(QObject):
         for entity in alive:
             if entity not in self._pending_render:
                 self._pending_render.append(entity)
+        if self.index is not None:
+            self.index.remove_handles(handles)
+            self.index.add_entities(alive)
+        if self.snap_engine is not None:
+            self.snap_engine.remove_handles(handles)
+            self.snap_engine.add_entities(alive)
         self._refresh_overlay()
         self._merge_timer.start()
         self.changed.emit()

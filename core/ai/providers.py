@@ -92,10 +92,14 @@ class Reply:
 
 def post_json(url: str, headers: dict, body: dict,
               timeout: float = TIMEOUT) -> dict:
+    from core.version import __version__
+
     data = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(
         url, data=data, method="POST",
-        headers={"content-type": "application/json", **headers})
+        headers={"content-type": "application/json",
+                 "user-agent": f"IngeCAD/{__version__}",
+                 **headers})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
