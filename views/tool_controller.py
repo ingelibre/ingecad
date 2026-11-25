@@ -1375,7 +1375,8 @@ class ToolController(QObject):
             actions.apply_in_place(self.window.history, [entity], mutate)
             # a longer word is picked by its new end at once
             self.reindex_entities([entity])
-            self.window.regen_in_memory()
+            if not self.redraw_entities([entity]):
+                self.window.regen_in_memory()
             self.window.viewport.update()
 
         self._mtext_editor = MTextInPlaceEditor(
@@ -1456,7 +1457,8 @@ class ToolController(QObject):
             actions.apply_in_place(self.window.history, [entity], mutate)
             # a longer word is picked by its new end at once
             self.reindex_entities([entity])
-            self.window.regen_in_memory()
+            if not self.redraw_entities([entity]):
+                self.window.regen_in_memory()
             self.window.viewport.update()
 
         self._mtext_editor = MTextInPlaceEditor(
@@ -2278,6 +2280,7 @@ class ToolController(QObject):
         for entity in alive:
             if entity not in self._pending_render:
                 self._pending_render.append(entity)
+        self.reindex_entities(alive)
         self._refresh_overlay()
         self._merge_timer.start()
         self.changed.emit()

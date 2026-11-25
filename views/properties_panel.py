@@ -279,7 +279,12 @@ class PropertiesPanel(QWidget):
         self._after_edit()
 
     def _after_edit(self) -> None:
-        self.window.regen_in_memory()
+        ents = self._active()
+        tools = getattr(self.window, "tools", None)
+        if ents and tools is not None and tools.redraw_entities(ents):
+            pass
+        else:
+            self.window.regen_in_memory()
         self.refresh()
 
     def _set_prop(self, prop: str, value) -> None:
@@ -301,14 +306,9 @@ class PropertiesPanel(QWidget):
                 return
             # instant look while the async regen catches up: hide the stale
             # base copies, show the mutated entities through the overlay
-            tools = self.window.tools
-            tools._invalidate_geometry()
-            self.window.viewport.hide_handles([e.dxf.handle for e in ents])
-            tools._pending_render.extend(
-                e for e in ents
-                if e.is_alive and e.dxf.owner is not None
-                and e not in tools._pending_render)
-            tools._refresh_overlay()
+            tools = getattr(self.window, "tools", None)
+            if tools is not None:
+                tools.redraw_entities(ents)
 
     def _set_comp(self, attr: str, axis: int, value: float) -> None:
         def mutate():
